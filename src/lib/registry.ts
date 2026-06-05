@@ -1,1 +1,54 @@
-export {};
+import {
+  Contract,
+  TransactionBuilder,
+  nativeToScVal,
+  BASE_FEE,
+  scValToNative,
+  rpc,
+} from "@stellar/stellar-sdk";
+import { rpcServer, networkPassphrase, getAdminKeypair, signAndSubmit } from "./stellar";
+import dotenv from "dotenv";
+dotenv.config();
+
+const REGISTRY_CONTRACT_ID = process.env.PROJECT_REGISTRY_CONTRACT_ID!;
+
+export async function updateImpactScore(
+  projectId: number,
+  creditQuality: number,
+  greenImpact: number
+): Promise<string> {
+  const keypair = getAdminKeypair();
+  const account = await rpcServer.getAccount(keypair.publicKey());
+  const contract = new Contract(REGISTRY_CONTRACT_ID);
+
+  const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase })
+    .addOperation(
+      contract.call(
+        "update_impact_score",
+        nativeToScVal(projectId, { type: "u32" }),
+        nativeToScVal(creditQuality, { type: "u32" }),
+        nativeToScVal(greenImpact, { type: "u32" })
+      )
+    )
+    .setTimeout(30)
+    .build();
+
+  const prepared = await rpcServer.prepareTransaction(tx);
+  return signAndSubmit(prepared.toXDR(), keypair);
+}
+
+export async function getTotalProjects(): Promise<number> {
+  const keypair = getAdminKeypair();
+  const account = await rpcServer.getAccount(keypair.publicKey());
+  const contract = new Contract(REGISTRY_CONTRACT_ID);
+
+  const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase })
+    .addOperation(contract.call("total_projects"))
+    .setTimeout(30)
+    .build();
+
+  const result = await rpcServer.simulateTransaction(tx);
+  if ("error" in result) throw new Error((result as { error: string }).error);
+  const sim = result as rpc.Api.SimulateTransactionSuccessResponse;
+  return Number(scValToNative(sim.result!.retval));
+}
