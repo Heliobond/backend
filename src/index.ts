@@ -27,11 +27,15 @@ cron.schedule("0 * * * *", async () => {
     const projectIds = Array.from({ length: total }, (_, i) => i + 1);
 
     for (const projectId of projectIds) {
-      const solar = getSolarData(projectId);
-      const satellite = getSatelliteData(projectId);
-      const scores = computeScores({ solar, satellite });
-      const tx_hash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact);
-      console.log(`[cron] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`);
+      try {
+        const solar = getSolarData(projectId);
+        const satellite = getSatelliteData(projectId);
+        const scores = computeScores({ solar, satellite });
+        const tx_hash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact);
+        console.log(`[cron] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`);
+      } catch (err) {
+        console.error(`[cron] project ${projectId} failed:`, err);
+      }
     }
   } catch (err) {
     console.error("[cron] score update failed:", err);

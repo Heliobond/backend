@@ -10,7 +10,10 @@ import { rpcServer, networkPassphrase, getAdminKeypair, signAndSubmit } from "./
 import dotenv from "dotenv";
 dotenv.config();
 
-const REGISTRY_CONTRACT_ID = process.env.PROJECT_REGISTRY_CONTRACT_ID!;
+if (!process.env.PROJECT_REGISTRY_CONTRACT_ID) {
+  throw new Error("PROJECT_REGISTRY_CONTRACT_ID env var is required");
+}
+const REGISTRY_CONTRACT_ID = process.env.PROJECT_REGISTRY_CONTRACT_ID;
 
 export async function updateImpactScore(
   projectId: number,
