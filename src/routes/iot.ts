@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { parseProjectId } from "../middleware/errors";
 
 const MAX_POWER_KW = 1000;
 
@@ -35,14 +36,12 @@ export function getSatelliteData(projectId: number) {
 const router = Router();
 
 router.get("/solar/:id", (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id) || id < 1) return res.status(400).json({ error: "invalid project id" });
+  const id = parseProjectId(req.params.id, "project id");
   res.json(getSolarData(id));
 });
 
 router.get("/satellite/:id", (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id) || id < 1) return res.status(400).json({ error: "invalid project id" });
+  const id = parseProjectId(req.params.id, "project id");
   res.json(getSatelliteData(id));
 });
 

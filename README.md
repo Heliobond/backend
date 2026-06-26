@@ -56,12 +56,22 @@ flowchart TD
 
 ## API Reference
 
+Full request/response details, validation rules, and error codes are in
+[**API.md**](./API.md).
+
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/health` | — | Liveness check |
+| `GET` | `/health` | — | Liveness + uptime and last cron run |
 | `GET` | `/api/iot/solar/:id` | — | Simulated solar panel reading for project `id` |
 | `GET` | `/api/iot/satellite/:id` | — | Simulated satellite / vegetation reading for project `id` |
+| `GET` | `/api/projects` | — | Paginated list of projects with scores (`?limit=&cursor=`) |
+| `GET` | `/api/projects/:id` | — | Single project detail |
+| `GET` | `/api/portfolio/:address` | — | Indexed deposit/withdraw history for an address |
 | `POST` | `/api/admin/update-scores` | Bearer token | Submit impact score update(s) to the Soroban contract |
+
+Errors return a consistent `{ "error": "<code>", "message": "<detail>" }` JSON
+shape (never a stack trace). All `/api/*` routes are rate limited and return
+`429` with a `Retry-After` header once the limit is exceeded.
 
 ### `GET /health`
 
@@ -155,27 +165,38 @@ Create a `.env` file (see `.env.example`):
 | `PORT` | No | `3001` | HTTP port the server listens on |
 | `FRONTEND_URL` | No | `http://localhost:3000` | Origin allowed by CORS |
 | `ADMIN_API_KEY` | No | — | Bearer token for `/api/admin/*`. If unset, auth is skipped (dev only) |
+| `RATE_LIMIT_WINDOW_MS` | No | `60000` | Public rate-limit window (ms) |
+| `RATE_LIMIT_MAX` | No | `100` | Public max requests per IP per window |
+| `RATE_LIMIT_ADMIN_WINDOW_MS` | No | `RATE_LIMIT_WINDOW_MS` | Admin rate-limit window (ms) |
+| `RATE_LIMIT_ADMIN_MAX` | No | `20` | Admin max requests per IP per window |
 
 ---
 
 ## Getting Started
 
+Prerequisites: [Bun](https://bun.sh) (`curl -fsSL https://bun.sh/install | bash`).
+
 ```bash
-# Install dependencies
+# 1. Install dependencies
 bun install
 
-# Configure environment
+# 2. Configure environment
 cp .env.example .env
-# Edit .env and fill in ADMIN_SECRET_KEY, PROJECT_REGISTRY_CONTRACT_ID, etc.
+# Edit .env — ADMIN_SECRET_KEY and PROJECT_REGISTRY_CONTRACT_ID are required to
+# start the server; the rest have sensible defaults.
 
-# Development (ts-node, live reload)
-bun run dev
+# 3. Development (ts-node + hourly cron + 5-min indexer)
+bun run dev          # -> Heliobond backend listening on port 3001
+
+# Verify it's up
+curl http://localhost:3001/health
 
 # Production
 bun run build && bun start
 
-# Tests (8 tests)
-bun test
+# Quality gate
+bun run build        # tsc type-check
+bun run test         # jest suite
 ```
 
 ---
