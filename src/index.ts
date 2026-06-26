@@ -4,6 +4,7 @@ import cron from "node-cron";
 import dotenv from "dotenv";
 import iotRouter from "./routes/iot";
 import adminRouter from "./routes/admin";
+import projectsRouter from "./routes/projects";
 import { getSolarData, getSatelliteData } from "./routes/iot";
 import { computeScores } from "./lib/scoring";
 import { updateImpactScore, getTotalProjects } from "./lib/registry";
@@ -19,6 +20,7 @@ app.use(express.json());
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
 app.use("/api/iot", iotRouter);
 app.use("/api/admin", adminRouter);
+app.use("/api/projects", projectsRouter);
 
 // Every 5 minutes: poll for new contract events
 cron.schedule("*/5 * * * *", async () => {
