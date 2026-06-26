@@ -10,6 +10,10 @@ import { getSolarData, getSatelliteData } from "./routes/iot";
 import { computeScores } from "./lib/scoring";
 import { updateImpactScore, getTotalProjects } from "./lib/registry";
 import { indexer } from "./lib/indexer";
+import { getHealth, recordCronRun } from "./lib/health";
+import { requestLogger } from "./middleware/requestLogger";
+import { errorHandler, notFoundHandler } from "./middleware/errors";
+import { publicLimiter, adminLimiter } from "./middleware/rateLimit";
 
 dotenv.config();
 const app = express();
@@ -17,20 +21,30 @@ const PORT = parseInt(process.env.PORT || "3001", 10);
 
 app.use(cors({ origin: process.env.FRONTEND_URL || "http://localhost:3000" }));
 app.use(express.json());
+app.use(requestLogger);
 
-app.get("/health", (_req, res) => res.json({ status: "ok" }));
-app.use("/api/iot", iotRouter);
-app.use("/api/admin", adminRouter);
-app.use("/api/projects", projectsRouter);
-app.use("/api/portfolio", portfolioRouter);
+// Liveness + basic operational visibility (uptime, last cron run).
+app.get("/health", (_req, res) => res.json(getHealth()));
+
+// Rate limiting: stricter limits for privileged admin endpoints.
+app.use("/api/iot", publicLimiter, iotRouter);
+app.use("/api/admin", adminLimiter, adminRouter);
+app.use("/api/projects", publicLimiter, projectsRouter);
+app.use("/api/portfolio", publicLimiter, portfolioRouter);
+
+// JSON 404 for anything unmatched, then the structured error handler.
+app.use(notFoundHandler);
+app.use(errorHandler);
 
 // Every 5 minutes: poll for new contract events
 cron.schedule("*/5 * * * *", async () => {
   try {
     console.log("[cron] indexing new events");
     await indexer.poll();
+    recordCronRun("indexer", "success");
   } catch (err) {
     console.error("[cron] indexer poll failed:", err);
+    recordCronRun("indexer", "error");
   }
 });
 
@@ -52,8 +66,10 @@ cron.schedule("0 * * * *", async () => {
         console.error(`[cron] project ${projectId} failed:`, err);
       }
     }
+    recordCronRun("score-update", "success");
   } catch (err) {
     console.error("[cron] score update failed:", err);
+    recordCronRun("score-update", "error");
   }
 });
 
