@@ -4,9 +4,12 @@ import cron from "node-cron";
 import dotenv from "dotenv";
 import iotRouter from "./routes/iot";
 import adminRouter from "./routes/admin";
+import projectsRouter from "./routes/projects";
+import portfolioRouter from "./routes/portfolio";
 import { getSolarData, getSatelliteData } from "./routes/iot";
 import { computeScores } from "./lib/scoring";
 import { updateImpactScore, getTotalProjects } from "./lib/registry";
+import { indexer } from "./lib/indexer";
 
 dotenv.config();
 const app = express();
@@ -18,6 +21,18 @@ app.use(express.json());
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
 app.use("/api/iot", iotRouter);
 app.use("/api/admin", adminRouter);
+app.use("/api/projects", projectsRouter);
+app.use("/api/portfolio", portfolioRouter);
+
+// Every 5 minutes: poll for new contract events
+cron.schedule("*/5 * * * *", async () => {
+  try {
+    console.log("[cron] indexing new events");
+    await indexer.poll();
+  } catch (err) {
+    console.error("[cron] indexer poll failed:", err);
+  }
+});
 
 // Hourly cron: run score update at the top of every hour
 cron.schedule("0 * * * *", async () => {
