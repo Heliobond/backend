@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 import iotRouter from "./routes/iot";
 import adminRouter from "./routes/admin";
 import projectsRouter from "./routes/projects";
+import portfolioRouter from "./routes/portfolio";
 import { getSolarData, getSatelliteData } from "./routes/iot";
 import { computeScores } from "./lib/scoring";
 import { updateImpactScore, getTotalProjects } from "./lib/registry";
@@ -21,6 +22,7 @@ app.get("/health", (_req, res) => res.json({ status: "ok" }));
 app.use("/api/iot", iotRouter);
 app.use("/api/admin", adminRouter);
 app.use("/api/projects", projectsRouter);
+app.use("/api/portfolio", portfolioRouter);
 
 // Every 5 minutes: poll for new contract events
 cron.schedule("*/5 * * * *", async () => {
