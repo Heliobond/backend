@@ -1,5 +1,6 @@
-import { Router, Request, Response } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import { indexer } from "../lib/indexer";
+import { badRequest } from "../middleware/errors";
 
 const router = Router();
 
@@ -19,14 +20,16 @@ interface PortfolioResponse {
   events: PortfolioEvent[];
 }
 
-router.get("/:address", async (req: Request, res: Response) => {
+router.get("/:address", async (req: Request, res: Response, next: NextFunction) => {
+  const address = Array.isArray(req.params.address) ? req.params.address[0] : req.params.address;
+
+  // Stellar account/contract IDs are 56-char strkeys; keep validation lenient
+  // but reject obviously malformed input instead of returning empty results.
+  if (!address || typeof address !== "string" || address.trim().length < 3) {
+    throw badRequest("address must be a non-empty string");
+  }
+
   try {
-    const address = req.params.address;
-
-    if (!address || typeof address !== "string") {
-      return res.status(400).json({ error: "invalid address" });
-    }
-
     const events = indexer.getEventsByAddress(address);
 
     let totalShares = 0;
@@ -63,7 +66,7 @@ router.get("/:address", async (req: Request, res: Response) => {
     res.json(response);
   } catch (error) {
     console.error("[portfolio] error:", error);
-    res.status(500).json({ error: "internal error" });
+    next(error);
   }
 });
 

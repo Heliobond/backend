@@ -1,7 +1,8 @@
-import { Router, Request, Response } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import { getTotalProjects } from "../lib/registry";
 import { getSolarData, getSatelliteData } from "./iot";
 import { computeScores } from "../lib/scoring";
+import { parseProjectId, parseOptionalInt } from "../middleware/errors";
 
 const router = Router();
 
@@ -26,11 +27,12 @@ interface ProjectDetailResponse extends ProjectData {
   funding?: number;
 }
 
-router.get("/", async (req: Request, res: Response) => {
-  try {
-    const limit = Math.min(parseInt(req.query.limit as string) || 10, 100);
-    const cursor = parseInt(req.query.cursor as string) || 0;
+router.get("/", async (req: Request, res: Response, next: NextFunction) => {
+  // Validation throws ApiError -> handled by the central error middleware as 400.
+  const limit = Math.min(parseOptionalInt(req.query.limit as string | undefined, "limit", 10), 100);
+  const cursor = parseOptionalInt(req.query.cursor as string | undefined, "cursor", 0);
 
+  try {
     const total = await getTotalProjects();
     const ids = Array.from({ length: total }, (_, i) => i + 1);
 
@@ -63,17 +65,14 @@ router.get("/", async (req: Request, res: Response) => {
     res.json(response);
   } catch (error) {
     console.error("[projects] list error:", error);
-    res.status(500).json({ error: "internal error" });
+    next(error);
   }
 });
 
-router.get("/:id", async (req: Request, res: Response) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id) || id < 1) {
-      return res.status(400).json({ error: "invalid project id" });
-    }
+router.get("/:id", async (req: Request, res: Response, next: NextFunction) => {
+  const id = parseProjectId(req.params.id, "project id");
 
+  try {
     const solar = getSolarData(id);
     const satellite = getSatelliteData(id);
     const scores = computeScores({ solar, satellite });
@@ -93,7 +92,7 @@ router.get("/:id", async (req: Request, res: Response) => {
     res.json(response);
   } catch (error) {
     console.error("[projects] detail error:", error);
-    res.status(500).json({ error: "internal error" });
+    next(error);
   }
 });
 
