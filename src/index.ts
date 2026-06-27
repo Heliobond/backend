@@ -11,6 +11,10 @@ import rolesRouter from "./routes/roles";
 import batchRouter from "./routes/batch";
 import webhooksRouter from "./routes/webhooks";
 import historyRouter from "./routes/history";
+import panelsRouter from "./routes/panels";
+import metadataRouter from "./routes/metadata";
+import dashboardRouter from "./routes/dashboard";
+import emailRouter from "./routes/email";
 import anomalyRouter from "./routes/anomaly";
 import scoringFormulasRouter from "./routes/scoring-formulas";
 import chainsRouter from "./routes/chains";
@@ -19,7 +23,8 @@ import aggregateRouter from "./routes/aggregate";
 import { getSolarData, getSatelliteData } from "./routes/iot";
 import { computeScores } from "./lib/scoring";
 import { updateImpactScore, getTotalProjects } from "./lib/registry";
-import { recordScoreHistory } from "./lib/history";
+import { recordScoreHistory, getHistory } from "./lib/history";
+import { sendAlertIfSignificant } from "./lib/email";
 import { triggerWebhooks } from "./lib/webhooks";
 import { indexer } from "./lib/indexer";
 import { getHealth, recordCronRun } from "./lib/health";
@@ -60,6 +65,10 @@ v1.use("/projects/aggregate", publicLimiter, aggregateRouter);
 v1.use("/portfolio", publicLimiter, portfolioRouter);
 v1.use("/roles", adminLimiter, rolesRouter);
 v1.use("/webhooks", adminLimiter, webhooksRouter);
+v1.use("/panels", adminLimiter, panelsRouter);
+v1.use("/metadata", adminLimiter, metadataRouter);
+v1.use("/dashboard", publicLimiter, dashboardRouter);
+v1.use("/email", adminLimiter, emailRouter);
 v1.use("/anomaly", publicLimiter, anomalyRouter);
 v1.use("/scoring/formulas", adminLimiter, scoringFormulasRouter);
 v1.use("/chains", adminLimiter, chainsRouter);
@@ -79,6 +88,10 @@ app.use("/api/projects/aggregate", publicLimiter, aggregateRouter);
 app.use("/api/portfolio", publicLimiter, portfolioRouter);
 app.use("/api/roles", adminLimiter, rolesRouter);
 app.use("/api/webhooks", adminLimiter, webhooksRouter);
+app.use("/api/panels", adminLimiter, panelsRouter);
+app.use("/api/metadata", adminLimiter, metadataRouter);
+app.use("/api/dashboard", publicLimiter, dashboardRouter);
+app.use("/api/email", adminLimiter, emailRouter);
 
 // JSON 404 for anything unmatched, then the structured error handler.
 app.use(notFoundHandler);
@@ -109,6 +122,18 @@ cron.schedule("0 * * * *", async () => {
         const satellite = getSatelliteData(projectId);
         const scores = computeScores({ solar, satellite });
         const tx_hash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact);
+        recordScoreHistory(projectId, scores.credit_quality, scores.green_impact);
+        triggerWebhooks({ project_id: projectId, ...scores, tx_hash, timestamp: Date.now() });
+
+        // Email alert when this update moved scores significantly (#22).
+        const recent = getHistory(projectId).slice(-2);
+        if (recent.length === 2) {
+          await sendAlertIfSignificant({
+            project_id: projectId,
+            credit_quality_delta: recent[1].credit_quality - recent[0].credit_quality,
+            green_impact_delta: recent[1].green_impact - recent[0].green_impact,
+          });
+        }
         const timestamp = Date.now();
         recordScoreHistory(projectId, scores.credit_quality, scores.green_impact, timestamp);
         triggerWebhooks({ project_id: projectId, ...scores, tx_hash, timestamp });
