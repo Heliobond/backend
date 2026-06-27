@@ -6,9 +6,15 @@ import iotRouter from "./routes/iot";
 import adminRouter from "./routes/admin";
 import projectsRouter from "./routes/projects";
 import portfolioRouter from "./routes/portfolio";
+import rolesRouter from "./routes/roles";
+import batchRouter from "./routes/batch";
+import webhooksRouter from "./routes/webhooks";
+import historyRouter from "./routes/history";
 import { getSolarData, getSatelliteData } from "./routes/iot";
 import { computeScores } from "./lib/scoring";
 import { updateImpactScore, getTotalProjects } from "./lib/registry";
+import { recordScoreHistory } from "./lib/history";
+import { triggerWebhooks } from "./lib/webhooks";
 import { indexer } from "./lib/indexer";
 import { getHealth, recordCronRun } from "./lib/health";
 import { requestLogger } from "./middleware/requestLogger";
@@ -29,8 +35,12 @@ app.get("/health", (_req, res) => res.json(getHealth()));
 // Rate limiting: stricter limits for privileged admin endpoints.
 app.use("/api/iot", publicLimiter, iotRouter);
 app.use("/api/admin", adminLimiter, adminRouter);
+app.use("/api/admin/batch", adminLimiter, batchRouter);
 app.use("/api/projects", publicLimiter, projectsRouter);
+app.use("/api/projects/:id/history", publicLimiter, historyRouter);
 app.use("/api/portfolio", publicLimiter, portfolioRouter);
+app.use("/api/roles", adminLimiter, rolesRouter);
+app.use("/api/webhooks", adminLimiter, webhooksRouter);
 
 // JSON 404 for anything unmatched, then the structured error handler.
 app.use(notFoundHandler);
@@ -61,6 +71,8 @@ cron.schedule("0 * * * *", async () => {
         const satellite = getSatelliteData(projectId);
         const scores = computeScores({ solar, satellite });
         const tx_hash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact);
+        recordScoreHistory(projectId, scores.credit_quality, scores.green_impact);
+        triggerWebhooks({ project_id: projectId, ...scores, tx_hash, timestamp: Date.now() });
         console.log(`[cron] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`);
       } catch (err) {
         console.error(`[cron] project ${projectId} failed:`, err);
