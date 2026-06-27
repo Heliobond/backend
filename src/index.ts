@@ -15,6 +15,11 @@ import panelsRouter from "./routes/panels";
 import metadataRouter from "./routes/metadata";
 import dashboardRouter from "./routes/dashboard";
 import emailRouter from "./routes/email";
+import anomalyRouter from "./routes/anomaly";
+import scoringFormulasRouter from "./routes/scoring-formulas";
+import chainsRouter from "./routes/chains";
+import satelliteSourcesRouter from "./routes/satellite-sources";
+import aggregateRouter from "./routes/aggregate";
 import { getSolarData, getSatelliteData } from "./routes/iot";
 import { computeScores } from "./lib/scoring";
 import { updateImpactScore, getTotalProjects } from "./lib/registry";
@@ -23,6 +28,7 @@ import { sendAlertIfSignificant } from "./lib/email";
 import { triggerWebhooks } from "./lib/webhooks";
 import { indexer } from "./lib/indexer";
 import { getHealth, recordCronRun } from "./lib/health";
+import { attachWebSocketServer, broadcastScoreUpdate } from "./lib/websocket";
 import { openApiSpec } from "./lib/swagger";
 import { requestLogger } from "./middleware/requestLogger";
 import { errorHandler, notFoundHandler } from "./middleware/errors";
@@ -55,6 +61,7 @@ v1.use("/admin", adminLimiter, adminRouter);
 v1.use("/admin/batch", adminLimiter, batchRouter);
 v1.use("/projects", publicLimiter, projectsRouter);
 v1.use("/projects/:id/history", publicLimiter, historyRouter);
+v1.use("/projects/aggregate", publicLimiter, aggregateRouter);
 v1.use("/portfolio", publicLimiter, portfolioRouter);
 v1.use("/roles", adminLimiter, rolesRouter);
 v1.use("/webhooks", adminLimiter, webhooksRouter);
@@ -62,6 +69,10 @@ v1.use("/panels", adminLimiter, panelsRouter);
 v1.use("/metadata", adminLimiter, metadataRouter);
 v1.use("/dashboard", publicLimiter, dashboardRouter);
 v1.use("/email", adminLimiter, emailRouter);
+v1.use("/anomaly", publicLimiter, anomalyRouter);
+v1.use("/scoring/formulas", adminLimiter, scoringFormulasRouter);
+v1.use("/chains", adminLimiter, chainsRouter);
+v1.use("/satellite-sources", adminLimiter, satelliteSourcesRouter);
 
 app.use("/v1", v1);
 
@@ -73,6 +84,7 @@ app.use("/api/admin", adminLimiter, adminRouter);
 app.use("/api/admin/batch", adminLimiter, batchRouter);
 app.use("/api/projects", publicLimiter, projectsRouter);
 app.use("/api/projects/:id/history", publicLimiter, historyRouter);
+app.use("/api/projects/aggregate", publicLimiter, aggregateRouter);
 app.use("/api/portfolio", publicLimiter, portfolioRouter);
 app.use("/api/roles", adminLimiter, rolesRouter);
 app.use("/api/webhooks", adminLimiter, webhooksRouter);
@@ -122,6 +134,10 @@ cron.schedule("0 * * * *", async () => {
             green_impact_delta: recent[1].green_impact - recent[0].green_impact,
           });
         }
+        const timestamp = Date.now();
+        recordScoreHistory(projectId, scores.credit_quality, scores.green_impact, timestamp);
+        triggerWebhooks({ project_id: projectId, ...scores, tx_hash, timestamp });
+        broadcastScoreUpdate({ project_id: projectId, ...scores, timestamp });
         console.log(`[cron] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`);
       } catch (err) {
         console.error(`[cron] project ${projectId} failed:`, err);
@@ -134,8 +150,11 @@ cron.schedule("0 * * * *", async () => {
   }
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Heliobond backend listening on port ${PORT}`);
 });
+
+// Real-time score updates over WebSocket (ws://<host>/ws)
+attachWebSocketServer(server);
 
 export default app;
