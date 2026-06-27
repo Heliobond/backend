@@ -22,6 +22,9 @@ import satelliteSourcesRouter from "./routes/satellite-sources";
 import aggregateRouter from "./routes/aggregate";
 import comparisonRouter from "./routes/comparison";
 import benchmarkingRouter from "./routes/benchmarking";
+import financialRouter from "./routes/financial";
+import forecastRouter from "./routes/forecast";
+import maintenanceRouter from "./routes/maintenance";
 import { getSolarData, getSatelliteData } from "./routes/iot";
 import { computeScores } from "./lib/scoring";
 import { updateImpactScore, getTotalProjects } from "./lib/registry";
@@ -77,6 +80,9 @@ v1.use("/chains", adminLimiter, chainsRouter);
 v1.use("/satellite-sources", adminLimiter, satelliteSourcesRouter);
 v1.use("/comparison", publicLimiter, comparisonRouter);
 v1.use("/benchmarking", publicLimiter, benchmarkingRouter);
+v1.use("/financial", publicLimiter, financialRouter);
+v1.use("/forecast", publicLimiter, forecastRouter);
+v1.use("/maintenance", publicLimiter, maintenanceRouter);
 
 app.use("/v1", v1);
 
@@ -98,6 +104,9 @@ app.use("/api/dashboard", publicLimiter, dashboardRouter);
 app.use("/api/email", adminLimiter, emailRouter);
 app.use("/api/comparison", publicLimiter, comparisonRouter);
 app.use("/api/benchmarking", publicLimiter, benchmarkingRouter);
+app.use("/api/financial", publicLimiter, financialRouter);
+app.use("/api/forecast", publicLimiter, forecastRouter);
+app.use("/api/maintenance", publicLimiter, maintenanceRouter);
 
 // JSON 404 for anything unmatched, then the structured error handler.
 app.use(notFoundHandler);
