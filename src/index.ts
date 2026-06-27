@@ -20,6 +20,8 @@ import scoringFormulasRouter from "./routes/scoring-formulas";
 import chainsRouter from "./routes/chains";
 import satelliteSourcesRouter from "./routes/satellite-sources";
 import aggregateRouter from "./routes/aggregate";
+import comparisonRouter from "./routes/comparison";
+import benchmarkingRouter from "./routes/benchmarking";
 import { getSolarData, getSatelliteData } from "./routes/iot";
 import { computeScores } from "./lib/scoring";
 import { updateImpactScore, getTotalProjects } from "./lib/registry";
@@ -73,6 +75,8 @@ v1.use("/anomaly", publicLimiter, anomalyRouter);
 v1.use("/scoring/formulas", adminLimiter, scoringFormulasRouter);
 v1.use("/chains", adminLimiter, chainsRouter);
 v1.use("/satellite-sources", adminLimiter, satelliteSourcesRouter);
+v1.use("/comparison", publicLimiter, comparisonRouter);
+v1.use("/benchmarking", publicLimiter, benchmarkingRouter);
 
 app.use("/v1", v1);
 
@@ -92,6 +96,8 @@ app.use("/api/panels", adminLimiter, panelsRouter);
 app.use("/api/metadata", adminLimiter, metadataRouter);
 app.use("/api/dashboard", publicLimiter, dashboardRouter);
 app.use("/api/email", adminLimiter, emailRouter);
+app.use("/api/comparison", publicLimiter, comparisonRouter);
+app.use("/api/benchmarking", publicLimiter, benchmarkingRouter);
 
 // JSON 404 for anything unmatched, then the structured error handler.
 app.use(notFoundHandler);
