@@ -14,10 +14,12 @@ import historyRouter from "./routes/history";
 import panelsRouter from "./routes/panels";
 import metadataRouter from "./routes/metadata";
 import dashboardRouter from "./routes/dashboard";
+import emailRouter from "./routes/email";
 import { getSolarData, getSatelliteData } from "./routes/iot";
 import { computeScores } from "./lib/scoring";
 import { updateImpactScore, getTotalProjects } from "./lib/registry";
-import { recordScoreHistory } from "./lib/history";
+import { recordScoreHistory, getHistory } from "./lib/history";
+import { sendAlertIfSignificant } from "./lib/email";
 import { triggerWebhooks } from "./lib/webhooks";
 import { indexer } from "./lib/indexer";
 import { getHealth, recordCronRun } from "./lib/health";
@@ -59,6 +61,7 @@ v1.use("/webhooks", adminLimiter, webhooksRouter);
 v1.use("/panels", adminLimiter, panelsRouter);
 v1.use("/metadata", adminLimiter, metadataRouter);
 v1.use("/dashboard", publicLimiter, dashboardRouter);
+v1.use("/email", adminLimiter, emailRouter);
 
 app.use("/v1", v1);
 
@@ -76,6 +79,7 @@ app.use("/api/webhooks", adminLimiter, webhooksRouter);
 app.use("/api/panels", adminLimiter, panelsRouter);
 app.use("/api/metadata", adminLimiter, metadataRouter);
 app.use("/api/dashboard", publicLimiter, dashboardRouter);
+app.use("/api/email", adminLimiter, emailRouter);
 
 // JSON 404 for anything unmatched, then the structured error handler.
 app.use(notFoundHandler);
@@ -108,6 +112,16 @@ cron.schedule("0 * * * *", async () => {
         const tx_hash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact);
         recordScoreHistory(projectId, scores.credit_quality, scores.green_impact);
         triggerWebhooks({ project_id: projectId, ...scores, tx_hash, timestamp: Date.now() });
+
+        // Email alert when this update moved scores significantly (#22).
+        const recent = getHistory(projectId).slice(-2);
+        if (recent.length === 2) {
+          await sendAlertIfSignificant({
+            project_id: projectId,
+            credit_quality_delta: recent[1].credit_quality - recent[0].credit_quality,
+            green_impact_delta: recent[1].green_impact - recent[0].green_impact,
+          });
+        }
         console.log(`[cron] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`);
       } catch (err) {
         console.error(`[cron] project ${projectId} failed:`, err);
