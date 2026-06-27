@@ -11,6 +11,7 @@ import rolesRouter from "./routes/roles";
 import batchRouter from "./routes/batch";
 import webhooksRouter from "./routes/webhooks";
 import historyRouter from "./routes/history";
+import panelsRouter from "./routes/panels";
 import { getSolarData, getSatelliteData } from "./routes/iot";
 import { computeScores } from "./lib/scoring";
 import { updateImpactScore, getTotalProjects } from "./lib/registry";
@@ -53,6 +54,7 @@ v1.use("/projects/:id/history", publicLimiter, historyRouter);
 v1.use("/portfolio", publicLimiter, portfolioRouter);
 v1.use("/roles", adminLimiter, rolesRouter);
 v1.use("/webhooks", adminLimiter, webhooksRouter);
+v1.use("/panels", adminLimiter, panelsRouter);
 
 app.use("/v1", v1);
 
@@ -67,6 +69,7 @@ app.use("/api/projects/:id/history", publicLimiter, historyRouter);
 app.use("/api/portfolio", publicLimiter, portfolioRouter);
 app.use("/api/roles", adminLimiter, rolesRouter);
 app.use("/api/webhooks", adminLimiter, webhooksRouter);
+app.use("/api/panels", adminLimiter, panelsRouter);
 
 // JSON 404 for anything unmatched, then the structured error handler.
 app.use(notFoundHandler);
