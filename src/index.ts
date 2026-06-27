@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import cron from "node-cron";
 import dotenv from "dotenv";
+import swaggerUi from "swagger-ui-express";
 import iotRouter from "./routes/iot";
 import adminRouter from "./routes/admin";
 import projectsRouter from "./routes/projects";
@@ -17,9 +18,11 @@ import { recordScoreHistory } from "./lib/history";
 import { triggerWebhooks } from "./lib/webhooks";
 import { indexer } from "./lib/indexer";
 import { getHealth, recordCronRun } from "./lib/health";
+import { openApiSpec } from "./lib/swagger";
 import { requestLogger } from "./middleware/requestLogger";
 import { errorHandler, notFoundHandler } from "./middleware/errors";
 import { publicLimiter, adminLimiter } from "./middleware/rateLimit";
+import { versionHeaders, acceptVersion, deprecationHeaders } from "./middleware/versioning";
 
 dotenv.config();
 const app = express();
@@ -29,10 +32,33 @@ app.use(cors({ origin: process.env.FRONTEND_URL || "http://localhost:3000" }));
 app.use(express.json());
 app.use(requestLogger);
 
-// Liveness + basic operational visibility (uptime, last cron run).
+// ── Liveness ────────────────────────────────────────────────────────────────
 app.get("/health", (_req, res) => res.json(getHealth()));
 
-// Rate limiting: stricter limits for privileged admin endpoints.
+// ── Swagger UI at /docs ─────────────────────────────────────────────────────
+app.use("/docs", swaggerUi.serve, swaggerUi.setup(openApiSpec));
+// Raw OpenAPI spec for tooling
+app.get("/docs.json", (_req, res) => res.json(openApiSpec));
+
+// ── v1 routes (current) ──────────────────────────────────────────────────────
+const v1 = express.Router();
+v1.use(versionHeaders);
+v1.use(acceptVersion);
+
+v1.use("/iot", publicLimiter, iotRouter);
+v1.use("/admin", adminLimiter, adminRouter);
+v1.use("/admin/batch", adminLimiter, batchRouter);
+v1.use("/projects", publicLimiter, projectsRouter);
+v1.use("/projects/:id/history", publicLimiter, historyRouter);
+v1.use("/portfolio", publicLimiter, portfolioRouter);
+v1.use("/roles", adminLimiter, rolesRouter);
+v1.use("/webhooks", adminLimiter, webhooksRouter);
+
+app.use("/v1", v1);
+
+// ── Legacy /api paths (deprecated) ──────────────────────────────────────────
+// Kept for backward compatibility; will be removed after 2027-01-01.
+app.use("/api", deprecationHeaders, versionHeaders);
 app.use("/api/iot", publicLimiter, iotRouter);
 app.use("/api/admin", adminLimiter, adminRouter);
 app.use("/api/admin/batch", adminLimiter, batchRouter);
@@ -46,7 +72,7 @@ app.use("/api/webhooks", adminLimiter, webhooksRouter);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-// Every 5 minutes: poll for new contract events
+// ── Cron: index contract events every 5 minutes ──────────────────────────────
 cron.schedule("*/5 * * * *", async () => {
   try {
     console.log("[cron] indexing new events");
@@ -58,7 +84,7 @@ cron.schedule("*/5 * * * *", async () => {
   }
 });
 
-// Hourly cron: run score update at the top of every hour
+// ── Cron: hourly score update ────────────────────────────────────────────────
 cron.schedule("0 * * * *", async () => {
   try {
     console.log("[cron] running hourly score update");
