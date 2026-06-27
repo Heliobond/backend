@@ -2,7 +2,8 @@ import { Router, Request, Response, NextFunction } from "express";
 import { getSolarData, getSatelliteData } from "./iot";
 import { computeScores } from "../lib/scoring";
 import { updateImpactScore, getTotalProjects } from "../lib/registry";
-import { badRequest } from "../middleware/errors";
+import { badRequest, parseOptionalInt } from "../middleware/errors";
+import { recordAudit, getAuditLog, auditToCsv } from "../lib/audit";
 
 const router = Router();
 
@@ -67,6 +68,13 @@ router.post("/update-scores", async (req: Request, res: Response) => {
         const scores = computeScores({ solar, satellite });
         const tx_hash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact);
         results.push({ project_id: projectId, tx_hash, ...scores });
+        recordAudit({
+          project_id: projectId,
+          credit_quality: scores.credit_quality,
+          green_impact: scores.green_impact,
+          tx_hash,
+          triggered_by: "api",
+        });
         console.log(`[oracle] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`);
       } catch (err) {
         console.error(`[oracle] project ${projectId} failed:`, err);
@@ -78,6 +86,37 @@ router.post("/update-scores", async (req: Request, res: Response) => {
   } catch (error) {
     console.error("[oracle] failed:", error);
     res.status(500).json({ error: "internal_error", message: "Failed to update scores" });
+  }
+});
+
+/**
+ * GET /admin/audit
+ * Query: project_id=<int>, from=<unix-ms>, to=<unix-ms>, format=json|csv
+ * Returns the immutable audit log of all score updates.
+ */
+router.get("/audit", (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const project_id = parseOptionalInt(req.query.project_id as string | undefined, "project_id", 0) || undefined;
+    const from = parseOptionalInt(req.query.from as string | undefined, "from", 0) || undefined;
+    const to = parseOptionalInt(req.query.to as string | undefined, "to", 0) || undefined;
+
+    if (from && to && from > to) {
+      throw badRequest("from must be earlier than to");
+    }
+
+    const entries = getAuditLog({ project_id, from, to });
+    const format = req.query.format === "csv" ? "csv" : "json";
+
+    if (format === "csv") {
+      res.set("Content-Type", "text/csv");
+      res.set("Content-Disposition", "attachment; filename=\"audit-log.csv\"");
+      res.send(auditToCsv(entries));
+      return;
+    }
+
+    res.json({ count: entries.length, entries });
+  } catch (err) {
+    next(err);
   }
 });
 
