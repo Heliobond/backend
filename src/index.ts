@@ -18,6 +18,7 @@ import { recordScoreHistory } from "./lib/history";
 import { triggerWebhooks } from "./lib/webhooks";
 import { indexer } from "./lib/indexer";
 import { getHealth, recordCronRun } from "./lib/health";
+import { attachWebSocketServer, broadcastScoreUpdate } from "./lib/websocket";
 import { openApiSpec } from "./lib/swagger";
 import { requestLogger } from "./middleware/requestLogger";
 import { errorHandler, notFoundHandler } from "./middleware/errors";
@@ -97,8 +98,10 @@ cron.schedule("0 * * * *", async () => {
         const satellite = getSatelliteData(projectId);
         const scores = computeScores({ solar, satellite });
         const tx_hash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact);
-        recordScoreHistory(projectId, scores.credit_quality, scores.green_impact);
-        triggerWebhooks({ project_id: projectId, ...scores, tx_hash, timestamp: Date.now() });
+        const timestamp = Date.now();
+        recordScoreHistory(projectId, scores.credit_quality, scores.green_impact, timestamp);
+        triggerWebhooks({ project_id: projectId, ...scores, tx_hash, timestamp });
+        broadcastScoreUpdate({ project_id: projectId, ...scores, timestamp });
         console.log(`[cron] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`);
       } catch (err) {
         console.error(`[cron] project ${projectId} failed:`, err);
@@ -111,8 +114,11 @@ cron.schedule("0 * * * *", async () => {
   }
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Heliobond backend listening on port ${PORT}`);
 });
+
+// Real-time score updates over WebSocket (ws://<host>/ws)
+attachWebSocketServer(server);
 
 export default app;
