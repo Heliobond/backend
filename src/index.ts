@@ -11,6 +11,10 @@ import rolesRouter from "./routes/roles";
 import batchRouter from "./routes/batch";
 import webhooksRouter from "./routes/webhooks";
 import historyRouter from "./routes/history";
+import anomalyRouter from "./routes/anomaly";
+import scoringFormulasRouter from "./routes/scoring-formulas";
+import chainsRouter from "./routes/chains";
+import satelliteSourcesRouter from "./routes/satellite-sources";
 import { getSolarData, getSatelliteData } from "./routes/iot";
 import { computeScores } from "./lib/scoring";
 import { updateImpactScore, getTotalProjects } from "./lib/registry";
@@ -53,6 +57,10 @@ v1.use("/projects/:id/history", publicLimiter, historyRouter);
 v1.use("/portfolio", publicLimiter, portfolioRouter);
 v1.use("/roles", adminLimiter, rolesRouter);
 v1.use("/webhooks", adminLimiter, webhooksRouter);
+v1.use("/anomaly", publicLimiter, anomalyRouter);
+v1.use("/scoring/formulas", adminLimiter, scoringFormulasRouter);
+v1.use("/chains", adminLimiter, chainsRouter);
+v1.use("/satellite-sources", adminLimiter, satelliteSourcesRouter);
 
 app.use("/v1", v1);
 
