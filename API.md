@@ -231,3 +231,279 @@ sequentially.
 **Errors:**
 - `400` if `project_ids` is present but not an array of positive integers, or the JSON body is malformed.
 - `401` if `ADMIN_API_KEY` is set and the bearer token is missing/incorrect.
+
+---
+
+## Investor Reporting Endpoints
+
+Endpoints designed for project investors to get dashboard data, performance reports, financial summaries, compliance status, and customized reporting.
+
+### `GET /v1/investor/dashboard`
+Returns portfolio-wide aggregated dashboard data and recent audit logs.
+
+**Response `200`**
+```json
+{
+  "portfolio_summary": {
+    "total_projects": 2,
+    "total_power_output_kw": 1150,
+    "avg_credit_quality": 85,
+    "avg_green_impact": 75,
+    "total_portfolio_value": 950000,
+    "total_carbon_offsets_tonnes": 4312.5
+  },
+  "recent_activities": [
+    {
+      "id": 1,
+      "project_id": 1,
+      "credit_quality": 85,
+      "green_impact": 75,
+      "tx_hash": "tx123",
+      "triggered_by": "test",
+      "timestamp": 1718150400000
+    }
+  ]
+}
+```
+
+### `GET /v1/investor/performance-report`
+Provides actual vs expected performance ratios and performance status for each project.
+
+**Response `200`**
+```json
+{
+  "generated_at": 1718150400000,
+  "projects": [
+    {
+      "project_id": 1,
+      "efficiency_pct": 82,
+      "power_output_kw": 550,
+      "ndvi_score": 0.75,
+      "actual_vs_expected_ratio": 0.55,
+      "performance_status": "Critical"
+    }
+  ]
+}
+```
+
+### `GET /v1/investor/financial-summary`
+Aggregates financial metrics like NPV, ROI, and payback period across the portfolio.
+
+**Response `200`**
+```json
+{
+  "portfolio_financials": {
+    "total_installation_cost": 450000,
+    "total_npv": 120000,
+    "avg_payback_period_years": 6.8,
+    "avg_roi_pct": 14.5
+  },
+  "projects": [
+    {
+      "project_id": 1,
+      "installation_cost": 150000,
+      "npv": 45000,
+      "payback_period_years": 6.2,
+      "roi_pct": 15.2
+    }
+  ]
+}
+```
+
+### `GET /v1/investor/compliance-report`
+Provides ESG compliance, verified carbon credits, and audit trails.
+
+**Response `200`**
+```json
+{
+  "portfolio_compliance": {
+    "portfolio_esg_score": 75,
+    "total_carbon_credits_issued": 20625,
+    "portfolio_status": "Compliant"
+  },
+  "projects": [
+    {
+      "project_id": 1,
+      "green_impact": 75,
+      "ndvi_score": 0.75,
+      "carbon_credits_issued": 20625,
+      "compliance_status": "Compliant"
+    }
+  ],
+  "audit_logs": []
+}
+```
+
+### `POST /v1/investor/custom-report`
+Generates a custom report based on specific project IDs and sections.
+
+**Request Body**
+```json
+{
+  "project_ids": [1],
+  "sections": ["performance", "scores"]
+}
+```
+
+**Response `200`**
+```json
+{
+  "generated_at": 1718150400000,
+  "project_count": 1,
+  "projects": [
+    {
+      "project_id": 1,
+      "scores": {
+        "credit_quality": 85,
+        "green_impact": 75
+      },
+      "performance": {
+        "efficiency_pct": 82,
+        "power_output_kw": 550,
+        "actual_vs_expected_ratio": 0.55,
+        "performance_status": "Critical"
+      }
+    }
+  ]
+}
+```
+
+---
+
+## Consumer API Key Management
+
+Admin endpoints (protected by `ADMIN_API_KEY`) to manage credentials for external consumers. 
+
+External consumers can authenticate to `/v1/*` endpoints using `Authorization: Bearer <key>` or `X-API-Key: <key>`.
+
+### `POST /v1/admin/api-keys`
+Generates a new consumer API key.
+
+**Request Body**
+```json
+{
+  "consumer_name": "Third Party Service",
+  "rate_limit": 100
+}
+```
+
+**Response `201`**
+```json
+{
+  "id": "e22709bf-6d60-449e-b9ef-2ea39544be6c",
+  "key": "hk_live_4a56ff0bc...",
+  "consumer_name": "Third Party Service",
+  "status": "active",
+  "rate_limit": 100,
+  "usage_count": 0,
+  "last_used_at": null,
+  "created_at": 1718150400000
+}
+```
+
+### `GET /v1/admin/api-keys`
+Lists all generated consumer API keys.
+
+**Response `200`**
+```json
+{
+  "count": 1,
+  "keys": [...]
+}
+```
+
+### `POST /v1/admin/api-keys/:id/rotate`
+Rotates a consumer's secret API key.
+
+**Response `200`**
+```json
+{
+  "id": "e22709bf-6d60-449e-b9ef-2ea39544be6c",
+  "key": "hk_live_new_rotated_key_value...",
+  ...
+}
+```
+
+### `DELETE /v1/admin/api-keys/:id`
+Revokes an API key, preventing future access.
+
+**Response `200`**
+```json
+{
+  "success": true,
+  "message": "API key revoked successfully"
+}
+```
+
+### `GET /v1/admin/api-keys/:id/usage`
+Retrieves usage metrics and rate limits.
+
+**Response `200`**
+```json
+{
+  "id": "e22709bf-6d60-449e-b9ef-2ea39544be6c",
+  "consumer_name": "Third Party Service",
+  "usage_count": 42,
+  "last_used_at": 1718150410000,
+  "rate_limit": 100
+}
+```
+
+---
+
+## GraphQL API
+
+Flexible querying interface served alongside the REST API. Authenticated with either admin or consumer key.
+
+- **HTTP Endpoint**: `/graphql` (POST requests)
+- **GraphiQL Playground**: `/graphql-playground` (GET request via browser)
+
+### Example Query
+```graphql
+query {
+  projects(limit: 5) {
+    id
+    credit_quality
+    green_impact
+    solar {
+      power_output_kw
+      efficiency_pct
+    }
+    financials {
+      npv
+      roi_pct
+    }
+  }
+}
+```
+
+### Example Mutation (Requires `ADMIN_API_KEY`)
+```graphql
+mutation {
+  updateProjectScores(id: "1", creditQuality: 90, greenImpact: 85) {
+    id
+    credit_quality
+    green_impact
+  }
+}
+```
+
+---
+
+## gRPC Service
+
+High-performance gRPC interface listening on port `50051`. Authenticates callers via metadata (headers: `authorization` or `x-api-key`).
+
+### Service Definition
+```protobuf
+service HeliobondService {
+  rpc GetProjectScore(ProjectRequest) returns (ProjectResponse);
+  rpc StreamProjectScores(StreamRequest) returns (stream ProjectResponse);
+  rpc ChatProjectScores(stream ProjectRequest) returns (stream ProjectResponse);
+}
+```
+
+- **`GetProjectScore`**: Unary call to retrieve a project's latest stats and scores.
+- **`StreamProjectScores`**: Server-side streaming of project updates as they occur.
+- **`ChatProjectScores`**: Bidirectional stream enabling clients to send project IDs and receive live updates back.
+
