@@ -45,23 +45,23 @@ router.post("/", (req: Request, res: Response) => {
 
 /** GET /v1/scoring/formulas/:id — get a formula */
 router.get("/:id", (req: Request, res: Response) => {
-  const formula = getFormula(req.params.id);
+  const formula = getFormula(String(req.params.id));
   if (!formula) return res.status(404).json({ error: "formula not found" });
   res.json(formula);
 });
 
 /** DELETE /v1/scoring/formulas/:id — delete a formula */
 router.delete("/:id", (req: Request, res: Response) => {
-  const deleted = deleteFormula(req.params.id);
+  const deleted = deleteFormula(String(req.params.id));
   if (!deleted) return res.status(404).json({ error: "formula not found" });
   res.json({ ok: true });
 });
 
 /** POST /v1/scoring/formulas/:id/activate — set as active formula */
 router.post("/:id/activate", (req: Request, res: Response) => {
-  const ok = setActiveFormula(req.params.id);
+  const ok = setActiveFormula(String(req.params.id));
   if (!ok) return res.status(404).json({ error: "formula not found" });
-  res.json({ ok: true, active: req.params.id });
+  res.json({ ok: true, active: String(req.params.id) });
 });
 
 /** POST /v1/scoring/formulas/validate — validate weights without saving */
@@ -78,7 +78,7 @@ router.post("/validate", (req: Request, res: Response) => {
 router.get("/:id/preview/:projectId", (req: Request, res: Response, next: NextFunction) => {
   try {
     const projectId = parseProjectId(req.params.projectId, "project id");
-    const formula = getFormula(req.params.id);
+    const formula = getFormula(String(req.params.id));
     if (!formula) return res.status(404).json({ error: "formula not found" });
 
     const solar = getSolarData(projectId);

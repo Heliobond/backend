@@ -73,7 +73,7 @@ router.post("/score-update", async (req: Request, res: Response) => {
  * Returns current progress and results for a batch job.
  */
 router.get("/:batchId/status", (req: Request, res: Response) => {
-  const job = getJob(req.params["batchId"]);
+  const job = getJob(String(req.params["batchId"]));
   if (!job) {
     res.status(404).json({ error: "not_found", message: "Batch job not found" });
     return;

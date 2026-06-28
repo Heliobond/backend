@@ -60,7 +60,7 @@ router.get("/", (_req: Request, res: Response) => {
 
 /** GET /api/webhooks/:id — fetch one webhook (secret omitted) */
 router.get("/:id", (req: Request, res: Response) => {
-  const wh = getWebhook(req.params["id"]);
+  const wh = getWebhook(String(req.params["id"]));
   if (!wh) {
     res.status(404).json({ error: "not_found", message: "Webhook not found" });
     return;
@@ -70,7 +70,7 @@ router.get("/:id", (req: Request, res: Response) => {
 
 /** DELETE /api/webhooks/:id — unregister a webhook */
 router.delete("/:id", (req: Request, res: Response) => {
-  const removed = removeWebhook(req.params["id"]);
+  const removed = removeWebhook(String(req.params["id"]));
   if (!removed) {
     res.status(404).json({ error: "not_found", message: "Webhook not found" });
     return;

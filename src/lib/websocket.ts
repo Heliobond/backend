@@ -133,8 +133,11 @@ export function attachWebSocketServer(server: HttpServer): WebSocketServer {
   return wss;
 }
 
+import { scoreEvents, SCORE_UPDATE_EVENT } from "./events";
+
 /** Push a score update to every connection subscribed to that project. */
 export function broadcastScoreUpdate(update: ScoreUpdate): void {
+  scoreEvents.emit(SCORE_UPDATE_EVENT, update);
   if (!wss) return;
   const frame = encodeScoreUpdate(update);
   for (const [ws, state] of clients) {

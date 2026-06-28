@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package heliobond;
+
+service HeliobondService {
+  rpc GetProjectScore(ProjectRequest) returns (ProjectResponse);
+  rpc StreamProjectScores(StreamRequest) returns (stream ProjectResponse);
+  rpc ChatProjectScores(stream ProjectRequest) returns (stream ProjectResponse);
+}
+
+message ProjectRequest {
+  int32 project_id = 1;
+}
+
+message StreamRequest {}
+
+message ProjectResponse {
+  int32 project_id = 1;
+  int32 credit_quality = 2;
+  int32 green_impact = 3;
+  double power_output_kw = 4;
+  double efficiency_pct = 5;
+  double forest_density_pct = 6;
+  double ndvi_score = 7;
+  int64 timestamp = 8;
+}
