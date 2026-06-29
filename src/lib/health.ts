@@ -1,4 +1,5 @@
-import { rpcPool } from "./stellar";
+import { rpcPool, getRpcStatus } from "./stellar";
+import { getQueueSize } from "./tx-queue";
 import type { PoolMetrics } from "./db-pool";
 
 const startedAt = Date.now();
@@ -23,6 +24,13 @@ export interface HealthReport {
   started_at: string;
   last_cron_run: CronRun | null;
   db_pool: PoolMetrics;
+  rpc: {
+    available: boolean;
+    consecutiveFailures: number;
+    outageDurationMs: number | null;
+    lastSuccessAgoMs: number;
+  };
+  txQueueSize: number;
 }
 
 export function getHealth(): HealthReport {
@@ -32,5 +40,7 @@ export function getHealth(): HealthReport {
     started_at: new Date(startedAt).toISOString(),
     last_cron_run: lastCronRun,
     db_pool: rpcPool.getMetrics(),
+    rpc: getRpcStatus(),
+    txQueueSize: getQueueSize(),
   };
 }

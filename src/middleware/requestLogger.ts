@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { randomUUID } from "crypto";
+import { runWithCorrelationId } from "../lib/correlation";
 
 type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -24,23 +25,25 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
 
   const start = process.hrtime.bigint();
 
-  res.on("finish", () => {
-    if (!shouldLog(res.statusCode)) return;
-    const latencyMs = Number(process.hrtime.bigint() - start) / 1e6;
-    const line: Record<string, unknown> = {
-      level: res.statusCode >= 500 ? "error" : res.statusCode >= 400 ? "warn" : "info",
-      time: new Date().toISOString(),
-      correlation_id: correlationId,
-      method: req.method,
-      path: req.originalUrl,
-      status: res.statusCode,
-      latency_ms: Math.round(latencyMs * 1000) / 1000,
-    };
-    if (configuredLevel() === "debug") {
-      line.content_length = res.getHeader("content-length") ?? null;
-    }
-    console.log(JSON.stringify(line));
-  });
+  runWithCorrelationId(correlationId, () => {
+    res.on("finish", () => {
+      if (!shouldLog(res.statusCode)) return;
+      const latencyMs = Number(process.hrtime.bigint() - start) / 1e6;
+      const line: Record<string, unknown> = {
+        level: res.statusCode >= 500 ? "error" : res.statusCode >= 400 ? "warn" : "info",
+        time: new Date().toISOString(),
+        correlation_id: correlationId,
+        method: req.method,
+        path: req.originalUrl,
+        status: res.statusCode,
+        latency_ms: Math.round(latencyMs * 1000) / 1000,
+      };
+      if (configuredLevel() === "debug") {
+        line.content_length = res.getHeader("content-length") ?? null;
+      }
+      console.log(JSON.stringify(line));
+    });
 
-  next();
+    next();
+  });
 }
