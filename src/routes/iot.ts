@@ -6,6 +6,37 @@ const MAX_POWER_KW = 1000;
 const DEFAULT_EFFICIENCY_PCT = 60;
 const DEFAULT_FOREST_DENSITY_PCT = 50;
 
+// Configurable timezone for seeded-random hour boundaries.
+// Defaults to UTC so results are identical across servers regardless of OS locale.
+// Set CRON_TIMEZONE=America/New_York to align hourly boundaries with a local clock.
+const CRON_TIMEZONE = process.env.CRON_TIMEZONE ?? 'UTC'
+
+/**
+ * Return a stable integer that changes once per hour in the configured timezone.
+ * Uses Intl.DateTimeFormat so hour boundaries respect the CRON_TIMEZONE setting
+ * rather than the server's OS locale.
+ */
+function getHourSeed(): number {
+  try {
+    const now = new Date()
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      hour12: false,
+      timeZone: CRON_TIMEZONE,
+    })
+    const parts = formatter.formatToParts(now)
+    const get = (type: string) =>
+      parseInt(parts.find(p => p.type === type)?.value ?? '0', 10)
+    return (get('year') * 10000 + get('month') * 100 + get('day')) * 24 + get('hour')
+  } catch {
+    // Fallback to UTC hour-count if CRON_TIMEZONE is invalid
+    return Math.floor(Date.now() / 3_600_000)
+  }
+}
+
 /**
  * Generates a deterministic pseudo-random number in [0, 1) for a given seed.
  * Uses a MurmurHash3 finalizer to ensure avalanche: nearby seeds produce
@@ -13,7 +44,7 @@ const DEFAULT_FOREST_DENSITY_PCT = 50;
  * The hourSeed component adds time-based drift that changes hourly.
  */
 function seededRandom(seed: number): number {
-  const hourSeed = Math.floor(Date.now() / 3_600_000);
+  const hourSeed = getHourSeed();
   let h = (seed * 2654435761) ^ (hourSeed * 40503) ^ 0x9e3779b9;
   h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
   h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);

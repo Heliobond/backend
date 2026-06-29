@@ -4,7 +4,6 @@ import adminRouter from "../routes/admin";
 import * as registry from "../lib/registry";
 import * as iot from "../routes/iot";
 import * as scoring from "../lib/scoring";
-import { clearState } from "../lib/duplicate-detection";
 
 jest.mock("../lib/registry");
 jest.mock("../routes/iot");
@@ -21,7 +20,6 @@ describe("admin routes", () => {
     process.env.ADMIN_API_KEY = "test-key";
 
     jest.clearAllMocks();
-    clearState();
   });
 
   afterEach(() => {
