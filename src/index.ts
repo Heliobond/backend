@@ -60,6 +60,14 @@ const env = initEnv();
 const app = express();
 const PORT = env.PORT;
 
+// Timezone for all cron schedules. Defaults to UTC so behaviour is identical
+// across servers regardless of OS locale. Override with e.g. CRON_TIMEZONE=America/New_York.
+const CRON_TIMEZONE = process.env.CRON_TIMEZONE ?? 'UTC'
+
+// Fraction of projects that must fail before we escalate to a warning.
+// 100% failure is always recorded as an error regardless of this threshold.
+const CRON_FAILURE_THRESHOLD = parseFloat(process.env.CRON_FAILURE_THRESHOLD ?? '0.5')
+
 app.use(cors({ origin: env.FRONTEND_URL }));
 app.use(express.json());
 app.use(requestLogger);
@@ -155,7 +163,7 @@ cron.schedule("*/5 * * * *", async () => {
     }
     recordCronRun("indexer", "error");
   }
-});
+}, { timezone: CRON_TIMEZONE });
 
 // ── Cron: hourly score update ────────────────────────────────────────────────
 cron.schedule("0 * * * *", async () => {
@@ -163,6 +171,9 @@ cron.schedule("0 * * * *", async () => {
     console.log("[cron] running hourly score update");
     const total = await getTotalProjects();
     const projectIds = Array.from({ length: total }, (_, i) => i + 1);
+
+    let successCount = 0
+    let failureCount = 0
 
     for (const projectId of projectIds) {
       const { allowed, key, reason } = tryBeginUpdate(projectId);
@@ -208,26 +219,43 @@ cron.schedule("0 * * * *", async () => {
         }
         markCompleted(projectId);
         resetErrorRateLimit(`cron:project-${projectId}`);
+        successCount++
       } catch (err) {
         markFailed(projectId);
         if (!isErrorRateLimited(`cron:project-${projectId}`)) {
           console.error(`[cron] project ${projectId} failed:`, err);
         }
+        failureCount++
       }
-      recordCronRun("score-update", "success");
-      logger.info("[cron] hourly score update complete", { total });
-    } catch (err: any) {
-      logger.error("[cron] score update failed", { error: err?.message });
-      recordCronRun("score-update", "error");
     }
-    recordCronRun("score-update", "success");
-  } catch (err) {
+
+    const totalProcessed = successCount + failureCount
+    const failureRate = totalProcessed > 0 ? failureCount / totalProcessed : 0
+
+    if (totalProcessed > 0 && failureCount === totalProcessed) {
+      // All attempted projects failed — likely a systemic RPC or contract issue.
+      console.error(
+        `[cron] ALERT: ALL ${failureCount} projects failed in score-update batch — ` +
+        `check Soroban RPC connectivity and contract state`
+      )
+      recordCronRun("score-update", "error")
+    } else {
+      if (failureCount > 0 && failureRate >= CRON_FAILURE_THRESHOLD) {
+        console.error(
+          `[cron] WARN: high failure rate in score-update batch: ` +
+          `${failureCount}/${totalProcessed} (${(failureRate * 100).toFixed(1)}%)`
+        )
+      }
+      logger.info("[cron] hourly score update complete", { total, successCount, failureCount })
+      recordCronRun("score-update", "success")
+    }
+  } catch (err: any) {
     if (!isErrorRateLimited("cron:score-update")) {
-      console.error("[cron] score update failed:", err);
+      logger.error("[cron] score update failed", { error: err?.message });
     }
     recordCronRun("score-update", "error");
   }
-});
+}, { timezone: CRON_TIMEZONE });
 
 // ── Cron: retry queued transactions every 5 minutes ──────────────────────────
 cron.schedule("*/5 * * * *", async () => {
@@ -274,7 +302,7 @@ cron.schedule("*/5 * * * *", async () => {
   if (processed.length > 0) {
     console.log(`[cron] tx-queue: successfully retried ${processed.length} transactions`);
   }
-});
+}, { timezone: CRON_TIMEZONE });
 
 // ── Cron: alert on extended RPC outage (every 5 minutes) ────────────────────
 cron.schedule("*/5 * * * *", async () => {
@@ -287,7 +315,7 @@ cron.schedule("*/5 * * * *", async () => {
       `lastSuccessAgoMs=${status.lastSuccessAgoMs}`
     );
   }
-});
+}, { timezone: CRON_TIMEZONE });
 
 const server = app.listen(PORT, () => {
   logger.info(`Heliobond backend listening on port ${PORT}`);
