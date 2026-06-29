@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import cron from "node-cron";
 import dotenv from "dotenv";
+import { initEnv } from "./lib/env";
 import swaggerUi from "swagger-ui-express";
 import iotRouter from "./routes/iot";
 import adminRouter from "./routes/admin";
@@ -47,10 +48,12 @@ import { publicLimiter, adminLimiter } from "./middleware/rateLimit";
 import { versionHeaders, acceptVersion, deprecationHeaders } from "./middleware/versioning";
 
 dotenv.config();
-const app = express();
-const PORT = parseInt(process.env.PORT || "3001", 10);
+const env = initEnv();
 
-app.use(cors({ origin: process.env.FRONTEND_URL || "http://localhost:3000" }));
+const app = express();
+const PORT = env.PORT;
+
+app.use(cors({ origin: env.FRONTEND_URL }));
 app.use(express.json());
 app.use(requestLogger);
 
