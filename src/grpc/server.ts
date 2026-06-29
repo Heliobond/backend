@@ -1,11 +1,14 @@
 import * as grpc from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
 import path from "path";
+import { randomUUID } from "crypto";
 import { getSolarData, getSatelliteData } from "../routes/iot";
 import { computeScores } from "../lib/scoring";
 import { getTotalProjects } from "../lib/registry";
 import { validateApiKey, isRateLimited, incrementUsage } from "../lib/apiKeys";
 import { scoreEvents, SCORE_UPDATE_EVENT } from "../lib/events";
+import { runWithCorrelationId } from "../lib/correlation";
+import { logger } from "../lib/logger";
 
 const PROTO_PATH = path.join(__dirname, "../proto/heliobond.proto");
 
@@ -70,95 +73,103 @@ function getProjectDetails(id: number) {
   };
 }
 
+function extractCorrelationId(metadata: grpc.Metadata): string {
+  return (metadata.get("x-correlation-id")[0] as string | undefined) || randomUUID();
+}
+
 // Unary handler
 async function getProjectScore(call: grpc.ServerUnaryCall<any, any>, callback: grpc.sendUnaryData<any>) {
-  try {
-    const auth = authenticateGrpc(call.metadata);
-    if (!auth.success) {
-      return callback({
-        code: grpc.status.UNAUTHENTICATED,
-        details: auth.error,
-      });
-    }
+  const correlationId = extractCorrelationId(call.metadata);
+  await runWithCorrelationId(correlationId, async () => {
+    try {
+      const auth = authenticateGrpc(call.metadata);
+      if (!auth.success) {
+        return callback({ code: grpc.status.UNAUTHENTICATED, details: auth.error });
+      }
 
-    const { project_id } = call.request;
-    const total = await getTotalProjects();
-    if (project_id < 1 || project_id > total) {
-      return callback({
-        code: grpc.status.NOT_FOUND,
-        details: `Project with ID ${project_id} not found`,
-      });
-    }
+      const { project_id } = call.request;
+      const total = await getTotalProjects();
+      if (project_id < 1 || project_id > total) {
+        return callback({ code: grpc.status.NOT_FOUND, details: `Project with ID ${project_id} not found` });
+      }
 
-    const data = getProjectDetails(project_id);
-    callback(null, data);
-  } catch (error: any) {
-    callback({
-      code: grpc.status.INTERNAL,
-      details: error.message || "Internal server error",
-    });
-  }
+      logger.info("[gRPC] GetProjectScore", { project_id });
+      const data = getProjectDetails(project_id);
+      callback(null, data);
+    } catch (error: any) {
+      logger.error("[gRPC] GetProjectScore failed", { error: error.message });
+      callback({ code: grpc.status.INTERNAL, details: error.message || "Internal server error" });
+    }
+  });
 }
 
 // Server streaming handler (pushes real-time score updates)
 function streamProjectScores(call: grpc.ServerWritableStream<any, any>) {
-  const auth = authenticateGrpc(call.metadata);
-  if (!auth.success) {
-    const err = new Error(auth.error || "Authentication failed") as grpc.ServiceError;
-    err.code = grpc.status.UNAUTHENTICATED;
-    call.destroy(err);
-    return;
-  }
-
-  const listener = (update: any) => {
-    try {
-      const details = getProjectDetails(update.project_id);
-      call.write(details);
-    } catch (err) {
-      console.error("[gRPC Stream] failed to send project details:", err);
+  const correlationId = extractCorrelationId(call.metadata);
+  runWithCorrelationId(correlationId, () => {
+    const auth = authenticateGrpc(call.metadata);
+    if (!auth.success) {
+      const err = new Error(auth.error || "Authentication failed") as grpc.ServiceError;
+      err.code = grpc.status.UNAUTHENTICATED;
+      call.destroy(err);
+      return;
     }
-  };
 
-  scoreEvents.on(SCORE_UPDATE_EVENT, listener);
+    logger.info("[gRPC] StreamProjectScores started");
 
-  call.on("cancelled", () => {
-    scoreEvents.off(SCORE_UPDATE_EVENT, listener);
+    const listener = (update: any) => {
+      runWithCorrelationId(correlationId, () => {
+        try {
+          const details = getProjectDetails(update.project_id);
+          call.write(details);
+        } catch (err: any) {
+          logger.error("[gRPC] Stream write failed", { error: err?.message });
+        }
+      });
+    };
+
+    scoreEvents.on(SCORE_UPDATE_EVENT, listener);
+    call.on("cancelled", () => {
+      scoreEvents.off(SCORE_UPDATE_EVENT, listener);
+      logger.info("[gRPC] StreamProjectScores cancelled");
+    });
   });
 }
 
 // Bidirectional streaming handler
 function chatProjectScores(call: grpc.ServerDuplexStream<any, any>) {
-  const auth = authenticateGrpc(call.metadata);
-  if (!auth.success) {
-    const err = new Error(auth.error || "Authentication failed") as grpc.ServiceError;
-    err.code = grpc.status.UNAUTHENTICATED;
-    call.destroy(err);
-    return;
-  }
-
-  call.on("data", async (request) => {
-    try {
-      const { project_id } = request;
-      const total = await getTotalProjects();
-      if (project_id < 1 || project_id > total) {
-        call.write({
-          project_id,
-          timestamp: Date.now(),
-          credit_quality: 0,
-          green_impact: 0,
-        });
-        return;
-      }
-
-      const details = getProjectDetails(project_id);
-      call.write(details);
-    } catch (err: any) {
-      console.error("[gRPC Chat] data processing error:", err);
+  const correlationId = extractCorrelationId(call.metadata);
+  runWithCorrelationId(correlationId, () => {
+    const auth = authenticateGrpc(call.metadata);
+    if (!auth.success) {
+      const err = new Error(auth.error || "Authentication failed") as grpc.ServiceError;
+      err.code = grpc.status.UNAUTHENTICATED;
+      call.destroy(err);
+      return;
     }
-  });
 
-  call.on("end", () => {
-    call.end();
+    logger.info("[gRPC] ChatProjectScores started");
+
+    call.on("data", async (request) => {
+      await runWithCorrelationId(correlationId, async () => {
+        try {
+          const { project_id } = request;
+          const total = await getTotalProjects();
+          if (project_id < 1 || project_id > total) {
+            call.write({ project_id, timestamp: Date.now(), credit_quality: 0, green_impact: 0 });
+            return;
+          }
+          const details = getProjectDetails(project_id);
+          call.write(details);
+        } catch (err: any) {
+          logger.error("[gRPC] Chat data error", { error: err?.message });
+        }
+      });
+    });
+
+    call.on("end", () => {
+      call.end();
+    });
   });
 }
 
@@ -176,12 +187,12 @@ export function startGrpcServer(port = 50051): grpc.Server {
     ChatProjectScores: chatProjectScores,
   });
 
-  server.bindAsync(`0.0.0.0:${port}`, grpc.ServerCredentials.createInsecure(), (err, boundPort) => {
+  server.bindAsync(`0.0.0.0:${port}`, grpc.ServerCredentials.createInsecure(), (err: Error | null, boundPort: number) => {
     if (err) {
-      console.error(`[gRPC] Failed to bind to port ${port}:`, err);
+      logger.error(`[gRPC] Failed to bind to port ${port}`, { error: err.message });
       return;
     }
-    console.log(`[gRPC] Server running on 0.0.0.0:${boundPort}`);
+    logger.info(`[gRPC] Server running on 0.0.0.0:${boundPort}`);
   });
 
   return server;
