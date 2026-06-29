@@ -5,6 +5,8 @@ import { updateImpactScore, getTotalProjects } from "../lib/registry";
 import { ApiError, badRequest, parseOptionalInt } from "../middleware/errors";
 import { recordAudit, getAuditLog, auditToCsv } from "../lib/audit";
 import { broadcastScoreUpdate } from "../lib/websocket";
+import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
+import { RpcDegradedError } from "../lib/registry";
 
 const router = Router();
 
@@ -38,7 +40,7 @@ function parseProjectIds(body: unknown): number[] | null {
 
 // POST /api/admin/update-scores
 // Body: { project_ids?: number[] }  — defaults to all projects
-// Returns: { updated: number, results: [...], errors: [...] }
+// Returns: { updated: number, results: [...], errors: [...], skipped: [...] }
 //
 // All errors — including validation (400) and unexpected failures (500) — are
 // forwarded to the central errorHandler via next() so status codes stay consistent
@@ -64,18 +66,37 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
       green_impact: number;
     }> = [];
     const errors: Array<{ project_id: number; error: string }> = [];
+    const skipped: Array<{ project_id: number; reason: string }> = [];
 
     // Soroban does not support multi-call batching — submit sequentially.
     // Each project is individually isolated: a failure on one does not abort
-    // the rest. Accumulated errors are returned in the response body alongside
-    // the successes so callers can retry only the affected ids.
+    // the rest. Accumulated errors are returned alongside successes so callers
+    // can retry only the affected ids.
     for (const projectId of projectIds) {
+      const { allowed, key, reason } = tryBeginUpdate(projectId);
+      if (!allowed) {
+        skipped.push({ project_id: projectId, reason: reason! });
+        console.log(`[oracle] skipping project ${projectId}: ${reason}`);
+        continue;
+      }
       try {
         const solar = getSolarData(projectId);
         const satellite = getSatelliteData(projectId);
         const scores = computeScores({ solar, satellite });
-        const tx_hash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact);
+        let tx_hash: string;
+        try {
+          tx_hash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact);
+        } catch (updateErr) {
+          if (updateErr instanceof RpcDegradedError) {
+            console.warn(`[oracle] project ${projectId}: RPC degraded, score queued for later`);
+            results.push({ project_id: projectId, tx_hash: "deferred", ...scores });
+            markCompleted(projectId);
+            continue;
+          }
+          throw updateErr;
+        }
         results.push({ project_id: projectId, tx_hash, ...scores });
+        markCompleted(projectId);
         recordAudit({
           project_id: projectId,
           credit_quality: scores.credit_quality,
@@ -91,19 +112,16 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
         });
         console.log(`[oracle] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`);
       } catch (err) {
-        // Log full error context so it is visible in server logs even though
-        // we keep the batch running. Callers receive the stringified reason in
-        // the errors array so they can diagnose without tailing logs.
+        markFailed(projectId);
         console.error(`[oracle] project ${projectId} failed:`, err);
         errors.push({ project_id: projectId, error: String(err) });
       }
     }
 
-    res.json({ updated: results.length, results, errors });
+    res.json({ updated: results.length, results, errors, skipped });
   } catch (error) {
     // Forward to errorHandler: ApiError → its .status (e.g. 400 for bad input),
-    // SyntaxError → 400, anything else → 500. Avoids silently swallowing errors
-    // or hard-coding 500 for cases that are actually the caller's fault.
+    // SyntaxError → 400, anything else → 500.
     next(error);
   }
 });
