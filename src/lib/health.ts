@@ -1,7 +1,5 @@
-/**
- * Lightweight process/health state. Tracks server start time and the most
- * recent cron execution so `/health` can report basic operational visibility.
- */
+import { rpcPool } from "./stellar";
+import type { PoolMetrics } from "./db-pool";
 
 const startedAt = Date.now();
 
@@ -15,7 +13,6 @@ export interface CronRun {
 
 let lastCronRun: CronRun | null = null;
 
-/** Record the outcome of a cron tick. Called by the schedulers in index.ts. */
 export function recordCronRun(name: string, status: CronStatus): void {
   lastCronRun = { name, status, at: new Date().toISOString() };
 }
@@ -25,6 +22,7 @@ export interface HealthReport {
   uptime_seconds: number;
   started_at: string;
   last_cron_run: CronRun | null;
+  db_pool: PoolMetrics;
 }
 
 export function getHealth(): HealthReport {
@@ -33,5 +31,6 @@ export function getHealth(): HealthReport {
     uptime_seconds: Math.floor((Date.now() - startedAt) / 1000),
     started_at: new Date(startedAt).toISOString(),
     last_cron_run: lastCronRun,
+    db_pool: rpcPool.getMetrics(),
   };
 }
