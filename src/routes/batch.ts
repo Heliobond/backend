@@ -8,6 +8,7 @@ import { updateImpactScore, getTotalProjects } from "../lib/registry";
 import { badRequest } from "../middleware/errors";
 import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
 import { RpcDegradedError } from "../lib/registry";
+import { withProjectLock } from "../lib/request-queue";
 
 const router = Router();
 
@@ -46,34 +47,36 @@ router.post("/score-update", async (req: Request, res: Response) => {
 
   // Fire-and-forget — caller polls /status
   runJob(job, async (projectId) => {
-    const { allowed, key, reason } = tryBeginUpdate(projectId);
-    if (!allowed) {
-      return { project_id: projectId, skipped: true, skip_reason: reason };
-    }
-    try {
-      const solar = getSolarData(projectId);
-      const satellite = getSatelliteData(projectId);
-      const scores = computeScores({ solar, satellite });
-      let tx_hash: string;
-      try {
-        tx_hash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact);
-      } catch (updateErr) {
-        if (updateErr instanceof RpcDegradedError) {
-          recordScoreHistory(projectId, scores.credit_quality, scores.green_impact);
-          triggerWebhooks({ project_id: projectId, ...scores, tx_hash: "deferred", timestamp: Date.now() });
-          markCompleted(projectId);
-          return { project_id: projectId, tx_hash: "deferred", ...scores };
-        }
-        throw updateErr;
+    return withProjectLock(projectId, async () => {
+      const { allowed, key, reason } = tryBeginUpdate(projectId);
+      if (!allowed) {
+        return { project_id: projectId, skipped: true, skip_reason: reason };
       }
-      recordScoreHistory(projectId, scores.credit_quality, scores.green_impact);
-      triggerWebhooks({ project_id: projectId, ...scores, tx_hash, timestamp: Date.now() });
-      markCompleted(projectId);
-      return { project_id: projectId, tx_hash, ...scores };
-    } catch (err) {
-      markFailed(projectId);
-      return { project_id: projectId, error: String(err) };
-    }
+      try {
+        const solar = getSolarData(projectId);
+        const satellite = getSatelliteData(projectId);
+        const scores = computeScores({ solar, satellite });
+        let tx_hash: string;
+        try {
+          tx_hash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact);
+        } catch (updateErr) {
+          if (updateErr instanceof RpcDegradedError) {
+            recordScoreHistory(projectId, scores.credit_quality, scores.green_impact);
+            triggerWebhooks({ project_id: projectId, ...scores, tx_hash: "deferred", timestamp: Date.now() });
+            markCompleted(projectId);
+            return { project_id: projectId, tx_hash: "deferred", ...scores };
+          }
+          throw updateErr;
+        }
+        recordScoreHistory(projectId, scores.credit_quality, scores.green_impact);
+        triggerWebhooks({ project_id: projectId, ...scores, tx_hash, timestamp: Date.now() });
+        markCompleted(projectId);
+        return { project_id: projectId, tx_hash, ...scores };
+      } catch (err) {
+        markFailed(projectId);
+        return { project_id: projectId, error: String(err) };
+      }
+    });
   }).catch(() => {
     job.status = "failed";
     job.completed_at = new Date().toISOString();

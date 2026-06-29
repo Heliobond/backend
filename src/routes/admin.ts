@@ -7,6 +7,7 @@ import { recordAudit, getAuditLog, auditToCsv } from "../lib/audit";
 import { broadcastScoreUpdate } from "../lib/websocket";
 import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
 import { RpcDegradedError } from "../lib/registry";
+import { withProjectLock } from "../lib/request-queue";
 
 const router = Router();
 
@@ -66,46 +67,56 @@ router.post("/update-scores", async (req: Request, res: Response) => {
 
     // Soroban does not support multi-call batching — submit sequentially
     for (const projectId of projectIds) {
-      const { allowed, key, reason } = tryBeginUpdate(projectId);
-      if (!allowed) {
-        skipped.push({ project_id: projectId, reason: reason! });
-        console.log(`[oracle] skipping project ${projectId}: ${reason}`);
-        continue;
-      }
       try {
-        const solar = getSolarData(projectId);
-        const satellite = getSatelliteData(projectId);
-        const scores = computeScores({ solar, satellite });
-        let tx_hash: string;
-        try {
-          tx_hash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact);
-        } catch (updateErr) {
-          if (updateErr instanceof RpcDegradedError) {
-            console.warn(`[oracle] project ${projectId}: RPC degraded, score queued for later`);
-            results.push({ project_id: projectId, tx_hash: "deferred", ...scores });
-            markCompleted(projectId);
-            continue;
+        const result = await withProjectLock(projectId, async () => {
+          const { allowed, key, reason } = tryBeginUpdate(projectId);
+          if (!allowed) {
+            return { skipped: true, reason: reason! };
           }
-          throw updateErr;
+          try {
+            const solar = getSolarData(projectId);
+            const satellite = getSatelliteData(projectId);
+            const scores = computeScores({ solar, satellite });
+            let tx_hash: string;
+            try {
+              tx_hash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact);
+            } catch (updateErr) {
+              if (updateErr instanceof RpcDegradedError) {
+                console.warn(`[oracle] project ${projectId}: RPC degraded, score queued for later`);
+                markCompleted(projectId);
+                return { project_id: projectId, tx_hash: "deferred", ...scores };
+              }
+              throw updateErr;
+            }
+            markCompleted(projectId);
+            recordAudit({
+              project_id: projectId,
+              credit_quality: scores.credit_quality,
+              green_impact: scores.green_impact,
+              tx_hash,
+              triggered_by: "api",
+            });
+            broadcastScoreUpdate({
+              project_id: projectId,
+              credit_quality: scores.credit_quality,
+              green_impact: scores.green_impact,
+              timestamp: Date.now(),
+            });
+            console.log(`[oracle] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`);
+            return { project_id: projectId, tx_hash, ...scores };
+          } catch (err) {
+            markFailed(projectId);
+            throw err;
+          }
+        });
+
+        if (result.skipped) {
+          skipped.push({ project_id: projectId, reason: result.reason });
+          console.log(`[oracle] skipping project ${projectId}: ${result.reason}`);
+        } else {
+          results.push(result);
         }
-        results.push({ project_id: projectId, tx_hash, ...scores });
-        markCompleted(projectId);
-        recordAudit({
-          project_id: projectId,
-          credit_quality: scores.credit_quality,
-          green_impact: scores.green_impact,
-          tx_hash,
-          triggered_by: "api",
-        });
-        broadcastScoreUpdate({
-          project_id: projectId,
-          credit_quality: scores.credit_quality,
-          green_impact: scores.green_impact,
-          timestamp: Date.now(),
-        });
-        console.log(`[oracle] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`);
       } catch (err) {
-        markFailed(projectId);
         console.error(`[oracle] project ${projectId} failed:`, err);
         errors.push({ project_id: projectId, error: String(err) });
       }
