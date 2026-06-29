@@ -49,6 +49,7 @@ export function parseOptionalInt(
 ): number {
   if (raw === undefined) return fallback;
   const value = Array.isArray(raw) ? raw[0] : raw;
+  if (value === undefined) return fallback;
   if (!/^\d+$/.test(value)) {
     throw badRequest(`${field} must be a non-negative integer`);
   }

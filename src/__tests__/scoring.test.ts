@@ -37,4 +37,84 @@ describe("computeScores", () => {
     expect(scores.green_impact).toBe(70);
     expect(scores.credit_quality).toBe(80);
   });
+
+  // ── Edge cases ─────────────────────────────────────────────────────────
+
+  it("negative efficiency clamped to 0", () => {
+    const scores = computeScores({
+      solar: { efficiency_pct: -50, power_output_kw: 100, max_power_kw: 1000 },
+      satellite: { forest_density_pct: 50, ndvi_score: 0.5 },
+    });
+    expect(scores.credit_quality).toBe(0);
+  });
+
+  it("negative forest_density clamped to 0", () => {
+    const scores = computeScores({
+      solar: { efficiency_pct: 50, power_output_kw: 500, max_power_kw: 1000 },
+      satellite: { forest_density_pct: -30, ndvi_score: 0.5 },
+    });
+    expect(scores.green_impact).toBe(25); // (500/1000)*50 + (0/100)*50 = 25
+  });
+
+  it("efficiency > 100 clamped to 100", () => {
+    const scores = computeScores({
+      solar: { efficiency_pct: 999, power_output_kw: 500, max_power_kw: 1000 },
+      satellite: { forest_density_pct: 50, ndvi_score: 0.5 },
+    });
+    expect(scores.credit_quality).toBe(100);
+  });
+
+  it("forest_density > 100 clamped to 100", () => {
+    const scores = computeScores({
+      solar: { efficiency_pct: 50, power_output_kw: 500, max_power_kw: 1000 },
+      satellite: { forest_density_pct: 200, ndvi_score: 2.0 },
+    });
+    expect(scores.green_impact).toBe(75); // (500/1000)*50 + (100/100)*50 = 75
+  });
+
+  it("power_output > max_power produces > 50 green_impact component", () => {
+    const scores = computeScores({
+      solar: { efficiency_pct: 50, power_output_kw: 1500, max_power_kw: 1000 },
+      satellite: { forest_density_pct: 0, ndvi_score: 0 },
+    });
+    // (1500/1000)*50 + 0 = 75, clamped to 100
+    expect(scores.green_impact).toBe(75);
+  });
+
+  it("very large numbers do not overflow", () => {
+    const scores = computeScores({
+      solar: { efficiency_pct: 1e15, power_output_kw: 1e15, max_power_kw: 1 },
+      satellite: { forest_density_pct: 1e15, ndvi_score: 1e15 },
+    });
+    expect(scores.credit_quality).toBe(100);
+    expect(scores.green_impact).toBe(100);
+  });
+
+  it("zero max_power safely defaults to 0 ratio", () => {
+    const scores = computeScores({
+      solar: { efficiency_pct: 50, power_output_kw: 100, max_power_kw: 0 },
+      satellite: { forest_density_pct: 50, ndvi_score: 0.5 },
+    });
+    // Division by zero avoided: ratio defaults to 0, forest component = 25
+    expect(scores.green_impact).toBe(25);
+  });
+
+  it("NaN inputs handled gracefully with defaults", () => {
+    const scores = computeScores({
+      solar: { efficiency_pct: NaN, power_output_kw: 100, max_power_kw: 1000 },
+      satellite: { forest_density_pct: 50, ndvi_score: 0.5 },
+    });
+    // NaN replaced with 0, clamped to 0
+    expect(scores.credit_quality).toBe(0);
+  });
+
+  it("mid-range values round correctly", () => {
+    // (333/1000)*50 + (33/100)*50 = 16.65 + 16.5 = 33.15 → rounds to 33
+    const scores = computeScores({
+      solar: { efficiency_pct: 33.6, power_output_kw: 333, max_power_kw: 1000 },
+      satellite: { forest_density_pct: 33, ndvi_score: 0.33 },
+    });
+    expect(scores.credit_quality).toBe(34);
+    expect(scores.green_impact).toBe(33);
+  });
 });

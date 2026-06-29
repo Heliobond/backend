@@ -22,10 +22,19 @@ export interface SourceHealth {
 
 const healthMap = new Map<string, SourceHealth>();
 
+/**
+ * Generates a deterministic pseudo-random number in [0, 1) for a given seed.
+ * Uses a MurmurHash3 finalizer to ensure avalanche: nearby seeds produce
+ * vastly different outputs, preventing seed collision for adjacent project IDs.
+ * The offset parameter shifts the hourSeed for secondary values (e.g., drift).
+ */
 function seededRandom(seed: number, offset = 0): number {
   const hourSeed = Math.floor(Date.now() / 3_600_000);
-  const x = Math.sin(seed * 9301 + (hourSeed + offset) * 49297 + 233) * 10000;
-  return x - Math.floor(x);
+  let h = (seed * 2654435761) ^ ((hourSeed + offset) * 40503) ^ 0x9e3779b9;
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  h = (h ^ (h >>> 16)) >>> 0;
+  return h / 0xffffffff;
 }
 
 function markHealthy(name: string): void {
