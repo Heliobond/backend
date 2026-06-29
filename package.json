@@ -13,7 +13,12 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
     "typecheck": "tsc --noEmit",
-    "prepare": "husky"
+    "prepare": "husky",
+    "load-test:smoke": "k6 run load-tests/scenarios/smoke.js",
+    "load-test:average": "k6 run load-tests/scenarios/average-load.js",
+    "load-test:stress": "k6 run load-tests/scenarios/stress.js",
+    "load-test:spike": "k6 run load-tests/scenarios/spike.js",
+    "load-test:graphql": "k6 run load-tests/scenarios/graphql.js"
   },
   "lint-staged": {
     "*.ts": [
