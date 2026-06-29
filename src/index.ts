@@ -32,8 +32,12 @@ import { graphqlSchema, graphqlRoot, createGraphQLContext } from "./graphql/sche
 import { startGrpcServer } from "./grpc/server";
 import { getSolarData, getSatelliteData } from "./routes/iot";
 import { computeScores } from "./lib/scoring";
-import { updateImpactScore, getTotalProjects } from "./lib/registry";
+import { updateImpactScore, getTotalProjects, RpcDegradedError } from "./lib/registry";
 import { recordScoreHistory, getHistory } from "./lib/history";
+import { tryBeginUpdate, markCompleted, markFailed } from "./lib/duplicate-detection";
+import { isErrorRateLimited, resetErrorRateLimit } from "./lib/error-limiter";
+import { isRpcOutageExtended, isRpcAvailable, getRpcStatus } from "./lib/stellar";
+import { enqueue, getQueueSize, dequeue, remove, incrementRetry, hasExceededMaxRetries } from "./lib/tx-queue";
 import { sendAlertIfSignificant } from "./lib/email";
 import { triggerWebhooks } from "./lib/webhooks";
 import { indexer } from "./lib/indexer";
@@ -129,7 +133,9 @@ cron.schedule("*/5 * * * *", async () => {
     await indexer.poll();
     recordCronRun("indexer", "success");
   } catch (err) {
-    console.error("[cron] indexer poll failed:", err);
+    if (!isErrorRateLimited("cron:indexer")) {
+      console.error("[cron] indexer poll failed:", err);
+    }
     recordCronRun("indexer", "error");
   }
 });
@@ -142,13 +148,28 @@ cron.schedule("0 * * * *", async () => {
     const projectIds = Array.from({ length: total }, (_, i) => i + 1);
 
     for (const projectId of projectIds) {
+      const { allowed, key, reason } = tryBeginUpdate(projectId);
+      if (!allowed) {
+        console.log(`[cron] skipping project ${projectId}: ${reason}`);
+        continue;
+      }
       try {
         const solar = getSolarData(projectId);
         const satellite = getSatelliteData(projectId);
         const scores = computeScores({ solar, satellite });
-        const tx_hash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact);
+        let tx_hash: string | undefined;
+        try {
+          tx_hash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact);
+        } catch (updateErr) {
+          if (updateErr instanceof RpcDegradedError) {
+            console.warn(`[cron] project ${projectId}: RPC degraded, score queued for later`);
+            enqueue(projectId, scores.credit_quality, scores.green_impact, "RPC degraded");
+          } else {
+            throw updateErr;
+          }
+        }
         recordScoreHistory(projectId, scores.credit_quality, scores.green_impact);
-        triggerWebhooks({ project_id: projectId, ...scores, tx_hash, timestamp: Date.now() });
+        triggerWebhooks({ project_id: projectId, ...scores, tx_hash: tx_hash ?? "deferred", timestamp: Date.now() });
 
         // Email alert when this update moved scores significantly (#22).
         const recent = getHistory(projectId).slice(-2);
@@ -161,17 +182,88 @@ cron.schedule("0 * * * *", async () => {
         }
         const timestamp = Date.now();
         recordScoreHistory(projectId, scores.credit_quality, scores.green_impact, timestamp);
-        triggerWebhooks({ project_id: projectId, ...scores, tx_hash, timestamp });
+        triggerWebhooks({ project_id: projectId, ...scores, tx_hash: tx_hash ?? "deferred", timestamp });
         broadcastScoreUpdate({ project_id: projectId, ...scores, timestamp });
-        console.log(`[cron] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`);
+        if (tx_hash) {
+          console.log(`[cron] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`);
+        } else {
+          console.log(`[cron] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} (queued)`);
+        }
+        markCompleted(projectId);
+        resetErrorRateLimit(`cron:project-${projectId}`);
       } catch (err) {
-        console.error(`[cron] project ${projectId} failed:`, err);
+        markFailed(projectId);
+        if (!isErrorRateLimited(`cron:project-${projectId}`)) {
+          console.error(`[cron] project ${projectId} failed:`, err);
+        }
       }
     }
     recordCronRun("score-update", "success");
   } catch (err) {
-    console.error("[cron] score update failed:", err);
+    if (!isErrorRateLimited("cron:score-update")) {
+      console.error("[cron] score update failed:", err);
+    }
     recordCronRun("score-update", "error");
+  }
+});
+
+// ── Cron: retry queued transactions every 5 minutes ──────────────────────────
+cron.schedule("*/5 * * * *", async () => {
+  if (getQueueSize() === 0) return;
+
+  if (!isRpcAvailable()) {
+    console.log(`[cron] tx-queue: RPC unavailable, ${getQueueSize()} transactions pending`);
+    return;
+  }
+
+  console.log(`[cron] tx-queue: processing ${getQueueSize()} queued transactions`);
+  const maxRetries = 10;
+  const processed: number[] = [];
+
+  while (getQueueSize() > 0) {
+    const item = dequeue();
+    if (!item) break;
+
+    try {
+      const solar = getSolarData(item.projectId);
+      const satellite = getSatelliteData(item.projectId);
+      const fresh = computeScores({ solar, satellite });
+
+      const tx_hash = await updateImpactScore(
+        item.projectId,
+        fresh.credit_quality,
+        fresh.green_impact,
+      );
+      processed.push(item.projectId);
+      console.log(`[cron] tx-queue: project ${item.projectId} retried successfully tx=${tx_hash}`);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      incrementRetry(item.projectId, errMsg);
+
+      if (hasExceededMaxRetries(item.projectId)) {
+        console.error(`[cron] tx-queue: project ${item.projectId} exceeded max retries (${maxRetries}), dropping`);
+        remove(item.projectId);
+      } else {
+        console.warn(`[cron] tx-queue: project ${item.projectId} retry failed (attempt ${item.retryCount + 1}), will retry`);
+      }
+    }
+  }
+
+  if (processed.length > 0) {
+    console.log(`[cron] tx-queue: successfully retried ${processed.length} transactions`);
+  }
+});
+
+// ── Cron: alert on extended RPC outage (every 5 minutes) ────────────────────
+cron.schedule("*/5 * * * *", async () => {
+  if (isRpcOutageExtended(300_000)) {
+    const status = getRpcStatus();
+    console.error(
+      `[alert] Stellar RPC outage detected: ` +
+      `consecutiveFailures=${status.consecutiveFailures}, ` +
+      `outageDurationMs=${status.outageDurationMs}, ` +
+      `lastSuccessAgoMs=${status.lastSuccessAgoMs}`
+    );
   }
 });
 
