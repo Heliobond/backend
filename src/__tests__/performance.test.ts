@@ -11,7 +11,7 @@ const SAMPLE_INPUT: IotInput = {
   satellite: { forest_density_pct: 72, ndvi_score: 0.65 },
 };
 
-const PRE_GENERATED_INPUTS = Array.from({ length: 10_000 }, () => ({
+const PRE_GENERATED_INPUTS: IotInput[] = Array.from({ length: 10_000 }, () => ({
   solar: {
     efficiency_pct: Math.random() * 100,
     power_output_kw: Math.random() * 10,
@@ -25,22 +25,24 @@ const PRE_GENERATED_INPUTS = Array.from({ length: 10_000 }, () => ({
 
 describe("performance benchmarks", () => {
   describe("score calculation speed", () => {
-    it("computeScores handles 10k iterations under 100ms", () => {
+    it("computeScores completes under 1ms per call", () => {
       const ms = measureMs(() => {
-        for (let i = 0; i < 10_000; i++) {
-          computeScores(PRE_GENERATED_INPUTS[i]);
+        for (let i = 0; i < 1000; i++) {
+          computeScores(SAMPLE_INPUT);
         }
       });
-      expect(ms).toBeLessThan(300);
+      expect(ms).toBeLessThan(1000);
     });
 
     it("computeScores handles 10k iterations under 100ms", () => {
+      for (let i = 0; i < 1_000; i++) computeScores(PRE_GENERATED_INPUTS[i]);
+
       const ms = measureMs(() => {
         for (let i = 0; i < 10_000; i++) {
           computeScores(PRE_GENERATED_INPUTS[i]);
         }
       });
-      expect(ms).toBeLessThan(150);
+      expect(ms).toBeLessThan(100);
     });
   });
 
@@ -52,7 +54,7 @@ describe("performance benchmarks", () => {
       }
       const after = process.memoryUsage().heapUsed;
       const growthMB = (after - before) / (1024 * 1024);
-      expect(growthMB).toBeLessThan(15);
+      expect(growthMB).toBeLessThan(10);
     });
   });
 
@@ -65,7 +67,7 @@ describe("performance benchmarks", () => {
         }
       });
       const opsPerSec = (iterations / ms) * 1000;
-      expect(opsPerSec).toBeGreaterThan(60_000);
+      expect(opsPerSec).toBeGreaterThan(100_000);
     });
   });
 });

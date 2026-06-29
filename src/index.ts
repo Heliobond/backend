@@ -31,14 +31,22 @@ import apiKeysRouter from "./routes/apiKeys";
 import { createHandler } from "graphql-http/lib/use/express";
 import { graphqlSchema, graphqlRoot, createGraphQLContext } from "./graphql/schema";
 import { startGrpcServer } from "./grpc/server";
-import { getSolarData, getSatelliteData } from "./routes/iot";
+import { getSolarData } from "./routes/iot";
+import { fetchSatelliteWithFallback } from "./lib/satellite-sources";
 import { computeScores } from "./lib/scoring";
 import { updateImpactScore, getTotalProjects, RpcDegradedError } from "./lib/registry";
 import { recordScoreHistory, getHistory } from "./lib/history";
 import { tryBeginUpdate, markCompleted, markFailed } from "./lib/duplicate-detection";
 import { isErrorRateLimited, resetErrorRateLimit } from "./lib/error-limiter";
 import { isRpcOutageExtended, isRpcAvailable, getRpcStatus } from "./lib/stellar";
-import { enqueue, getQueueSize, dequeue, remove, incrementRetry, hasExceededMaxRetries } from "./lib/tx-queue";
+import {
+  enqueue,
+  getQueueSize,
+  dequeue,
+  remove,
+  incrementRetry,
+  hasExceededMaxRetries,
+} from "./lib/tx-queue";
 import { sendAlertIfSignificant } from "./lib/email";
 import { triggerWebhooks } from "./lib/webhooks";
 import { indexer } from "./lib/indexer";
@@ -63,11 +71,11 @@ const PORT = env.PORT;
 
 // Timezone for all cron schedules. Defaults to UTC so behaviour is identical
 // across servers regardless of OS locale. Override with e.g. CRON_TIMEZONE=America/New_York.
-const CRON_TIMEZONE = process.env.CRON_TIMEZONE ?? 'UTC'
+const CRON_TIMEZONE = process.env.CRON_TIMEZONE ?? "UTC";
 
 // Fraction of projects that must fail before we escalate to a warning.
 // 100% failure is always recorded as an error regardless of this threshold.
-const CRON_FAILURE_THRESHOLD = parseFloat(process.env.CRON_FAILURE_THRESHOLD ?? '0.5')
+const CRON_FAILURE_THRESHOLD = parseFloat(process.env.CRON_FAILURE_THRESHOLD ?? "0.5");
 
 app.use(cors({ origin: env.FRONTEND_URL }));
 app.use(express.json());
@@ -153,172 +161,219 @@ app.use(notFoundHandler);
 app.use(errorHandler);
 
 // ── Cron: index contract events every 5 minutes ──────────────────────────────
-cron.schedule("*/5 * * * *", async () => {
-  try {
-    console.log("[cron] indexing new events");
-    await indexer.poll();
-    recordCronRun("indexer", "success");
-  } catch (err) {
-    if (!isErrorRateLimited("cron:indexer")) {
-      console.error("[cron] indexer poll failed:", err);
+cron.schedule(
+  "*/5 * * * *",
+  async () => {
+    try {
+      console.log("[cron] indexing new events");
+      await indexer.poll();
+      recordCronRun("indexer", "success");
+    } catch (err) {
+      if (!isErrorRateLimited("cron:indexer")) {
+        console.error("[cron] indexer poll failed:", err);
+      }
+      recordCronRun("indexer", "error");
     }
-    recordCronRun("indexer", "error");
-  }
-}, { timezone: CRON_TIMEZONE });
+  },
+  { timezone: CRON_TIMEZONE },
+);
 
 // ── Cron: hourly score update ────────────────────────────────────────────────
-cron.schedule("0 * * * *", async () => {
-  try {
-    console.log("[cron] running hourly score update");
-    const total = await getTotalProjects();
-    const projectIds = Array.from({ length: total }, (_, i) => i + 1);
+cron.schedule(
+  "0 * * * *",
+  async () => {
+    try {
+      console.log("[cron] running hourly score update");
+      const total = await getTotalProjects();
+      const projectIds = Array.from({ length: total }, (_, i) => i + 1);
 
-    let successCount = 0
-    let failureCount = 0
+      let successCount = 0;
+      let failureCount = 0;
 
-    for (const projectId of projectIds) {
-      await withProjectLock(projectId, async () => {
-        const { allowed, key, reason } = tryBeginUpdate(projectId);
-        if (!allowed) {
-          console.log(`[cron] skipping project ${projectId}: ${reason}`);
-          return;
-        }
-        try {
-          const solar = getSolarData(projectId);
-          const satellite = getSatelliteData(projectId);
-          const scores = computeScores({ solar, satellite });
-          let tx_hash: string | undefined;
+      for (const projectId of projectIds) {
+        await withProjectLock(projectId, async () => {
+          const { allowed, key, reason } = tryBeginUpdate(projectId);
+          if (!allowed) {
+            console.log(`[cron] skipping project ${projectId}: ${reason}`);
+            return;
+          }
           try {
-            tx_hash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact);
-          } catch (updateErr) {
-            if (updateErr instanceof RpcDegradedError) {
-              console.warn(`[cron] project ${projectId}: RPC degraded, score queued for later`);
-              enqueue(projectId, scores.credit_quality, scores.green_impact, "RPC degraded");
-            } else {
-              throw updateErr;
+            const solar = getSolarData(projectId);
+            const satellite = await fetchSatelliteWithFallback(projectId);
+            if (satellite.dataSource !== "live") {
+              logger.warn("[cron] satellite data degraded", {
+                projectId,
+                dataSource: satellite.dataSource,
+                source: satellite.source,
+              });
             }
-          }
-          recordScoreHistory(projectId, scores.credit_quality, scores.green_impact);
-          triggerWebhooks({ project_id: projectId, ...scores, tx_hash: tx_hash ?? "deferred", timestamp: Date.now() });
-
-          // Email alert when this update moved scores significantly (#22).
-          const recent = getHistory(projectId).slice(-2);
-          if (recent.length === 2) {
-            await sendAlertIfSignificant({
+            const scores = computeScores({ solar, satellite });
+            let tx_hash: string | undefined;
+            try {
+              tx_hash = await updateImpactScore(
+                projectId,
+                scores.credit_quality,
+                scores.green_impact,
+              );
+            } catch (updateErr) {
+              if (updateErr instanceof RpcDegradedError) {
+                console.warn(`[cron] project ${projectId}: RPC degraded, score queued for later`);
+                enqueue(projectId, scores.credit_quality, scores.green_impact, "RPC degraded");
+              } else {
+                throw updateErr;
+              }
+            }
+            recordScoreHistory(projectId, scores.credit_quality, scores.green_impact);
+            triggerWebhooks({
               project_id: projectId,
-              credit_quality_delta: recent[1].credit_quality - recent[0].credit_quality,
-              green_impact_delta: recent[1].green_impact - recent[0].green_impact,
+              ...scores,
+              tx_hash: tx_hash ?? "deferred",
+              timestamp: Date.now(),
             });
-          }
-          const timestamp = Date.now();
-          recordScoreHistory(projectId, scores.credit_quality, scores.green_impact, timestamp);
-          triggerWebhooks({ project_id: projectId, ...scores, tx_hash: tx_hash ?? "deferred", timestamp });
-          broadcastScoreUpdate({ project_id: projectId, ...scores, timestamp });
-          if (tx_hash) {
-            console.log(`[cron] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`);
-          } else {
-            console.log(`[cron] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} (queued)`);
-          }
-          markCompleted(projectId);
-          resetErrorRateLimit(`cron:project-${projectId}`);
-          successCount++
-        } catch (err) {
-          markFailed(projectId);
-          if (!isErrorRateLimited(`cron:project-${projectId}`)) {
-            console.error(`[cron] project ${projectId} failed:`, err);
-          }
-          failureCount++
-        }
-      });
-    }
 
-    const totalProcessed = successCount + failureCount
-    const failureRate = totalProcessed > 0 ? failureCount / totalProcessed : 0
-
-    if (totalProcessed > 0 && failureCount === totalProcessed) {
-      // All attempted projects failed — likely a systemic RPC or contract issue.
-      console.error(
-        `[cron] ALERT: ALL ${failureCount} projects failed in score-update batch — ` +
-        `check Soroban RPC connectivity and contract state`
-      )
-      recordCronRun("score-update", "error")
-    } else {
-      if (failureCount > 0 && failureRate >= CRON_FAILURE_THRESHOLD) {
-        console.error(
-          `[cron] WARN: high failure rate in score-update batch: ` +
-          `${failureCount}/${totalProcessed} (${(failureRate * 100).toFixed(1)}%)`
-        )
+            // Email alert when this update moved scores significantly (#22).
+            const recent = getHistory(projectId).slice(-2);
+            if (recent.length === 2) {
+              await sendAlertIfSignificant({
+                project_id: projectId,
+                credit_quality_delta: recent[1].credit_quality - recent[0].credit_quality,
+                green_impact_delta: recent[1].green_impact - recent[0].green_impact,
+              });
+            }
+            const timestamp = Date.now();
+            recordScoreHistory(projectId, scores.credit_quality, scores.green_impact, timestamp);
+            triggerWebhooks({
+              project_id: projectId,
+              ...scores,
+              tx_hash: tx_hash ?? "deferred",
+              timestamp,
+            });
+            broadcastScoreUpdate({ project_id: projectId, ...scores, timestamp });
+            if (tx_hash) {
+              console.log(
+                `[cron] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`,
+              );
+            } else {
+              console.log(
+                `[cron] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} (queued)`,
+              );
+            }
+            markCompleted(projectId);
+            resetErrorRateLimit(`cron:project-${projectId}`);
+            successCount++;
+          } catch (err) {
+            markFailed(projectId);
+            if (!isErrorRateLimited(`cron:project-${projectId}`)) {
+              console.error(`[cron] project ${projectId} failed:`, err);
+            }
+            failureCount++;
+          }
+        });
       }
-      logger.info("[cron] hourly score update complete", { total, successCount, failureCount })
-      recordCronRun("score-update", "success")
+
+      const totalProcessed = successCount + failureCount;
+      const failureRate = totalProcessed > 0 ? failureCount / totalProcessed : 0;
+
+      if (totalProcessed > 0 && failureCount === totalProcessed) {
+        // All attempted projects failed — likely a systemic RPC or contract issue.
+        console.error(
+          `[cron] ALERT: ALL ${failureCount} projects failed in score-update batch — ` +
+            `check Soroban RPC connectivity and contract state`,
+        );
+        recordCronRun("score-update", "error");
+      } else {
+        if (failureCount > 0 && failureRate >= CRON_FAILURE_THRESHOLD) {
+          console.error(
+            `[cron] WARN: high failure rate in score-update batch: ` +
+              `${failureCount}/${totalProcessed} (${(failureRate * 100).toFixed(1)}%)`,
+          );
+        }
+        logger.info("[cron] hourly score update complete", { total, successCount, failureCount });
+        recordCronRun("score-update", "success");
+      }
+    } catch (err: any) {
+      if (!isErrorRateLimited("cron:score-update")) {
+        logger.error("[cron] score update failed", { error: err?.message });
+      }
+      recordCronRun("score-update", "error");
     }
-  } catch (err: any) {
-    if (!isErrorRateLimited("cron:score-update")) {
-      logger.error("[cron] score update failed", { error: err?.message });
-    }
-    recordCronRun("score-update", "error");
-  }
-}, { timezone: CRON_TIMEZONE });
+  },
+  { timezone: CRON_TIMEZONE },
+);
 
 // ── Cron: retry queued transactions every 5 minutes ──────────────────────────
-cron.schedule("*/5 * * * *", async () => {
-  if (getQueueSize() === 0) return;
+cron.schedule(
+  "*/5 * * * *",
+  async () => {
+    if (getQueueSize() === 0) return;
 
-  if (!isRpcAvailable()) {
-    console.log(`[cron] tx-queue: RPC unavailable, ${getQueueSize()} transactions pending`);
-    return;
-  }
+    if (!isRpcAvailable()) {
+      console.log(`[cron] tx-queue: RPC unavailable, ${getQueueSize()} transactions pending`);
+      return;
+    }
 
-  console.log(`[cron] tx-queue: processing ${getQueueSize()} queued transactions`);
-  const maxRetries = 10;
-  const processed: number[] = [];
+    console.log(`[cron] tx-queue: processing ${getQueueSize()} queued transactions`);
+    const maxRetries = 10;
+    const processed: number[] = [];
 
-  while (getQueueSize() > 0) {
-    const item = dequeue();
-    if (!item) break;
+    while (getQueueSize() > 0) {
+      const item = dequeue();
+      if (!item) break;
 
-    try {
-      const solar = getSolarData(item.projectId);
-      const satellite = getSatelliteData(item.projectId);
-      const fresh = computeScores({ solar, satellite });
+      try {
+        const solar = getSolarData(item.projectId);
+        const satellite = await fetchSatelliteWithFallback(item.projectId);
+        const fresh = computeScores({ solar, satellite });
 
-      const tx_hash = await updateImpactScore(
-        item.projectId,
-        fresh.credit_quality,
-        fresh.green_impact,
-      );
-      processed.push(item.projectId);
-      console.log(`[cron] tx-queue: project ${item.projectId} retried successfully tx=${tx_hash}`);
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      incrementRetry(item.projectId, errMsg);
+        const tx_hash = await updateImpactScore(
+          item.projectId,
+          fresh.credit_quality,
+          fresh.green_impact,
+        );
+        processed.push(item.projectId);
+        console.log(
+          `[cron] tx-queue: project ${item.projectId} retried successfully tx=${tx_hash}`,
+        );
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        incrementRetry(item.projectId, errMsg);
 
-      if (hasExceededMaxRetries(item.projectId)) {
-        console.error(`[cron] tx-queue: project ${item.projectId} exceeded max retries (${maxRetries}), dropping`);
-        remove(item.projectId);
-      } else {
-        console.warn(`[cron] tx-queue: project ${item.projectId} retry failed (attempt ${item.retryCount + 1}), will retry`);
+        if (hasExceededMaxRetries(item.projectId)) {
+          console.error(
+            `[cron] tx-queue: project ${item.projectId} exceeded max retries (${maxRetries}), dropping`,
+          );
+          remove(item.projectId);
+        } else {
+          console.warn(
+            `[cron] tx-queue: project ${item.projectId} retry failed (attempt ${item.retryCount + 1}), will retry`,
+          );
+        }
       }
     }
-  }
 
-  if (processed.length > 0) {
-    console.log(`[cron] tx-queue: successfully retried ${processed.length} transactions`);
-  }
-}, { timezone: CRON_TIMEZONE });
+    if (processed.length > 0) {
+      console.log(`[cron] tx-queue: successfully retried ${processed.length} transactions`);
+    }
+  },
+  { timezone: CRON_TIMEZONE },
+);
 
 // ── Cron: alert on extended RPC outage (every 5 minutes) ────────────────────
-cron.schedule("*/5 * * * *", async () => {
-  if (isRpcOutageExtended(300_000)) {
-    const status = getRpcStatus();
-    console.error(
-      `[alert] Stellar RPC outage detected: ` +
-      `consecutiveFailures=${status.consecutiveFailures}, ` +
-      `outageDurationMs=${status.outageDurationMs}, ` +
-      `lastSuccessAgoMs=${status.lastSuccessAgoMs}`
-    );
-  }
-}, { timezone: CRON_TIMEZONE });
+cron.schedule(
+  "*/5 * * * *",
+  async () => {
+    if (isRpcOutageExtended(300_000)) {
+      const status = getRpcStatus();
+      console.error(
+        `[alert] Stellar RPC outage detected: ` +
+          `consecutiveFailures=${status.consecutiveFailures}, ` +
+          `outageDurationMs=${status.outageDurationMs}, ` +
+          `lastSuccessAgoMs=${status.lastSuccessAgoMs}`,
+      );
+    }
+  },
+  { timezone: CRON_TIMEZONE },
+);
 
 const server = app.listen(PORT, () => {
   logger.info(`Heliobond backend listening on port ${PORT}`);
@@ -334,7 +389,7 @@ app.all(
     schema: graphqlSchema,
     rootValue: graphqlRoot,
     context: (req: any) => createGraphQLContext(req.raw) as any,
-  })
+  }),
 );
 
 app.get("/graphql-playground", (req, res) => {
