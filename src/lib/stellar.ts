@@ -48,11 +48,17 @@ export async function signAndSubmit(
 
   let getResult: rpc.Api.GetTransactionResponse;
   let attempts = 0;
-  do {
-    await new Promise((r) => setTimeout(r, 1500));
-    getResult = await client.getTransaction(result.hash);
-    if (++attempts > 20) throw new Error("Transaction confirmation timeout");
-  } while (getResult.status === rpc.Api.GetTransactionStatus.NOT_FOUND);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    do {
+      await new Promise<void>((r) => { timer = setTimeout(r, 1500); });
+      timer = undefined;
+      getResult = await client.getTransaction(result.hash);
+      if (++attempts > 20) throw new Error("Transaction confirmation timeout");
+    } while (getResult.status === rpc.Api.GetTransactionStatus.NOT_FOUND);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 
   if (getResult.status === rpc.Api.GetTransactionStatus.FAILED)
     throw new Error("Transaction failed on-chain");
