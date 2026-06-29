@@ -50,6 +50,9 @@ import { requestLogger } from "./middleware/requestLogger";
 import { errorHandler, notFoundHandler } from "./middleware/errors";
 import { publicLimiter, adminLimiter } from "./middleware/rateLimit";
 import { versionHeaders, acceptVersion, deprecationHeaders } from "./middleware/versioning";
+import { runWithCorrelationId, generateCorrelationId } from "./lib/correlation";
+import { logger } from "./lib/logger";
+import { getTraces, getTraceSummary } from "./lib/tracer";
 
 dotenv.config();
 const env = initEnv();
@@ -63,6 +66,17 @@ app.use(requestLogger);
 
 // ── Liveness ────────────────────────────────────────────────────────────────
 app.get("/health", (_req, res) => res.json(getHealth()));
+
+// ── Trace export ─────────────────────────────────────────────────────────────
+app.get("/v1/traces", adminLimiter, (req, res) => {
+  const correlationId = req.query.correlation_id as string | undefined;
+  const limit = Math.min(parseInt((req.query.limit as string) || "100", 10), 500);
+  const since = req.query.since ? parseInt(req.query.since as string, 10) : undefined;
+  res.json({
+    summary: getTraceSummary(),
+    spans: getTraces({ correlationId, limit, since }),
+  });
+});
 
 // ── Swagger UI at /docs ─────────────────────────────────────────────────────
 app.use("/docs", swaggerUi.serve, swaggerUi.setup(openApiSpec));
@@ -200,6 +214,11 @@ cron.schedule("0 * * * *", async () => {
           console.error(`[cron] project ${projectId} failed:`, err);
         }
       }
+      recordCronRun("score-update", "success");
+      logger.info("[cron] hourly score update complete", { total });
+    } catch (err: any) {
+      logger.error("[cron] score update failed", { error: err?.message });
+      recordCronRun("score-update", "error");
     }
     recordCronRun("score-update", "success");
   } catch (err) {
@@ -271,7 +290,7 @@ cron.schedule("*/5 * * * *", async () => {
 });
 
 const server = app.listen(PORT, () => {
-  console.log(`Heliobond backend listening on port ${PORT}`);
+  logger.info(`Heliobond backend listening on port ${PORT}`);
 });
 
 // Real-time score updates over WebSocket (ws://<host>/ws)
@@ -318,13 +337,13 @@ startGrpcServer(50051);
 
 // Graceful shutdown: drain the connection pool before exiting
 async function gracefulShutdown(signal: string): Promise<void> {
-  console.log(`[${signal}] shutting down gracefully…`);
+  logger.info(`[${signal}] shutting down gracefully…`);
   server.close(async () => {
     try {
       await rpcPool.shutdown();
-      console.log("[shutdown] connection pool drained");
-    } catch (err) {
-      console.error("[shutdown] pool drain error:", err);
+      logger.info("[shutdown] connection pool drained");
+    } catch (err: any) {
+      logger.error("[shutdown] pool drain error", { error: err?.message });
     } finally {
       process.exit(0);
     }
