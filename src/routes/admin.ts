@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { getSolarData, getSatelliteData } from "./iot";
 import { computeScores } from "../lib/scoring";
 import { updateImpactScore, getTotalProjects } from "../lib/registry";
-import { badRequest, parseOptionalInt } from "../middleware/errors";
+import { ApiError, badRequest, parseOptionalInt } from "../middleware/errors";
 import { recordAudit, getAuditLog, auditToCsv } from "../lib/audit";
 import { broadcastScoreUpdate } from "../lib/websocket";
 import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
@@ -40,12 +40,16 @@ function parseProjectIds(body: unknown): number[] | null {
 
 // POST /api/admin/update-scores
 // Body: { project_ids?: number[] }  — defaults to all projects
-// Returns: { updated: number, results: [...], errors: [...] }
-router.post("/update-scores", async (req: Request, res: Response) => {
-  // Validation throws ApiError -> handled by the central error middleware as 400.
-  const requested = parseProjectIds(req.body);
-
+// Returns: { updated: number, results: [...], errors: [...], skipped: [...] }
+//
+// All errors — including validation (400) and unexpected failures (500) — are
+// forwarded to the central errorHandler via next() so status codes stay consistent
+// across all endpoints. The nested per-project catch is intentional: it collects
+// partial failures without aborting the entire batch.
+router.post("/update-scores", async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const requested = parseProjectIds(req.body);
+
     let projectIds: number[];
 
     if (requested) {
@@ -64,7 +68,10 @@ router.post("/update-scores", async (req: Request, res: Response) => {
     const errors: Array<{ project_id: number; error: string }> = [];
     const skipped: Array<{ project_id: number; reason: string }> = [];
 
-    // Soroban does not support multi-call batching — submit sequentially
+    // Soroban does not support multi-call batching — submit sequentially.
+    // Each project is individually isolated: a failure on one does not abort
+    // the rest. Accumulated errors are returned alongside successes so callers
+    // can retry only the affected ids.
     for (const projectId of projectIds) {
       const { allowed, key, reason } = tryBeginUpdate(projectId);
       if (!allowed) {
@@ -113,8 +120,9 @@ router.post("/update-scores", async (req: Request, res: Response) => {
 
     res.json({ updated: results.length, results, errors, skipped });
   } catch (error) {
-    console.error("[oracle] failed:", error);
-    res.status(500).json({ error: "internal_error", message: "Failed to update scores" });
+    // Forward to errorHandler: ApiError → its .status (e.g. 400 for bad input),
+    // SyntaxError → 400, anything else → 500.
+    next(error);
   }
 });
 

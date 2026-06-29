@@ -6,7 +6,6 @@ import { createDefaultFinancialInput, calculateNPV, calculatePaybackPeriod } fro
 import { updateImpactScore, getTotalProjects } from "../lib/registry";
 import { recordAudit } from "../lib/audit";
 import { validateApiKey, isRateLimited, incrementUsage } from "../lib/apiKeys";
-import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
 
 // 1. GraphQL SDL Schema
 export const graphqlSchema = buildSchema(`
@@ -242,26 +241,15 @@ export const graphqlRoot = {
       throw new Error("Unauthorized: Admin access required");
     }
     const projectId = parseInt(id, 10);
+    const tx_hash = await updateImpactScore(projectId, creditQuality, greenImpact);
 
-    const { allowed, reason } = tryBeginUpdate(projectId);
-    if (!allowed) {
-      throw new Error(`Duplicate update: ${reason}`);
-    }
-
-    try {
-      const tx_hash = await updateImpactScore(projectId, creditQuality, greenImpact);
-      markCompleted(projectId);
-      recordAudit({
-        project_id: projectId,
-        credit_quality: creditQuality,
-        green_impact: greenImpact,
-        tx_hash,
-        triggered_by: "graphql",
-      });
-    } catch (err) {
-      markFailed(projectId);
-      throw err;
-    }
+    recordAudit({
+      project_id: projectId,
+      credit_quality: creditQuality,
+      green_impact: greenImpact,
+      tx_hash,
+      triggered_by: "graphql",
+    });
 
     return new ProjectResolver(id);
   },

@@ -6,8 +6,6 @@ export interface BatchResult {
   credit_quality?: number;
   green_impact?: number;
   error?: string;
-  skipped?: boolean;
-  skip_reason?: string;
 }
 
 export interface BatchJob {
@@ -25,25 +23,7 @@ export interface BatchJob {
 
 const jobs = new Map<string, BatchJob>();
 
-const JOB_TTL_MS = 3_600_000;
-let lastCleanup = Date.now();
-
-function cleanupExpiredJobs(): void {
-  const now = Date.now();
-  if (now - lastCleanup < 60_000) return;
-  lastCleanup = now;
-  for (const [id, job] of jobs) {
-    if (job.completed_at) {
-      const age = now - new Date(job.completed_at).getTime();
-      if (age > JOB_TTL_MS) {
-        jobs.delete(id);
-      }
-    }
-  }
-}
-
 export function createJob(projectIds: number[], concurrency: number): BatchJob {
-  cleanupExpiredJobs();
   const job: BatchJob = {
     id: `batch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     status: "queued",
