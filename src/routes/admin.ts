@@ -5,6 +5,8 @@ import { updateImpactScore, getTotalProjects } from "../lib/registry";
 import { badRequest, parseOptionalInt } from "../middleware/errors";
 import { recordAudit, getAuditLog, auditToCsv } from "../lib/audit";
 import { broadcastScoreUpdate } from "../lib/websocket";
+import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
+import { RpcDegradedError } from "../lib/registry";
 
 const router = Router();
 
@@ -60,15 +62,34 @@ router.post("/update-scores", async (req: Request, res: Response) => {
       green_impact: number;
     }> = [];
     const errors: Array<{ project_id: number; error: string }> = [];
+    const skipped: Array<{ project_id: number; reason: string }> = [];
 
     // Soroban does not support multi-call batching — submit sequentially
     for (const projectId of projectIds) {
+      const { allowed, key, reason } = tryBeginUpdate(projectId);
+      if (!allowed) {
+        skipped.push({ project_id: projectId, reason: reason! });
+        console.log(`[oracle] skipping project ${projectId}: ${reason}`);
+        continue;
+      }
       try {
         const solar = getSolarData(projectId);
         const satellite = getSatelliteData(projectId);
         const scores = computeScores({ solar, satellite });
-        const tx_hash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact);
+        let tx_hash: string;
+        try {
+          tx_hash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact);
+        } catch (updateErr) {
+          if (updateErr instanceof RpcDegradedError) {
+            console.warn(`[oracle] project ${projectId}: RPC degraded, score queued for later`);
+            results.push({ project_id: projectId, tx_hash: "deferred", ...scores });
+            markCompleted(projectId);
+            continue;
+          }
+          throw updateErr;
+        }
         results.push({ project_id: projectId, tx_hash, ...scores });
+        markCompleted(projectId);
         recordAudit({
           project_id: projectId,
           credit_quality: scores.credit_quality,
@@ -84,12 +105,13 @@ router.post("/update-scores", async (req: Request, res: Response) => {
         });
         console.log(`[oracle] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`);
       } catch (err) {
+        markFailed(projectId);
         console.error(`[oracle] project ${projectId} failed:`, err);
         errors.push({ project_id: projectId, error: String(err) });
       }
     }
 
-    res.json({ updated: results.length, results, errors });
+    res.json({ updated: results.length, results, errors, skipped });
   } catch (error) {
     console.error("[oracle] failed:", error);
     res.status(500).json({ error: "internal_error", message: "Failed to update scores" });

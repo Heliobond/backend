@@ -5,6 +5,7 @@ import { errorHandler } from "../middleware/errors";
 import * as registry from "../lib/registry";
 import * as iot from "../routes/iot";
 import * as scoring from "../lib/scoring";
+import { clearState } from "../lib/duplicate-detection";
 
 // Factory mock avoids loading the real registry module, which throws at import
 // time when PROJECT_REGISTRY_CONTRACT_ID is unset (e.g. in CI).
@@ -29,6 +30,7 @@ describe("admin /update-scores input validation", () => {
   beforeEach(() => {
     app = buildApp();
     jest.clearAllMocks();
+    clearState();
     (iot.getSolarData as jest.Mock).mockReturnValue({
       efficiency_pct: 85,
       power_output_kw: 500,
