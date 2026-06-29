@@ -50,6 +50,14 @@ dotenv.config();
 const app = express();
 const PORT = parseInt(process.env.PORT || "3001", 10);
 
+// Timezone for all cron schedules. Defaults to UTC so behaviour is identical
+// across servers regardless of OS locale. Override with e.g. CRON_TIMEZONE=America/New_York.
+const CRON_TIMEZONE = process.env.CRON_TIMEZONE ?? 'UTC'
+
+// Fraction of projects that must fail before we escalate the batch run as an error.
+// At or above this threshold a warning is logged; 100% failure is always an error.
+const CRON_FAILURE_THRESHOLD = parseFloat(process.env.CRON_FAILURE_THRESHOLD ?? '0.5')
+
 app.use(cors({ origin: process.env.FRONTEND_URL || "http://localhost:3000" }));
 app.use(express.json());
 app.use(requestLogger);
@@ -132,7 +140,7 @@ cron.schedule("*/5 * * * *", async () => {
     console.error("[cron] indexer poll failed:", err);
     recordCronRun("indexer", "error");
   }
-});
+}, { timezone: CRON_TIMEZONE });
 
 // ── Cron: hourly score update ────────────────────────────────────────────────
 cron.schedule("0 * * * *", async () => {
@@ -140,6 +148,9 @@ cron.schedule("0 * * * *", async () => {
     console.log("[cron] running hourly score update");
     const total = await getTotalProjects();
     const projectIds = Array.from({ length: total }, (_, i) => i + 1);
+
+    let successCount = 0
+    let failureCount = 0
 
     for (const projectId of projectIds) {
       try {
@@ -164,16 +175,39 @@ cron.schedule("0 * * * *", async () => {
         triggerWebhooks({ project_id: projectId, ...scores, tx_hash, timestamp });
         broadcastScoreUpdate({ project_id: projectId, ...scores, timestamp });
         console.log(`[cron] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`);
+        successCount++
       } catch (err) {
         console.error(`[cron] project ${projectId} failed:`, err);
+        failureCount++
       }
     }
-    recordCronRun("score-update", "success");
+
+    const totalProcessed = successCount + failureCount
+    const failureRate = totalProcessed > 0 ? failureCount / totalProcessed : 0
+
+    if (totalProcessed > 0 && failureCount === totalProcessed) {
+      // All projects failed — likely a systemic issue (RPC outage, bad contract state).
+      // Record as an error so health checks and monitors can react.
+      console.error(
+        `[cron] ALERT: ALL ${failureCount} projects failed in score-update batch — ` +
+        `check Soroban RPC connectivity and contract state`
+      )
+      recordCronRun("score-update", "error")
+    } else {
+      if (failureCount > 0 && failureRate >= CRON_FAILURE_THRESHOLD) {
+        console.error(
+          `[cron] WARN: high failure rate in score-update batch: ` +
+          `${failureCount}/${totalProcessed} (${(failureRate * 100).toFixed(1)}%)`
+        )
+      }
+      console.log(`[cron] score-update complete: ${successCount} succeeded, ${failureCount} failed`)
+      recordCronRun("score-update", "success")
+    }
   } catch (err) {
     console.error("[cron] score update failed:", err);
     recordCronRun("score-update", "error");
   }
-});
+}, { timezone: CRON_TIMEZONE });
 
 const server = app.listen(PORT, () => {
   console.log(`Heliobond backend listening on port ${PORT}`);
