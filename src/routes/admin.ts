@@ -4,6 +4,7 @@ import { computeScores } from "../lib/scoring";
 import { updateImpactScore, getTotalProjects } from "../lib/registry";
 import { badRequest, parseOptionalInt } from "../middleware/errors";
 import { recordAudit, getAuditLog, auditToCsv } from "../lib/audit";
+import { broadcastScoreUpdate } from "../lib/websocket";
 
 const router = Router();
 
@@ -74,6 +75,12 @@ router.post("/update-scores", async (req: Request, res: Response) => {
           green_impact: scores.green_impact,
           tx_hash,
           triggered_by: "api",
+        });
+        broadcastScoreUpdate({
+          project_id: projectId,
+          credit_quality: scores.credit_quality,
+          green_impact: scores.green_impact,
+          timestamp: Date.now(),
         });
         console.log(`[oracle] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`);
       } catch (err) {

@@ -40,7 +40,7 @@ router.patch("/:name", (req: Request, res: Response) => {
     throw badRequest("priority must be a positive integer");
   }
 
-  const ok = configureSource(req.params.name, { enabled, priority });
+  const ok = configureSource(String(req.params.name), { enabled, priority });
   if (!ok) return res.status(404).json({ error: "source not found" });
 
   res.json({ ok: true, sources: getSources() });

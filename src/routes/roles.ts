@@ -29,7 +29,7 @@ router.get("/", requireAuth, requireRole("admin"), (_req: Request, res: Response
 
 /** DELETE /api/roles/:userId  — revoke a user's role (admin only) */
 router.delete("/:userId", requireAuth, requireRole("admin"), (req: Request, res: Response) => {
-  const removed = removeRole(req.params["userId"]);
+  const removed = removeRole(String(req.params["userId"]));
   if (!removed) {
     res.status(404).json({ error: "not_found", message: "User has no assigned role" });
     return;

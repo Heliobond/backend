@@ -25,6 +25,11 @@ import benchmarkingRouter from "./routes/benchmarking";
 import financialRouter from "./routes/financial";
 import forecastRouter from "./routes/forecast";
 import maintenanceRouter from "./routes/maintenance";
+import investorRouter from "./routes/investor";
+import apiKeysRouter from "./routes/apiKeys";
+import { createHandler } from "graphql-http/lib/use/express";
+import { graphqlSchema, graphqlRoot, createGraphQLContext } from "./graphql/schema";
+import { startGrpcServer } from "./grpc/server";
 import { getSolarData, getSatelliteData } from "./routes/iot";
 import { computeScores } from "./lib/scoring";
 import { updateImpactScore, getTotalProjects } from "./lib/registry";
@@ -83,6 +88,8 @@ v1.use("/benchmarking", publicLimiter, benchmarkingRouter);
 v1.use("/financial", publicLimiter, financialRouter);
 v1.use("/forecast", publicLimiter, forecastRouter);
 v1.use("/maintenance", publicLimiter, maintenanceRouter);
+v1.use("/investor", publicLimiter, investorRouter);
+v1.use("/admin/api-keys", adminLimiter, apiKeysRouter);
 
 app.use("/v1", v1);
 
@@ -107,6 +114,8 @@ app.use("/api/benchmarking", publicLimiter, benchmarkingRouter);
 app.use("/api/financial", publicLimiter, financialRouter);
 app.use("/api/forecast", publicLimiter, forecastRouter);
 app.use("/api/maintenance", publicLimiter, maintenanceRouter);
+app.use("/api/investor", publicLimiter, investorRouter);
+app.use("/api/admin/api-keys", adminLimiter, apiKeysRouter);
 
 // JSON 404 for anything unmatched, then the structured error handler.
 app.use(notFoundHandler);
@@ -171,5 +180,44 @@ const server = app.listen(PORT, () => {
 
 // Real-time score updates over WebSocket (ws://<host>/ws)
 attachWebSocketServer(server);
+
+// GraphQL endpoint and playground setup
+app.all(
+  "/graphql",
+  createHandler({
+    schema: graphqlSchema,
+    rootValue: graphqlRoot,
+    context: (req: any) => createGraphQLContext(req.raw) as any,
+  })
+);
+
+app.get("/graphql-playground", (req, res) => {
+  res.setHeader("Content-Type", "text/html");
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>GraphiQL</title>
+        <link href="https://unpkg.com/graphiql/graphiql.min.css" rel="stylesheet" />
+      </head>
+      <body style="margin: 0;">
+        <div id="graphiql" style="height: 100vh;"></div>
+        <script crossorigin src="https://unpkg.com/react/umd/react.production.min.js"></script>
+        <script crossorigin src="https://unpkg.com/react-dom/umd/react-dom.production.min.js"></script>
+        <script crossorigin src="https://unpkg.com/graphiql/graphiql.min.js"></script>
+        <script>
+          const fetcher = GraphiQL.createFetcher({ url: '/graphql' });
+          ReactDOM.render(
+            React.createElement(GraphiQL, { fetcher: fetcher }),
+            document.getElementById('graphiql'),
+          );
+        </script>
+      </body>
+    </html>
+  `);
+});
+
+// Start high-performance gRPC server
+startGrpcServer(50051);
 
 export default app;
