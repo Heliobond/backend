@@ -1,4 +1,5 @@
-import { rpcServer } from "./stellar";
+import { rpc } from "@stellar/stellar-sdk";
+import { withRpcConnection } from "./stellar";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -34,25 +35,24 @@ class EventIndexer {
     this.isIndexing = true;
 
     try {
-      const startLedger = this.store.cursor || 1;
-      const ledger = await rpcServer.getLatestLedger();
-      const endLedger = ledger.sequence;
+      await withRpcConnection(async (client) => {
+        const startLedger = this.store.cursor || 1;
+        const ledger = await client.getLatestLedger();
+        const endLedger = ledger.sequence;
 
-      if (endLedger <= startLedger) {
-        this.isIndexing = false;
-        return;
-      }
+        if (endLedger <= startLedger) return;
 
-      for (let seq = startLedger; seq <= endLedger; seq++) {
-        const ledgerTx = await rpcServer.getTransaction(seq.toString());
-        if (!ledgerTx || !("hash" in ledgerTx)) continue;
+        for (let seq = startLedger; seq <= endLedger; seq++) {
+          const ledgerTx = await client.getTransaction(seq.toString());
+          if (!ledgerTx || !("hash" in ledgerTx)) continue;
 
-        const txHash = "hash" in ledgerTx ? (ledgerTx as any).hash : "";
-        await this.processTransaction(txHash, seq);
-      }
+          const txHash = "hash" in ledgerTx ? (ledgerTx as any).hash : "";
+          await this.processTransaction(client, txHash, seq);
+        }
 
-      this.store.cursor = endLedger;
-      this.store.lastUpdated = Date.now();
+        this.store.cursor = endLedger;
+        this.store.lastUpdated = Date.now();
+      });
     } catch (err) {
       console.error("[indexer] poll failed:", err);
     } finally {
@@ -60,9 +60,9 @@ class EventIndexer {
     }
   }
 
-  private async processTransaction(txHash: string, ledger: number): Promise<void> {
+  private async processTransaction(client: rpc.Server, txHash: string, ledger: number): Promise<void> {
     try {
-      const tx = await rpcServer.getTransaction(txHash);
+      const tx = await client.getTransaction(txHash);
       if (!tx || !("returnValue" in tx)) return;
 
       const existing = this.store.events.find((e) => e.txHash === txHash);

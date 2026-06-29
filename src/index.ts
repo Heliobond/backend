@@ -39,6 +39,7 @@ import { triggerWebhooks } from "./lib/webhooks";
 import { indexer } from "./lib/indexer";
 import { getHealth, recordCronRun } from "./lib/health";
 import { attachWebSocketServer, broadcastScoreUpdate } from "./lib/websocket";
+import { rpcPool } from "./lib/stellar";
 import { openApiSpec } from "./lib/swagger";
 import { requestLogger } from "./middleware/requestLogger";
 import { errorHandler, notFoundHandler } from "./middleware/errors";
@@ -219,5 +220,23 @@ app.get("/graphql-playground", (req, res) => {
 
 // Start high-performance gRPC server
 startGrpcServer(50051);
+
+// Graceful shutdown: drain the connection pool before exiting
+async function gracefulShutdown(signal: string): Promise<void> {
+  console.log(`[${signal}] shutting down gracefully…`);
+  server.close(async () => {
+    try {
+      await rpcPool.shutdown();
+      console.log("[shutdown] connection pool drained");
+    } catch (err) {
+      console.error("[shutdown] pool drain error:", err);
+    } finally {
+      process.exit(0);
+    }
+  });
+}
+
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 
 export default app;
