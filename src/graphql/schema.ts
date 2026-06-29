@@ -1,13 +1,11 @@
 import { buildSchema } from "graphql";
 import DataLoader from "dataloader";
-import { randomUUID } from "crypto";
 import { getSolarData, getSatelliteData } from "../routes/iot";
 import { computeScores } from "../lib/scoring";
 import { createDefaultFinancialInput, calculateNPV, calculatePaybackPeriod } from "../lib/financial";
 import { updateImpactScore, getTotalProjects } from "../lib/registry";
 import { recordAudit } from "../lib/audit";
 import { validateApiKey, isRateLimited, incrementUsage } from "../lib/apiKeys";
-import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
 
 // 1. GraphQL SDL Schema
 export const graphqlSchema = buildSchema(`
@@ -63,7 +61,6 @@ export interface GraphQLContext {
   isAdmin: boolean;
   isConsumer: boolean;
   consumerName: string;
-  correlationId: string;
   loaders: {
     solarLoader: DataLoader<number, any>;
     satelliteLoader: DataLoader<number, any>;
@@ -72,7 +69,6 @@ export interface GraphQLContext {
 }
 
 export function createGraphQLContext(req: any): GraphQLContext {
-  const correlationId = (req.headers["x-correlation-id"] as string) || randomUUID();
   const authHeader = req.headers.authorization;
   const apiKeyHeader = req.headers["x-api-key"];
   let providedKey = "";
@@ -110,16 +106,15 @@ export function createGraphQLContext(req: any): GraphQLContext {
     return keys.map((id) => getSatelliteData(id));
   });
 
-  return runWithCorrelationId(correlationId, () => ({
+  return {
     isAdmin,
     isConsumer,
     consumerName,
-    correlationId,
     loaders: {
       solarLoader,
       satelliteLoader,
     },
-  }));
+  };
 }
 
 // 3. Resolvers using classes to bind fields dynamically
@@ -246,26 +241,15 @@ export const graphqlRoot = {
       throw new Error("Unauthorized: Admin access required");
     }
     const projectId = parseInt(id, 10);
+    const tx_hash = await updateImpactScore(projectId, creditQuality, greenImpact);
 
-    const { allowed, reason } = tryBeginUpdate(projectId);
-    if (!allowed) {
-      throw new Error(`Duplicate update: ${reason}`);
-    }
-
-    try {
-      const tx_hash = await updateImpactScore(projectId, creditQuality, greenImpact);
-      markCompleted(projectId);
-      recordAudit({
-        project_id: projectId,
-        credit_quality: creditQuality,
-        green_impact: greenImpact,
-        tx_hash,
-        triggered_by: "graphql",
-      });
-    } catch (err) {
-      markFailed(projectId);
-      throw err;
-    }
+    recordAudit({
+      project_id: projectId,
+      credit_quality: creditQuality,
+      green_impact: greenImpact,
+      tx_hash,
+      triggered_by: "graphql",
+    });
 
     return new ProjectResolver(id);
   },

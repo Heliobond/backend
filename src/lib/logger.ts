@@ -5,7 +5,7 @@ type LogLevel = "debug" | "info" | "warn" | "error";
 const LEVEL_RANK: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
 
 function configuredLevel(): LogLevel {
-  const raw = (process.env.LOG_LEVEL || "info").toLowerCase() as LogLevel;
+  const raw = (process.env['LOG_LEVEL'] || "info").toLowerCase() as LogLevel;
   return raw in LEVEL_RANK ? raw : "info";
 }
 

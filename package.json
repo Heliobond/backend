@@ -7,8 +7,19 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "jest",
+    "test:coverage": "jest --coverage",
     "lint": "eslint src/",
-    "lint:fix": "eslint src/ --fix"
+    "lint:fix": "eslint src/ --fix",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\"",
+    "typecheck": "tsc --noEmit",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.ts": [
+      "prettier --write",
+      "eslint --fix"
+    ]
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.14.4",
@@ -41,6 +52,10 @@
     "typescript": "^6.0.3",
     "eslint": "^9.0.0",
     "@eslint/js": "^9.0.0",
-    "typescript-eslint": "^8.0.0"
+    "typescript-eslint": "^8.0.0",
+    "prettier": "^3.8.3",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.4.3"
+   
   }
 }

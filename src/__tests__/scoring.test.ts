@@ -90,22 +90,22 @@ describe("computeScores", () => {
     expect(scores.green_impact).toBe(100);
   });
 
-  it("zero max_power produces Infinity then clamps", () => {
+  it("zero max_power safely defaults to 0 ratio", () => {
     const scores = computeScores({
       solar: { efficiency_pct: 50, power_output_kw: 100, max_power_kw: 0 },
       satellite: { forest_density_pct: 50, ndvi_score: 0.5 },
     });
-    // (100/0) = Infinity → Infinity*50 = Infinity, clamped to 100
-    expect(scores.green_impact).toBe(100);
+    // Division by zero avoided: ratio defaults to 0, forest component = 25
+    expect(scores.green_impact).toBe(25);
   });
 
-  it("NaN inputs propagate as NaN (caller responsibility)", () => {
+  it("NaN inputs handled gracefully with defaults", () => {
     const scores = computeScores({
       solar: { efficiency_pct: NaN, power_output_kw: 100, max_power_kw: 1000 },
       satellite: { forest_density_pct: 50, ndvi_score: 0.5 },
     });
-    // NaN comparisons return false, so clamp returns NaN
-    expect(scores.credit_quality).toBeNaN();
+    // NaN replaced with 0, clamped to 0
+    expect(scores.credit_quality).toBe(0);
   });
 
   it("mid-range values round correctly", () => {

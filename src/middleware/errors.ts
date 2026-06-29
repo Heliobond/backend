@@ -1,5 +1,4 @@
 import { Request, Response, NextFunction } from "express";
-import { getCorrelationId } from "../lib/correlation";
 
 /**
  * Structured API error. Thrown from anywhere in a route handler (sync or async)
@@ -50,6 +49,7 @@ export function parseOptionalInt(
 ): number {
   if (raw === undefined) return fallback;
   const value = Array.isArray(raw) ? raw[0] : raw;
+  if (value === undefined) return fallback;
   if (!/^\d+$/.test(value)) {
     throw badRequest(`${field} must be a non-negative integer`);
   }
@@ -76,19 +76,17 @@ export function errorHandler(
 ): void {
   if (res.headersSent) return;
 
-  const correlationId = getCorrelationId();
-
   if (err instanceof ApiError) {
-    res.status(err.status).json({ error: err.code, message: err.message, correlation_id: correlationId });
+    res.status(err.status).json({ error: err.code, message: err.message });
     return;
   }
 
   // Body parser raises a SyntaxError (with a `body` field) on malformed JSON.
   if (err instanceof SyntaxError && "body" in err) {
-    res.status(400).json({ error: "bad_request", message: "Request body is not valid JSON", correlation_id: correlationId });
+    res.status(400).json({ error: "bad_request", message: "Request body is not valid JSON" });
     return;
   }
 
   console.error("[error]", err);
-  res.status(500).json({ error: "internal_error", message: "An unexpected error occurred", correlation_id: correlationId });
+  res.status(500).json({ error: "internal_error", message: "An unexpected error occurred" });
 }
