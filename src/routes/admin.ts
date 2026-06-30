@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { getSolarData, getSatelliteData } from "./iot";
+import { getSolarData } from "./iot";
+import { fetchSatelliteWithFallback } from "../lib/satellite-sources";
 import { computeScores } from "../lib/scoring";
 import { updateImpactScore, getTotalProjects } from "../lib/registry";
 import { ApiError, badRequest, parseOptionalInt } from "../middleware/errors";
@@ -84,7 +85,12 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
           }
           try {
             const solar = getSolarData(projectId);
-            const satellite = getSatelliteData(projectId);
+            const satellite = await fetchSatelliteWithFallback(projectId);
+            if (satellite.dataSource !== "live") {
+              console.warn(
+                `[oracle] project ${projectId}: satellite data degraded (dataSource=${satellite.dataSource})`,
+              );
+            }
             const scores = computeScores({ solar, satellite });
             let tx_hash: string;
             try {
@@ -129,6 +135,13 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
           skipped.push({ project_id: projectId, reason: result.reason });
           console.log(`[oracle] skipping project ${projectId}: ${result.reason}`);
         } else {
+          const r = result as {
+            project_id: number;
+            tx_hash: string;
+            credit_quality: number;
+            green_impact: number;
+          };
+          results.push(r);
           results.push(result as any);
         }
       } catch (err) {

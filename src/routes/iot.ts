@@ -1,11 +1,15 @@
 import { Router, Request, Response } from "express";
 import { parseProjectId } from "../middleware/errors";
 import { logger } from "../lib/logger";
+import { fetchSatelliteWithFallback } from "../lib/satellite-sources";
 
 const MAX_POWER_KW = 1000;
 const DEFAULT_EFFICIENCY_PCT = 60;
 const DEFAULT_FOREST_DENSITY_PCT = 50;
 
+// Configurable timezone for seeded-random hour boundaries.
+// Defaults to UTC so results are identical across servers regardless of OS locale.
+// Set CRON_TIMEZONE=America/New_York to align hourly boundaries with a local clock.
 const CRON_TIMEZONE = process.env.CRON_TIMEZONE ?? "UTC";
 
 /**
@@ -23,6 +27,11 @@ function getHourSeed(): number {
       hour12: false,
       timeZone: CRON_TIMEZONE,
     });
+    const parts = formatter.formatToParts(now);
+    const get = (type: string) => parseInt(parts.find((p) => p.type === type)?.value ?? "0", 10);
+    return (get("year") * 10000 + get("month") * 100 + get("day")) * 24 + get("hour");
+  } catch {
+    // Fallback to UTC hour-count if CRON_TIMEZONE is invalid
 
     const parts = formatter.formatToParts(now);
     const get = (type: string): number => {
@@ -72,6 +81,15 @@ export function getSolarData(projectId: number) {
   const base = seededRandom(projectId);
   const drift = seededRandom(projectId * 7 + 1);
 
+  if (Number.isNaN(base) || Number.isNaN(drift)) {
+    logger.warn("getSolarData: seededRandom returned NaN, using fallback", {
+      projectId,
+      base,
+      drift,
+    });
+  }
+
+  const efficiency_pct = Math.min(98, Math.max(40, 40 + safeBase * 58 + safeDrift * 2 - 1));
   const efficiency_pct = Math.min(98, Math.max(40, 40 + base * 58 + drift * 2 - 1));
   const power_output_kw = (efficiency_pct / 100) * MAX_POWER_KW;
 
@@ -96,6 +114,15 @@ export function getSatelliteData(projectId: number) {
   const base = seededRandom(projectId * 3 + 5);
   const drift = seededRandom(projectId * 11 + 2);
 
+  if (Number.isNaN(base) || Number.isNaN(drift)) {
+    logger.warn("getSatelliteData: seededRandom returned NaN, using fallback", {
+      projectId,
+      base,
+      drift,
+    });
+  }
+
+  const forest_density_pct = Math.min(100, Math.max(0, 30 + safeBase * 65 + safeDrift * 5 - 2.5));
   const forest_density_pct = Math.min(100, Math.max(0, 30 + base * 65 + drift * 5 - 2.5));
   return {
     forest_density_pct: Math.round(forest_density_pct * 100) / 100,
@@ -116,6 +143,13 @@ router.get("/solar/:id", (req: Request, res: Response) => {
   }
 });
 
+router.get("/satellite/:id", async (req, res, next) => {
+  try {
+    const id = parseProjectId(req.params.id, "project id");
+    const data = await fetchSatelliteWithFallback(id);
+    res.json(data);
+  } catch (err) {
+    next(err);
 router.get("/satellite/:id", (req: Request, res: Response) => {
   try {
     const id = parseProjectId(req.params.id, "project id");
