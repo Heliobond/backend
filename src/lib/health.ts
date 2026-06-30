@@ -47,3 +47,23 @@ export function getHealth(): HealthReport {
     },
   };
 }
+
+export interface ReadinessReport {
+  status: "ready" | "not_ready";
+  checks: Record<string, boolean>;
+}
+
+export function getReadiness(): ReadinessReport {
+  const dbMetrics = rpcPool.getMetrics();
+  const dbReady = dbMetrics.active >= 0;
+  const outage = getOutageState();
+  const satelliteReady = outage.consecutiveFailures < 3;
+
+  return {
+    status: dbReady && satelliteReady ? "ready" : "not_ready",
+    checks: {
+      database: dbReady,
+      satellite: satelliteReady,
+    },
+  };
+}
