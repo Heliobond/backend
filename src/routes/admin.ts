@@ -142,6 +142,7 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
             green_impact: number;
           };
           results.push(r);
+          results.push(result as any);
         }
       } catch (err) {
         console.error(`[oracle] project ${projectId} failed:`, err);

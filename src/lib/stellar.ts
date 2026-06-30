@@ -31,6 +31,7 @@ export function getAdminKeypair(): Keypair {
 let submissionQueue = Promise.resolve();
 // Track the latest local sequence number sequence to prevent simultaneous thread collisions
 let localSequenceTracker: bigint | null = null;
+let submissionQueue = Promise.resolve();
 
 export async function signAndSubmit(
   client: rpc.Server,
