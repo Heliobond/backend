@@ -207,9 +207,10 @@ app.use(notFoundHandler);
 app.use(errorHandler);
 
 // ── Cron: index contract events every 5 minutes ──────────────────────────────
-cron.schedule(
+scheduleCron(
   "*/5 * * * *",
   async () => {
+    if (isShuttingDown) return;
     try {
       console.log("[cron] indexing new events");
       await indexer.poll();
@@ -225,9 +226,10 @@ cron.schedule(
 );
 
 // ── Cron: hourly score update ────────────────────────────────────────────────
-cron.schedule(
+scheduleCron(
   "0 * * * *",
   async () => {
+    if (isShuttingDown) return;
     try {
       console.log("[cron] running hourly score update");
       const total = await getTotalProjects();
@@ -348,9 +350,10 @@ cron.schedule(
 );
 
 // ── Cron: retry queued transactions every 5 minutes ──────────────────────────
-cron.schedule(
+scheduleCron(
   "*/5 * * * *",
   async () => {
+    if (isShuttingDown) return;
     if (getQueueSize() === 0) return;
 
     if (!isRpcAvailable()) {
@@ -405,9 +408,10 @@ cron.schedule(
 );
 
 // ── Cron: alert on extended RPC outage (every 5 minutes) ────────────────────
-cron.schedule(
+scheduleCron(
   "*/5 * * * *",
   async () => {
+    if (isShuttingDown) return;
     if (isRpcOutageExtended(300_000)) {
       const status = getRpcStatus();
       console.error(
@@ -422,9 +426,10 @@ cron.schedule(
 );
 
 // ── Cron: check API key rotations every hour ────────────────────────────────
-cron.schedule(
+scheduleCron(
   "0 * * * *",
   () => {
+    if (isShuttingDown) return;
     try {
       const rotated = checkScheduledRotations();
       if (rotated.length > 0) {
@@ -489,23 +494,46 @@ app.get("/graphql-playground", (req, res) => {
 // Start high-performance gRPC server
 startGrpcServer(50051);
 
-// Start secrets rotation if enabled
-startSecretRotation();
+// ── Graceful shutdown (#57) ──────────────────────────────────────────────────
+// Track all scheduled cron tasks so we can stop them cleanly.
+const cronTasks: cron.ScheduledTask[] = [];
 
-// Graceful shutdown: drain the connection pool before exiting
+function scheduleCron(expression: string, fn: () => void | Promise<void>, opts?: { timezone?: string }): void {
+  const task = cron.schedule(expression, fn, opts);
+  cronTasks.push(task);
+}
+
+let isShuttingDown = false;
+
 async function gracefulShutdown(signal: string): Promise<void> {
-  logger.info(`[${signal}] shutting down gracefully…`);
-  stopSecretRotation();
-  server.close(async () => {
-    try {
-      await rpcPool.shutdown();
-      logger.info("[shutdown] connection pool drained");
-    } catch (err: any) {
-      logger.error("[shutdown] pool drain error", { error: err?.message });
-    } finally {
-      process.exit(0);
-    }
-  });
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
+  logger.info(`[${signal}] graceful shutdown initiated`);
+
+  // 1. Stop accepting new HTTP requests
+  logger.info("[shutdown] closing HTTP server (draining in-flight requests)…");
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  logger.info("[shutdown] HTTP server closed");
+
+  // 2. Stop all cron jobs so no new work starts
+  logger.info(`[shutdown] stopping ${cronTasks.length} cron jobs…`);
+  for (const task of cronTasks) {
+    task.stop();
+  }
+  logger.info("[shutdown] cron jobs stopped");
+
+  // 3. Drain the RPC connection pool (waits up to 10 s for active connections)
+  logger.info("[shutdown] draining RPC connection pool…");
+  try {
+    await rpcPool.shutdown();
+    logger.info("[shutdown] connection pool drained");
+  } catch (err: any) {
+    logger.error("[shutdown] pool drain error", { error: err?.message });
+  }
+
+  logger.info("[shutdown] clean exit");
+  process.exit(0);
 }
 
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
