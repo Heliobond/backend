@@ -57,7 +57,7 @@ import { openApiSpec } from "./lib/swagger";
 import { requestLogger } from "./middleware/requestLogger";
 import { errorHandler, notFoundHandler } from "./middleware/errors";
 import { sanitizeInputs } from "./middleware/sanitize";
-import { securityHeaders } from "./middleware/securityHeaders";
+import { securityHeaders, permissionsHeaders } from "./middleware/securityHeaders";
 import { publicLimiter, adminLimiter } from "./middleware/rateLimit";
 import { versionHeaders, acceptVersion, deprecationHeaders } from "./middleware/versioning";
 import { runWithCorrelationId, generateCorrelationId } from "./lib/correlation";
@@ -68,6 +68,9 @@ import { checkScheduledRotations } from "./lib/apiKeys";
 import { ipWhitelist } from "./middleware/ipWhitelist";
 import { requestSigning } from "./middleware/requestSigning";
 import { initApm } from "./lib/apm";
+import { csrfProtection, setCsrfCookie } from "./middleware/csrf";
+import { startSecretRotation, stopSecretRotation, getSecretsStatus } from "./lib/secrets";
+import { setLogLevel, getLogLevel } from "./lib/logger";
 
 dotenv.config();
 const env = initEnv();
@@ -87,9 +90,11 @@ const CRON_TIMEZONE = process.env.CRON_TIMEZONE ?? "UTC";
 const CRON_FAILURE_THRESHOLD = parseFloat(process.env.CRON_FAILURE_THRESHOLD ?? "0.5");
 
 app.use(securityHeaders);
+app.use(permissionsHeaders);
 app.use(cors({ origin: env.FRONTEND_URL }));
 app.use(express.json());
 app.use(sanitizeInputs);
+app.use(csrfProtection);
 app.use(requestLogger);
 
 // ── Liveness ────────────────────────────────────────────────────────────────
@@ -116,6 +121,30 @@ app.get("/v1/traces", adminLimiter, (req, res) => {
 app.use("/docs", swaggerUi.serve, swaggerUi.setup(openApiSpec));
 // Raw OpenAPI spec for tooling
 app.get("/docs.json", (_req, res) => res.json(openApiSpec));
+
+// ── Secrets status endpoint ─────────────────────────────────────────────────
+app.get("/v1/admin/secrets/status", ipWhitelist, adminLimiter, (_req, res) => {
+  res.json(getSecretsStatus());
+});
+
+// ── Log level management ───────────────────────────────────────────────────
+app.get("/v1/admin/logging/level", ipWhitelist, adminLimiter, (_req, res) => {
+  res.json({ level: getLogLevel() });
+});
+
+app.put("/v1/admin/logging/level", ipWhitelist, adminLimiter, (req, res) => {
+  const { level } = req.body as { level?: string };
+  if (!level) {
+    res.status(400).json({ error: "missing_level", message: "Log level is required" });
+    return;
+  }
+  try {
+    setLogLevel(level as any);
+    res.json({ level: getLogLevel(), message: "Log level updated successfully" });
+  } catch (err: any) {
+    res.status(400).json({ error: "invalid_level", message: err.message });
+  }
+});
 
 // ── v1 routes (current) ──────────────────────────────────────────────────────
 const v1 = express.Router();
@@ -460,9 +489,13 @@ app.get("/graphql-playground", (req, res) => {
 // Start high-performance gRPC server
 startGrpcServer(50051);
 
+// Start secrets rotation if enabled
+startSecretRotation();
+
 // Graceful shutdown: drain the connection pool before exiting
 async function gracefulShutdown(signal: string): Promise<void> {
   logger.info(`[${signal}] shutting down gracefully…`);
+  stopSecretRotation();
   server.close(async () => {
     try {
       await rpcPool.shutdown();
