@@ -1,5 +1,6 @@
 import { rpcPool } from "./stellar";
 import type { PoolMetrics } from "./db-pool";
+import { getSourceHealth, getOutageState, getCacheStats } from "./satellite-sources";
 
 const startedAt = Date.now();
 
@@ -17,12 +18,19 @@ export function recordCronRun(name: string, status: CronStatus): void {
   lastCronRun = { name, status, at: new Date().toISOString() };
 }
 
+export interface SatelliteHealthReport {
+  sources: ReturnType<typeof getSourceHealth>;
+  cache: ReturnType<typeof getCacheStats>;
+  outage: ReturnType<typeof getOutageState>;
+}
+
 export interface HealthReport {
   status: "ok";
   uptime_seconds: number;
   started_at: string;
   last_cron_run: CronRun | null;
   db_pool: PoolMetrics;
+  satellite_data: SatelliteHealthReport;
 }
 
 export function getHealth(): HealthReport {
@@ -32,5 +40,10 @@ export function getHealth(): HealthReport {
     started_at: new Date(startedAt).toISOString(),
     last_cron_run: lastCronRun,
     db_pool: rpcPool.getMetrics(),
+    satellite_data: {
+      sources: getSourceHealth(),
+      cache: getCacheStats(),
+      outage: getOutageState(),
+    },
   };
 }

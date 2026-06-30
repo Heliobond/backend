@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { getSolarData, getSatelliteData } from "./iot";
+import { getSolarData } from "./iot";
+import { fetchSatelliteWithFallback } from "../lib/satellite-sources";
 import { computeScores } from "../lib/scoring";
 import { updateImpactScore, getTotalProjects } from "../lib/registry";
 import { ApiError, badRequest, parseOptionalInt } from "../middleware/errors";
@@ -16,7 +17,9 @@ router.use((req: Request, res: Response, next: NextFunction) => {
   const apiKey = process.env.ADMIN_API_KEY;
   if (!apiKey) return next();
   if (req.headers.authorization !== `Bearer ${apiKey}`) {
-    return res.status(401).json({ error: "unauthorized", message: "Missing or invalid bearer token" });
+    return res
+      .status(401)
+      .json({ error: "unauthorized", message: "Missing or invalid bearer token" });
   }
   next();
 });
@@ -82,11 +85,20 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
           }
           try {
             const solar = getSolarData(projectId);
-            const satellite = getSatelliteData(projectId);
+            const satellite = await fetchSatelliteWithFallback(projectId);
+            if (satellite.dataSource !== "live") {
+              console.warn(
+                `[oracle] project ${projectId}: satellite data degraded (dataSource=${satellite.dataSource})`,
+              );
+            }
             const scores = computeScores({ solar, satellite });
             let tx_hash: string;
             try {
-              tx_hash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact);
+              tx_hash = await updateImpactScore(
+                projectId,
+                scores.credit_quality,
+                scores.green_impact,
+              );
             } catch (updateErr) {
               if (updateErr instanceof RpcDegradedError) {
                 console.warn(`[oracle] project ${projectId}: RPC degraded, score queued for later`);
@@ -109,7 +121,9 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
               green_impact: scores.green_impact,
               timestamp: Date.now(),
             });
-            console.log(`[oracle] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`);
+            console.log(
+              `[oracle] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`,
+            );
             return { project_id: projectId, tx_hash, ...scores };
           } catch (err) {
             markFailed(projectId);
@@ -121,7 +135,14 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
           skipped.push({ project_id: projectId, reason: result.reason });
           console.log(`[oracle] skipping project ${projectId}: ${result.reason}`);
         } else {
-          results.push(result);
+          const r = result as {
+            project_id: number;
+            tx_hash: string;
+            credit_quality: number;
+            green_impact: number;
+          };
+          results.push(r);
+          results.push(result as any);
         }
       } catch (err) {
         console.error(`[oracle] project ${projectId} failed:`, err);
@@ -144,7 +165,8 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
  */
 router.get("/audit", (req: Request, res: Response, next: NextFunction) => {
   try {
-    const project_id = parseOptionalInt(req.query.project_id as string | undefined, "project_id", 0) || undefined;
+    const project_id =
+      parseOptionalInt(req.query.project_id as string | undefined, "project_id", 0) || undefined;
     const from = parseOptionalInt(req.query.from as string | undefined, "from", 0) || undefined;
     const to = parseOptionalInt(req.query.to as string | undefined, "to", 0) || undefined;
 
@@ -157,7 +179,7 @@ router.get("/audit", (req: Request, res: Response, next: NextFunction) => {
 
     if (format === "csv") {
       res.set("Content-Type", "text/csv");
-      res.set("Content-Disposition", "attachment; filename=\"audit-log.csv\"");
+      res.set("Content-Disposition", 'attachment; filename="audit-log.csv"');
       res.send(auditToCsv(entries));
       return;
     }
