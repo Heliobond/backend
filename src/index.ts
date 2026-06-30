@@ -56,6 +56,8 @@ import { rpcPool } from "./lib/stellar";
 import { openApiSpec } from "./lib/swagger";
 import { requestLogger } from "./middleware/requestLogger";
 import { errorHandler, notFoundHandler } from "./middleware/errors";
+import { sanitizeInputs } from "./middleware/sanitize";
+import { securityHeaders } from "./middleware/securityHeaders";
 import { publicLimiter, adminLimiter } from "./middleware/rateLimit";
 import { versionHeaders, acceptVersion, deprecationHeaders } from "./middleware/versioning";
 import { runWithCorrelationId, generateCorrelationId } from "./lib/correlation";
@@ -77,8 +79,10 @@ const CRON_TIMEZONE = process.env.CRON_TIMEZONE ?? "UTC";
 // 100% failure is always recorded as an error regardless of this threshold.
 const CRON_FAILURE_THRESHOLD = parseFloat(process.env.CRON_FAILURE_THRESHOLD ?? "0.5");
 
+app.use(securityHeaders);
 app.use(cors({ origin: env.FRONTEND_URL }));
 app.use(express.json());
+app.use(sanitizeInputs);
 app.use(requestLogger);
 
 // ── Liveness ────────────────────────────────────────────────────────────────
