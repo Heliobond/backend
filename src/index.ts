@@ -64,6 +64,8 @@ import { runWithCorrelationId, generateCorrelationId } from "./lib/correlation";
 import { logger } from "./lib/logger";
 import { getTraces, getTraceSummary } from "./lib/tracer";
 import { withProjectLock } from "./lib/request-queue";
+import { checkScheduledRotations } from "./lib/apiKeys";
+import { ipWhitelist } from "./middleware/ipWhitelist";
 
 dotenv.config();
 const env = initEnv();
@@ -110,29 +112,29 @@ v1.use(versionHeaders);
 v1.use(acceptVersion);
 
 v1.use("/iot", publicLimiter, iotRouter);
-v1.use("/admin", adminLimiter, adminRouter);
-v1.use("/admin/batch", adminLimiter, batchRouter);
+v1.use("/admin", ipWhitelist, adminLimiter, adminRouter);
+v1.use("/admin/batch", ipWhitelist, adminLimiter, batchRouter);
 v1.use("/projects", publicLimiter, projectsRouter);
 v1.use("/projects/:id/history", publicLimiter, historyRouter);
 v1.use("/projects/aggregate", publicLimiter, aggregateRouter);
 v1.use("/portfolio", publicLimiter, portfolioRouter);
-v1.use("/roles", adminLimiter, rolesRouter);
-v1.use("/webhooks", adminLimiter, webhooksRouter);
-v1.use("/panels", adminLimiter, panelsRouter);
-v1.use("/metadata", adminLimiter, metadataRouter);
+v1.use("/roles", ipWhitelist, adminLimiter, rolesRouter);
+v1.use("/webhooks", ipWhitelist, adminLimiter, webhooksRouter);
+v1.use("/panels", ipWhitelist, adminLimiter, panelsRouter);
+v1.use("/metadata", ipWhitelist, adminLimiter, metadataRouter);
 v1.use("/dashboard", publicLimiter, dashboardRouter);
-v1.use("/email", adminLimiter, emailRouter);
+v1.use("/email", ipWhitelist, adminLimiter, emailRouter);
 v1.use("/anomaly", publicLimiter, anomalyRouter);
-v1.use("/scoring/formulas", adminLimiter, scoringFormulasRouter);
-v1.use("/chains", adminLimiter, chainsRouter);
-v1.use("/satellite-sources", adminLimiter, satelliteSourcesRouter);
+v1.use("/scoring/formulas", ipWhitelist, adminLimiter, scoringFormulasRouter);
+v1.use("/chains", ipWhitelist, adminLimiter, chainsRouter);
+v1.use("/satellite-sources", ipWhitelist, adminLimiter, satelliteSourcesRouter);
 v1.use("/comparison", publicLimiter, comparisonRouter);
 v1.use("/benchmarking", publicLimiter, benchmarkingRouter);
 v1.use("/financial", publicLimiter, financialRouter);
 v1.use("/forecast", publicLimiter, forecastRouter);
 v1.use("/maintenance", publicLimiter, maintenanceRouter);
 v1.use("/investor", publicLimiter, investorRouter);
-v1.use("/admin/api-keys", adminLimiter, apiKeysRouter);
+v1.use("/admin/api-keys", ipWhitelist, adminLimiter, apiKeysRouter);
 
 app.use("/v1", v1);
 
@@ -140,25 +142,25 @@ app.use("/v1", v1);
 // Kept for backward compatibility; will be removed after 2027-01-01.
 app.use("/api", deprecationHeaders, versionHeaders);
 app.use("/api/iot", publicLimiter, iotRouter);
-app.use("/api/admin", adminLimiter, adminRouter);
-app.use("/api/admin/batch", adminLimiter, batchRouter);
+app.use("/api/admin", ipWhitelist, adminLimiter, adminRouter);
+app.use("/api/admin/batch", ipWhitelist, adminLimiter, batchRouter);
 app.use("/api/projects", publicLimiter, projectsRouter);
 app.use("/api/projects/:id/history", publicLimiter, historyRouter);
 app.use("/api/projects/aggregate", publicLimiter, aggregateRouter);
 app.use("/api/portfolio", publicLimiter, portfolioRouter);
-app.use("/api/roles", adminLimiter, rolesRouter);
-app.use("/api/webhooks", adminLimiter, webhooksRouter);
-app.use("/api/panels", adminLimiter, panelsRouter);
-app.use("/api/metadata", adminLimiter, metadataRouter);
+app.use("/api/roles", ipWhitelist, adminLimiter, rolesRouter);
+app.use("/api/webhooks", ipWhitelist, adminLimiter, webhooksRouter);
+app.use("/api/panels", ipWhitelist, adminLimiter, panelsRouter);
+app.use("/api/metadata", ipWhitelist, adminLimiter, metadataRouter);
 app.use("/api/dashboard", publicLimiter, dashboardRouter);
-app.use("/api/email", adminLimiter, emailRouter);
+app.use("/api/email", ipWhitelist, adminLimiter, emailRouter);
 app.use("/api/comparison", publicLimiter, comparisonRouter);
 app.use("/api/benchmarking", publicLimiter, benchmarkingRouter);
 app.use("/api/financial", publicLimiter, financialRouter);
 app.use("/api/forecast", publicLimiter, forecastRouter);
 app.use("/api/maintenance", publicLimiter, maintenanceRouter);
 app.use("/api/investor", publicLimiter, investorRouter);
-app.use("/api/admin/api-keys", adminLimiter, apiKeysRouter);
+app.use("/api/admin/api-keys", ipWhitelist, adminLimiter, apiKeysRouter);
 
 // JSON 404 for anything unmatched, then the structured error handler.
 app.use(notFoundHandler);
@@ -374,6 +376,28 @@ cron.schedule(
           `outageDurationMs=${status.outageDurationMs}, ` +
           `lastSuccessAgoMs=${status.lastSuccessAgoMs}`,
       );
+    }
+  },
+  { timezone: CRON_TIMEZONE },
+);
+
+// ── Cron: check API key rotations every hour ────────────────────────────────
+cron.schedule(
+  "0 * * * *",
+  () => {
+    try {
+      const rotated = checkScheduledRotations();
+      if (rotated.length > 0) {
+        logger.info("[cron] API key rotations executed", {
+          count: rotated.length,
+          key_ids: rotated.map((k) => k.id),
+        });
+      }
+    } catch (err: any) {
+      if (!isErrorRateLimited("cron:api-key-rotation")) {
+        logger.error("[cron] API key rotation check failed", { error: err?.message });
+      }
+      recordCronRun("api-key-rotation", "error");
     }
   },
   { timezone: CRON_TIMEZONE },
