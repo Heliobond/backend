@@ -16,7 +16,9 @@ router.use((req: Request, res: Response, next: NextFunction) => {
   const apiKey = process.env.ADMIN_API_KEY;
   if (!apiKey) return next();
   if (req.headers.authorization !== `Bearer ${apiKey}`) {
-    return res.status(401).json({ error: "unauthorized", message: "Missing or invalid bearer token" });
+    return res
+      .status(401)
+      .json({ error: "unauthorized", message: "Missing or invalid bearer token" });
   }
   next();
 });
@@ -86,7 +88,11 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
             const scores = computeScores({ solar, satellite });
             let tx_hash: string;
             try {
-              tx_hash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact);
+              tx_hash = await updateImpactScore(
+                projectId,
+                scores.credit_quality,
+                scores.green_impact,
+              );
             } catch (updateErr) {
               if (updateErr instanceof RpcDegradedError) {
                 console.warn(`[oracle] project ${projectId}: RPC degraded, score queued for later`);
@@ -109,7 +115,9 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
               green_impact: scores.green_impact,
               timestamp: Date.now(),
             });
-            console.log(`[oracle] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`);
+            console.log(
+              `[oracle] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`,
+            );
             return { project_id: projectId, tx_hash, ...scores };
           } catch (err) {
             markFailed(projectId);
@@ -121,7 +129,7 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
           skipped.push({ project_id: projectId, reason: result.reason });
           console.log(`[oracle] skipping project ${projectId}: ${result.reason}`);
         } else {
-          results.push(result);
+          results.push(result as any);
         }
       } catch (err) {
         console.error(`[oracle] project ${projectId} failed:`, err);
@@ -144,7 +152,8 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
  */
 router.get("/audit", (req: Request, res: Response, next: NextFunction) => {
   try {
-    const project_id = parseOptionalInt(req.query.project_id as string | undefined, "project_id", 0) || undefined;
+    const project_id =
+      parseOptionalInt(req.query.project_id as string | undefined, "project_id", 0) || undefined;
     const from = parseOptionalInt(req.query.from as string | undefined, "from", 0) || undefined;
     const to = parseOptionalInt(req.query.to as string | undefined, "to", 0) || undefined;
 
@@ -157,7 +166,7 @@ router.get("/audit", (req: Request, res: Response, next: NextFunction) => {
 
     if (format === "csv") {
       res.set("Content-Type", "text/csv");
-      res.set("Content-Disposition", "attachment; filename=\"audit-log.csv\"");
+      res.set("Content-Disposition", 'attachment; filename="audit-log.csv"');
       res.send(auditToCsv(entries));
       return;
     }
