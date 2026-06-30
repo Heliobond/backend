@@ -50,7 +50,7 @@ import {
 import { sendAlertIfSignificant } from "./lib/email";
 import { triggerWebhooks } from "./lib/webhooks";
 import { indexer } from "./lib/indexer";
-import { getHealth, recordCronRun } from "./lib/health";
+import { getHealth, getReadiness, recordCronRun } from "./lib/health";
 import { attachWebSocketServer, broadcastScoreUpdate } from "./lib/websocket";
 import { rpcPool } from "./lib/stellar";
 import { openApiSpec } from "./lib/swagger";
@@ -66,9 +66,14 @@ import { getTraces, getTraceSummary } from "./lib/tracer";
 import { withProjectLock } from "./lib/request-queue";
 import { checkScheduledRotations } from "./lib/apiKeys";
 import { ipWhitelist } from "./middleware/ipWhitelist";
+import { requestSigning } from "./middleware/requestSigning";
+import { initApm } from "./lib/apm";
 
 dotenv.config();
 const env = initEnv();
+
+// Initialize APM before any other imports
+await initApm();
 
 const app = express();
 const PORT = env.PORT;
@@ -89,6 +94,12 @@ app.use(requestLogger);
 
 // ── Liveness ────────────────────────────────────────────────────────────────
 app.get("/health", (_req, res) => res.json(getHealth()));
+
+// ── Readiness ────────────────────────────────────────────────────────────────
+app.get("/ready", (_req, res) => {
+  const readiness = getReadiness();
+  res.status(readiness.status === "ready" ? 200 : 503).json(readiness);
+});
 
 // ── Trace export ─────────────────────────────────────────────────────────────
 app.get("/v1/traces", adminLimiter, (req, res) => {
@@ -112,7 +123,7 @@ v1.use(versionHeaders);
 v1.use(acceptVersion);
 
 v1.use("/iot", publicLimiter, iotRouter);
-v1.use("/admin", ipWhitelist, adminLimiter, adminRouter);
+v1.use("/admin", ipWhitelist, adminLimiter, requestSigning, adminRouter);
 v1.use("/admin/batch", ipWhitelist, adminLimiter, batchRouter);
 v1.use("/projects", publicLimiter, projectsRouter);
 v1.use("/projects/:id/history", publicLimiter, historyRouter);
