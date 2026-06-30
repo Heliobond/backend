@@ -1,6 +1,8 @@
 name: Release
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       version_bump:
@@ -15,6 +17,8 @@ on:
 
 permissions:
   contents: write
+  issues: write
+  pull-requests: write
 
 concurrency:
   group: release
@@ -22,6 +26,7 @@ concurrency:
 
 jobs:
   release:
+    name: Release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -45,13 +50,22 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Bump version
+      - name: Release (semantic-release)
+        if: github.event_name == 'push'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npx semantic-release
+
+      - name: Bump version (manual)
+        if: github.event_name == 'workflow_dispatch'
         id: bump
         run: |
           NEW_VERSION=$(npm version "${{ github.event.inputs.version_bump }}" --no-git-tag-version)
           echo "version=${NEW_VERSION#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Update CHANGELOG
+      - name: Update CHANGELOG (manual)
+        if: github.event_name == 'workflow_dispatch'
         env:
           VERSION: ${{ steps.bump.outputs.version }}
         run: |
@@ -73,6 +87,7 @@ jobs:
           '
 
       - name: Extract release notes from CHANGELOG
+        if: github.event_name == 'workflow_dispatch'
         env:
           VERSION: ${{ steps.bump.outputs.version }}
         run: |
@@ -89,6 +104,7 @@ jobs:
           '
 
       - name: Commit version bump and CHANGELOG
+        if: github.event_name == 'workflow_dispatch'
         env:
           VERSION: ${{ steps.bump.outputs.version }}
         run: |
@@ -96,14 +112,17 @@ jobs:
           git commit -m "chore(release): v${VERSION}"
 
       - name: Create git tag
+        if: github.event_name == 'workflow_dispatch'
         env:
           VERSION: ${{ steps.bump.outputs.version }}
         run: git tag -a "v${VERSION}" -m "Release v${VERSION}"
 
       - name: Push commit and tag
+        if: github.event_name == 'workflow_dispatch'
         run: git push origin HEAD --follow-tags
 
       - name: Create GitHub release
+        if: github.event_name == 'workflow_dispatch'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.bump.outputs.version }}
@@ -112,9 +131,8 @@ jobs:
             --title "v${VERSION}" \
             --notes-file RELEASE_NOTES.md
 
-      # Fires a repository_dispatch event that a downstream deployment workflow
-      # (in this or another repo) can subscribe to via `on: repository_dispatch: types: [deploy]`.
       - name: Trigger deployment
+        if: github.event_name == 'workflow_dispatch'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.bump.outputs.version }}
