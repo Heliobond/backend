@@ -8,6 +8,8 @@ import { RequestHandler } from "express";
  *   X-Content-Type-Options   — prevents MIME sniffing
  *   Strict-Transport-Security — enforces HTTPS for 1 year
  *   X-XSS-Protection         — legacy browser XSS filter
+ *   Referrer-Policy          — controls referrer information leakage
+ *   Permissions-Policy       — restricts browser feature access
  */
 export const securityHeaders: RequestHandler = helmet({
   contentSecurityPolicy: {
@@ -27,9 +29,18 @@ export const securityHeaders: RequestHandler = helmet({
   frameguard: { action: "sameorigin" },
   noSniff: true,
   hsts: {
-    maxAge: 31_536_000, // 1 year in seconds
+    maxAge: 31_536_000,
     includeSubDomains: true,
     preload: true,
   },
   xssFilter: true,
+  referrerPolicy: { policy: "strict-origin-when-cross-origin" },
 });
+
+export const permissionsHeaders: RequestHandler = (_req, res, next) => {
+  res.setHeader(
+    "Permissions-Policy",
+    "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=()",
+  );
+  next();
+};
