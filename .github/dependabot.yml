@@ -1,0 +1,32 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "03:00"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "0x860"
+    allow:
+      - dependency-type: "direct"
+      - dependency-type: "indirect"
+    groups:
+      security:
+        dependency-types:
+          - "dev"
+        patterns:
+          - "*security*"
+          - "*cve*"
+    auto-merge:
+      minor-and-patch: true
+      allow-conditions:
+        - check_status: "success"
+    pull-request-branch-name:
+      separator: "/"
+    rebase-strategy: "auto"
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+      include: "scope"
