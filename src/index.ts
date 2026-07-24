@@ -517,31 +517,48 @@ async function gracefulShutdown(signal: string): Promise<void> {
   if (isShuttingDown) return;
   isShuttingDown = true;
 
-  logger.info(`[${signal}] graceful shutdown initiated`);
+  const shutdownTimeoutMs = config.SHUTDOWN_TIMEOUT_MS;
+  logger.info(`[${signal}] graceful shutdown initiated (timeout: ${shutdownTimeoutMs}ms)`);
 
-  // 1. Stop accepting new HTTP requests
-  logger.info("[shutdown] closing HTTP server (draining in-flight requests)…");
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  logger.info("[shutdown] HTTP server closed");
+  const shutdownPromise = (async () => {
+    // 1. Stop accepting new HTTP requests
+    logger.info("[shutdown] closing HTTP server (draining in-flight requests)…");
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    logger.info("[shutdown] HTTP server closed");
 
-  // 2. Stop all cron jobs so no new work starts
-  logger.info(`[shutdown] stopping ${cronTasks.length} cron jobs…`);
-  for (const task of cronTasks) {
-    task.stop();
-  }
-  logger.info("[shutdown] cron jobs stopped");
+    // 2. Stop all cron jobs so no new work starts
+    logger.info(`[shutdown] stopping ${cronTasks.length} cron jobs…`);
+    for (const task of cronTasks) {
+      task.stop();
+    }
+    logger.info("[shutdown] cron jobs stopped");
 
-  // 3. Drain the RPC connection pool (waits up to 10 s for active connections)
-  logger.info("[shutdown] draining RPC connection pool…");
+    // 3. Drain the RPC connection pool (waits up to 10 s for active connections)
+    logger.info("[shutdown] draining RPC connection pool…");
+    try {
+      await rpcPool.shutdown();
+      logger.info("[shutdown] connection pool drained");
+    } catch (err: any) {
+      logger.error("[shutdown] pool drain error", { error: err?.message });
+    }
+
+    logger.info("[shutdown] clean exit");
+    process.exit(0);
+  })();
+
+  // Apply overall shutdown timeout — force exit if graceful cleanup takes too long
+  const timeoutPromise = new Promise<void>((_, reject) => {
+    setTimeout(() => {
+      reject(new Error(`Shutdown timed out after ${shutdownTimeoutMs}ms`));
+    }, shutdownTimeoutMs);
+  });
+
   try {
-    await rpcPool.shutdown();
-    logger.info("[shutdown] connection pool drained");
+    await Promise.race([shutdownPromise, timeoutPromise]);
   } catch (err: any) {
-    logger.error("[shutdown] pool drain error", { error: err?.message });
+    logger.error("[shutdown] forced exit", { error: err?.message });
+    process.exit(1);
   }
-
-  logger.info("[shutdown] clean exit");
-  process.exit(0);
 }
 
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
