@@ -1,8 +1,7 @@
 import express from "express";
 import cors from "cors";
 import cron from "node-cron";
-import dotenv from "dotenv";
-import { initEnv } from "./lib/env";
+import { config, initEnv } from "./config";
 import swaggerUi from "swagger-ui-express";
 import iotRouter from "./routes/iot";
 import adminRouter from "./routes/admin";
@@ -73,13 +72,12 @@ import { csrfProtection, setCsrfCookie } from "./middleware/csrf";
 import { startSecretRotation, stopSecretRotation, getSecretsStatus } from "./lib/secrets";
 import { setLogLevel, getLogLevel } from "./lib/logger";
 
-dotenv.config();
 const env = initEnv();
 
 // Initialize APM before any other imports
 await initApm();
 
-if (!process.env.ADMIN_API_KEY) {
+if (!config.ADMIN_API_KEY) {
   console.warn("[startup] WARNING: ADMIN_API_KEY is not set. Admin endpoints will return 500 errors.");
 }
 
@@ -88,11 +86,11 @@ const PORT = env.PORT;
 
 // Timezone for all cron schedules. Defaults to UTC so behaviour is identical
 // across servers regardless of OS locale. Override with e.g. CRON_TIMEZONE=America/New_York.
-const CRON_TIMEZONE = process.env.CRON_TIMEZONE ?? "UTC";
+const CRON_TIMEZONE = config.CRON_TIMEZONE;
 
 // Fraction of projects that must fail before we escalate to a warning.
 // 100% failure is always recorded as an error regardless of this threshold.
-const CRON_FAILURE_THRESHOLD = parseFloat(process.env.CRON_FAILURE_THRESHOLD ?? "0.5");
+const CRON_FAILURE_THRESHOLD = config.CRON_FAILURE_THRESHOLD;
 
 app.use(securityHeaders);
 app.use(permissionsHeaders);
