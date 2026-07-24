@@ -1,28 +1,24 @@
 import { Keypair, rpc, Networks, TransactionBuilder, Account, xdr } from "@stellar/stellar-sdk";
-import dotenv from "dotenv";
+import { config } from "../config";
 import { RpcConnectionPool } from "./db-pool";
 import { CircuitBreaker } from "./circuit-breaker";
 import { withRetry, isTransientError } from "./retry";
 
-dotenv.config();
-
-const NETWORK = process.env.STELLAR_NETWORK as "testnet" | "mainnet";
-
-export const networkPassphrase = NETWORK === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
+export const networkPassphrase = config.STELLAR_NETWORK === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
 
 export const rpcPool = new RpcConnectionPool({
-  rpcUrl: process.env.RPC_URL || "https://soroban-testnet.stellar.org",
+  rpcUrl: config.RPC_URL,
   allowHttp: false,
-  minConnections: parseInt(process.env.DB_POOL_MIN || "2", 10),
-  maxConnections: parseInt(process.env.DB_POOL_MAX || "10", 10),
-  acquireTimeoutMs: parseInt(process.env.DB_POOL_ACQUIRE_TIMEOUT_MS || "5000", 10),
-  healthCheckIntervalMs: parseInt(process.env.DB_POOL_HEALTH_CHECK_INTERVAL_MS || "30000", 10),
+  minConnections: config.DB_POOL_MIN,
+  maxConnections: config.DB_POOL_MAX,
+  acquireTimeoutMs: config.DB_POOL_ACQUIRE_TIMEOUT_MS,
+  healthCheckIntervalMs: config.DB_POOL_HEALTH_CHECK_INTERVAL_MS,
 });
 
 // ── Circuit Breaker for Stellar RPC (#56) ────────────────────────────────────
 export const rpcBreaker = new CircuitBreaker({
-  failureThreshold: parseInt(process.env.RPC_BREAKER_FAILURE_THRESHOLD ?? "5", 10),
-  recoveryTimeoutMs: parseInt(process.env.RPC_BREAKER_RECOVERY_TIMEOUT_MS ?? "30000", 10),
+  failureThreshold: config.RPC_BREAKER_FAILURE_THRESHOLD,
+  recoveryTimeoutMs: config.RPC_BREAKER_RECOVERY_TIMEOUT_MS,
   name: "StellarRPC",
 });
 
@@ -72,7 +68,7 @@ export function withRpcConnection<T>(fn: (client: rpc.Server) => Promise<T>): Pr
 }
 
 export function getAdminKeypair(): Keypair {
-  const secretKey = process.env.ADMIN_SECRET_KEY;
+  const secretKey = config.ADMIN_SECRET_KEY;
   if (!secretKey) throw new Error("ADMIN_SECRET_KEY not set");
   return Keypair.fromSecret(secretKey);
 }
@@ -120,9 +116,9 @@ async function _executeSignAndSubmitWithRetry(
   return withRetry(
     () => _attemptSubmit(client, preparedXdr, keypair),
     {
-      maxAttempts: parseInt(process.env.TX_MAX_RETRIES ?? "4", 10),
-      baseDelayMs: parseInt(process.env.TX_RETRY_BASE_DELAY_MS ?? "200", 10),
-      maxDelayMs: parseInt(process.env.TX_RETRY_MAX_DELAY_MS ?? "10000", 10),
+      maxAttempts: config.TX_MAX_RETRIES,
+      baseDelayMs: config.TX_RETRY_BASE_DELAY_MS,
+      maxDelayMs: config.TX_RETRY_MAX_DELAY_MS,
       jitter: 0.3,
       label: "stellar:signAndSubmit",
     },
