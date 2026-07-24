@@ -1,0 +1,63 @@
+name: Load Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: "Test scenario to run"
+        required: true
+        default: "smoke"
+        type: choice
+        options:
+          - smoke
+          - average-load
+          - stress
+          - spike
+          - graphql
+      base_url:
+        description: "Base URL of the API under test"
+        required: false
+        default: "http://localhost:3001"
+  schedule:
+    # Run smoke test nightly against staging at 02:00 UTC
+    - cron: "0 2 * * *"
+
+jobs:
+  load-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install k6
+        run: |
+          sudo gpg -k
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+            --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install -y k6
+
+      - name: Determine scenario
+        id: scenario
+        run: |
+          SCENARIO="${{ github.event.inputs.scenario || 'smoke' }}"
+          echo "name=${SCENARIO}" >> "$GITHUB_OUTPUT"
+
+      - name: Run k6 load test
+        env:
+          BASE_URL: ${{ github.event.inputs.base_url || 'http://localhost:3001' }}
+        run: |
+          mkdir -p load-tests/reports
+          k6 run \
+            --env BASE_URL="${BASE_URL}" \
+            --out json=load-tests/reports/results-${{ steps.scenario.outputs.name }}.json \
+            load-tests/scenarios/${{ steps.scenario.outputs.name }}.js
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-test-report-${{ steps.scenario.outputs.name }}-${{ github.run_id }}
+          path: load-tests/reports/
+          retention-days: 30

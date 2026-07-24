@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { randomUUID } from "crypto";
+import { recordRequest } from "../lib/metrics";
 
 type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -25,8 +26,9 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
   const start = process.hrtime.bigint();
 
   res.on("finish", () => {
-    if (!shouldLog(res.statusCode)) return;
     const latencyMs = Number(process.hrtime.bigint() - start) / 1e6;
+    recordRequest(req.method, req.originalUrl, res.statusCode, latencyMs);
+    if (!shouldLog(res.statusCode)) return;
     const line: Record<string, unknown> = {
       level: res.statusCode >= 500 ? "error" : res.statusCode >= 400 ? "warn" : "info",
       time: new Date().toISOString(),

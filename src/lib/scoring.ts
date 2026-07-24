@@ -24,7 +24,6 @@ function safeNum(v: number, fallback: number): number {
 
 export function computeScores(input: IotInput): ImpactScores {
   const { solar, satellite } = input;
-
   const efficiency = clamp(safeNum(solar.efficiency_pct, 0), 0, 100);
   const powerOutput = clamp(safeNum(solar.power_output_kw, 0), 0, Infinity);
   const maxPower = clamp(safeNum(solar.max_power_kw, 0), 0, Infinity);

@@ -1,0 +1,158 @@
+name: Security Audit
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  dependency-audit:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run npm audit
+        run: npm audit --json > npm-audit-report.json || true
+
+      - name: Parse audit results
+        run: |
+          echo "## Dependency Audit Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Date:** $(date -u +'%Y-%m-%d')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -s npm-audit-report.json ]; then
+            node -e '
+              const fs = require("fs");
+              const report = JSON.parse(fs.readFileSync("npm-audit-report.json", "utf8"));
+              const v = report.metadata?.vulnerabilities || {};
+              console.log("| Severity | Count |");
+            ' | tee -a $GITHUB_STEP_SUMMARY
+            echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+            node -e '
+              const fs = require("fs");
+              const report = JSON.parse(fs.readFileSync("npm-audit-report.json", "utf8"));
+              const v = report.metadata?.vulnerabilities || {};
+              ["critical","high","moderate","low","info"].forEach(sev => {
+                console.log(`| ${sev.charAt(0).toUpperCase()+sev.slice(1)} | ${v[sev] || 0} |`);
+              });
+            ' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            CRITICAL=$(node -e 'const r=JSON.parse(require("fs").readFileSync("npm-audit-report.json","utf8"));console.log(r.metadata?.vulnerabilities?.critical||0)')
+            if [ "$CRITICAL" -gt 0 ]; then
+              echo "::error::Found $CRITICAL critical vulnerabilities in dependencies"
+            fi
+          else
+            echo "No dependencies scanned or no vulnerabilities found." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-audit-report
+          path: npm-audit-report.json
+          retention-days: 90
+
+  code-vulnerability-scan:
+    name: Code Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Run Trivy vulnerability scanner (filesystem)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          format: table
+          exit-code: 1
+
+  secret-detection:
+    name: Secret Detection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  license-compliance:
+    name: License Compliance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check license compliance
+        run: |
+          echo "## License Compliance Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Date:** $(date -u +'%Y-%m-%d')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          npx license-checker --json --out licenses.json 2>/dev/null || true
+          if [ -s licenses.json ]; then
+            echo "| Package | License |" >> $GITHUB_STEP_SUMMARY
+            echo "|---------|---------|" >> $GITHUB_STEP_SUMMARY
+            node -e '
+              const fs = require("fs");
+              const licenses = JSON.parse(fs.readFileSync("licenses.json", "utf8"));
+              const entries = Object.entries(licenses).slice(0, 50);
+              entries.forEach(([pkg, info]) => {
+                console.log(`| ${pkg} | ${info.licenses || "UNKNOWN"} |`);
+              });
+              if (Object.keys(licenses).length > 50) {
+                console.log(`| ... | ... (${Object.keys(licenses).length - 50} more) |`);
+              }
+            ' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No license data available." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload license report
+        uses: actions/upload-artifact@v4
+        with:
+          name: license-report
+          path: licenses.json
+          retention-days: 90
+
+  security-headers-check:
+    name: Security Headers Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Verify security headers configuration
+        run: |
+          echo "## Security Headers Audit" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Checking middleware/securityHeaders.ts..." >> $GITHUB_STEP_SUMMARY
+          if grep -q "helmet" src/middleware/securityHeaders.ts 2>/dev/null; then
+            echo "- [x] Helmet security headers configured" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- [ ] Helmet security headers NOT configured" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Verifying CSP, HSTS, X-Frame-Options, X-Content-Type-Options..." >> $GITHUB_STEP_SUMMARY
+          grep -E "contentSecurityPolicy|hsts|frameguard|noSniff" src/middleware/securityHeaders.ts | while read -r line; do
+            echo "- \`$line\`" >> $GITHUB_STEP_SUMMARY
+          done
