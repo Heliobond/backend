@@ -78,7 +78,7 @@ const env = initEnv();
 await initApm();
 
 if (!config.ADMIN_API_KEY) {
-  console.warn("[startup] WARNING: ADMIN_API_KEY is not set. Admin endpoints will return 500 errors.");
+  logger.warn("[startup] ADMIN_API_KEY is not set. Admin endpoints will return 500 errors.");
 }
 
 const app = express();
@@ -220,12 +220,12 @@ scheduleCron(
   async () => {
     if (isShuttingDown) return;
     try {
-      console.log("[cron] indexing new events");
+      logger.info("[cron] indexing new events");
       await indexer.poll();
       recordCronRun("indexer", "success");
     } catch (err) {
       if (!isErrorRateLimited("cron:indexer")) {
-        console.error("[cron] indexer poll failed:", err);
+        logger.error("[cron] indexer poll failed", logger.formatError(err));
       }
       recordCronRun("indexer", "error");
     }
@@ -239,7 +239,7 @@ scheduleCron(
   async () => {
     if (isShuttingDown) return;
     try {
-      console.log("[cron] running hourly score update");
+      logger.info("[cron] running hourly score update");
       const total = await getTotalProjects();
       const projectIds = Array.from({ length: total }, (_, i) => i + 1);
 
@@ -250,7 +250,7 @@ scheduleCron(
         await withProjectLock(projectId, async () => {
           const { allowed, key, reason } = tryBeginUpdate(projectId);
           if (!allowed) {
-            console.log(`[cron] skipping project ${projectId}: ${reason}`);
+            logger.info(`[cron] skipping project ${projectId}: ${reason}`);
             return;
           }
           try {
@@ -273,7 +273,7 @@ scheduleCron(
               );
             } catch (updateErr) {
               if (updateErr instanceof RpcDegradedError) {
-                console.warn(`[cron] project ${projectId}: RPC degraded, score queued for later`);
+                logger.warn(`[cron] project ${projectId}: RPC degraded, score queued for later`);
                 enqueue(projectId, scores.credit_quality, scores.green_impact, "RPC degraded");
               } else {
                 throw updateErr;
@@ -306,11 +306,11 @@ scheduleCron(
             });
             broadcastScoreUpdate({ project_id: projectId, ...scores, timestamp });
             if (tx_hash) {
-              console.log(
+              logger.info(
                 `[cron] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`,
               );
             } else {
-              console.log(
+              logger.info(
                 `[cron] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} (queued)`,
               );
             }
@@ -320,7 +320,7 @@ scheduleCron(
           } catch (err) {
             markFailed(projectId);
             if (!isErrorRateLimited(`cron:project-${projectId}`)) {
-              console.error(`[cron] project ${projectId} failed:`, err);
+              logger.error(`[cron] project ${projectId} failed`, logger.formatError(err));
             }
             failureCount++;
           }
@@ -332,14 +332,14 @@ scheduleCron(
 
       if (totalProcessed > 0 && failureCount === totalProcessed) {
         // All attempted projects failed — likely a systemic RPC or contract issue.
-        console.error(
+        logger.error(
           `[cron] ALERT: ALL ${failureCount} projects failed in score-update batch — ` +
             `check Soroban RPC connectivity and contract state`,
         );
         recordCronRun("score-update", "error");
       } else {
         if (failureCount > 0 && failureRate >= CRON_FAILURE_THRESHOLD) {
-          console.error(
+          logger.error(
             `[cron] WARN: high failure rate in score-update batch: ` +
               `${failureCount}/${totalProcessed} (${(failureRate * 100).toFixed(1)}%)`,
           );
@@ -365,11 +365,11 @@ scheduleCron(
     if (getQueueSize() === 0) return;
 
     if (!isRpcAvailable()) {
-      console.log(`[cron] tx-queue: RPC unavailable, ${getQueueSize()} transactions pending`);
+      logger.info(`[cron] tx-queue: RPC unavailable, ${getQueueSize()} transactions pending`);
       return;
     }
 
-    console.log(`[cron] tx-queue: processing ${getQueueSize()} queued transactions`);
+    logger.info(`[cron] tx-queue: processing ${getQueueSize()} queued transactions`);
     const maxRetries = 10;
     const processed: number[] = [];
 
@@ -388,7 +388,7 @@ scheduleCron(
           fresh.green_impact,
         );
         processed.push(item.projectId);
-        console.log(
+        logger.info(
           `[cron] tx-queue: project ${item.projectId} retried successfully tx=${tx_hash}`,
         );
       } catch (err) {
@@ -396,12 +396,12 @@ scheduleCron(
         incrementRetry(item.projectId, errMsg);
 
         if (hasExceededMaxRetries(item.projectId)) {
-          console.error(
+          logger.error(
             `[cron] tx-queue: project ${item.projectId} exceeded max retries (${maxRetries}), dropping`,
           );
           remove(item.projectId);
         } else {
-          console.warn(
+          logger.warn(
             `[cron] tx-queue: project ${item.projectId} retry failed (attempt ${item.retryCount + 1}), will retry`,
           );
         }
@@ -409,7 +409,7 @@ scheduleCron(
     }
 
     if (processed.length > 0) {
-      console.log(`[cron] tx-queue: successfully retried ${processed.length} transactions`);
+      logger.info(`[cron] tx-queue: successfully retried ${processed.length} transactions`);
     }
   },
   { timezone: CRON_TIMEZONE },
@@ -422,7 +422,7 @@ scheduleCron(
     if (isShuttingDown) return;
     if (isRpcOutageExtended(300_000)) {
       const status = getRpcStatus();
-      console.error(
+      logger.error(
         `[alert] Stellar RPC outage detected: ` +
           `consecutiveFailures=${status.consecutiveFailures}, ` +
           `outageDurationMs=${status.outageDurationMs}, ` +
