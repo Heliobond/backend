@@ -1,7 +1,7 @@
 /**
  * Unit tests for src/lib/stellar.ts
  * Covers getRpcStatus, isRpcAvailable, isRpcOutageExtended, getAdminKeypair,
- * RpcDegradedError, and the circuit-breaker / health-tracking helpers.
+ * RpcDegradedError, signAndSubmit, and the circuit-breaker / health-tracking helpers.
  */
 
 // Mock the heavy stellar-sdk and pool/breaker before any imports so that
@@ -46,14 +46,33 @@ jest.mock("../lib/retry", () => ({
   isTransientError: jest.fn().mockReturnValue(false),
 }));
 
+jest.mock("../config", () => ({
+  config: {
+    STELLAR_NETWORK: "testnet",
+    ADMIN_SECRET_KEY: "",
+    RPC_URL: "https://soroban-testnet.stellar.org",
+    DB_POOL_MIN: 2,
+    DB_POOL_MAX: 10,
+    DB_POOL_ACQUIRE_TIMEOUT_MS: 5000,
+    DB_POOL_HEALTH_CHECK_INTERVAL_MS: 30000,
+    RPC_BREAKER_FAILURE_THRESHOLD: 5,
+    RPC_BREAKER_RECOVERY_TIMEOUT_MS: 30000,
+    TX_MAX_RETRIES: 4,
+    TX_RETRY_BASE_DELAY_MS: 200,
+    TX_RETRY_MAX_DELAY_MS: 10000,
+  },
+}));
+
 import {
   getRpcStatus,
   isRpcAvailable,
   isRpcOutageExtended,
   getAdminKeypair,
+  signAndSubmit,
   RpcDegradedError,
   networkPassphrase,
 } from "../lib/stellar";
+import { rpc } from "@stellar/stellar-sdk";
 
 describe("stellar utility helpers", () => {
   describe("networkPassphrase", () => {
@@ -88,7 +107,6 @@ describe("stellar utility helpers", () => {
 
   describe("isRpcOutageExtended", () => {
     it("returns false when no outage is active", () => {
-      // Fresh module state — no outage recorded
       expect(isRpcOutageExtended(1000)).toBe(false);
     });
 
@@ -131,6 +149,78 @@ describe("stellar utility helpers", () => {
 
     it("uses default message when none is provided", () => {
       expect(new RpcDegradedError().message).toBe("RPC is degraded");
+    });
+  });
+
+  describe("signAndSubmit", () => {
+    const mockKeypair = {
+      publicKey: () => "GPUBKEY",
+      xdrPublicKey: () => "XDR_PUB_KEY",
+      sign: jest.fn(),
+    };
+
+    const createMockClient = (overrides: Partial<{
+      getLedgerEntries: jest.Mock;
+      sendTransaction: jest.Mock;
+      getTransaction: jest.Mock;
+    }> = {}) => ({
+      getLedgerEntries: jest.fn().mockResolvedValue({ entries: [] }),
+      sendTransaction: jest.fn().mockResolvedValue({
+        status: "SUCCESS",
+        hash: "tx_hash_123",
+      }),
+      getTransaction: jest.fn().mockResolvedValue({
+        status: rpc.Api.GetTransactionStatus.NOT_FOUND,
+      }),
+      ...overrides,
+    });
+
+    beforeEach(() => {
+      jest.clearAllMocks();
+    });
+
+    it("returns tx hash on successful submission", async () => {
+      const client = createMockClient({
+        sendTransaction: jest.fn().mockResolvedValue({
+          status: "SUCCESS",
+          hash: "abc123",
+        }),
+        getTransaction: jest.fn().mockResolvedValue({
+          status: rpc.Api.GetTransactionStatus.NOT_FOUND,
+        }),
+      });
+
+      const result = await signAndSubmit(client as any, "fake_xdr", mockKeypair as any);
+      expect(result).toBe("abc123");
+    });
+
+    it("throws on ERROR status from sendTransaction", async () => {
+      const client = createMockClient({
+        sendTransaction: jest.fn().mockResolvedValue({
+          status: "ERROR",
+          errorResult: { code: -1, message: "tx_bad_seq" },
+        }),
+      });
+
+      await expect(signAndSubmit(client as any, "fake_xdr", mockKeypair as any)).rejects.toThrow(
+        "Send error",
+      );
+    });
+
+    it("throws on FAILED status from getTransaction", async () => {
+      const client = createMockClient({
+        sendTransaction: jest.fn().mockResolvedValue({
+          status: "SUCCESS",
+          hash: "fail_hash",
+        }),
+        getTransaction: jest.fn().mockResolvedValue({
+          status: rpc.Api.GetTransactionStatus.FAILED,
+        }),
+      });
+
+      await expect(signAndSubmit(client as any, "fake_xdr", mockKeypair as any)).rejects.toThrow(
+        "Transaction failed on-chain",
+      );
     });
   });
 });
