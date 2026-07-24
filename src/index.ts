@@ -31,7 +31,7 @@ import apiKeysRouter from "./routes/apiKeys";
 import { createHandler } from "graphql-http/lib/use/express";
 import { graphqlSchema, graphqlRoot, createGraphQLContext } from "./graphql/schema";
 import { startGrpcServer } from "./grpc/server";
-import { getSolarData } from "./routes/iot";
+import { getSolarData } from "./lib/iot";
 import { fetchSatelliteWithFallback } from "./lib/satellite-sources";
 import { computeScores } from "./lib/scoring";
 import { updateImpactScore, getTotalProjects, RpcDegradedError } from "./lib/registry";
@@ -80,7 +80,9 @@ const env = initEnv();
 await initApm();
 
 if (!process.env.ADMIN_API_KEY) {
-  console.warn("[startup] WARNING: ADMIN_API_KEY is not set. Admin endpoints will return 500 errors.");
+  console.warn(
+    "[startup] WARNING: ADMIN_API_KEY is not set. Admin endpoints will return 500 errors.",
+  );
 }
 
 const app = express();
@@ -236,10 +238,20 @@ scheduleCron(
 );
 
 // ── Cron: hourly score update ────────────────────────────────────────────────
+// Guards against overlapping runs: with many projects and sequential Soroban
+// transactions, a run can take longer than the 1-hour schedule interval. Without
+// this lock, an overlapping invocation could submit duplicate on-chain updates.
+let isScoreUpdateRunning = false;
+
 scheduleCron(
   "0 * * * *",
   async () => {
     if (isShuttingDown) return;
+    if (isScoreUpdateRunning) {
+      logger.warn("[cron] hourly score update already in progress, skipping this run");
+      return;
+    }
+    isScoreUpdateRunning = true;
     try {
       console.log("[cron] running hourly score update");
       const total = await getTotalProjects();
@@ -354,6 +366,8 @@ scheduleCron(
         logger.error("[cron] score update failed", { error: err?.message });
       }
       recordCronRun("score-update", "error");
+    } finally {
+      isScoreUpdateRunning = false;
     }
   },
   { timezone: CRON_TIMEZONE },
@@ -508,7 +522,11 @@ startGrpcServer(50051);
 // Track all scheduled cron tasks so we can stop them cleanly.
 const cronTasks: cron.ScheduledTask[] = [];
 
-function scheduleCron(expression: string, fn: () => void | Promise<void>, opts?: { timezone?: string }): void {
+function scheduleCron(
+  expression: string,
+  fn: () => void | Promise<void>,
+  opts?: { timezone?: string },
+): void {
   const task = cron.schedule(expression, fn, opts);
   cronTasks.push(task);
 }

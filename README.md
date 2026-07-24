@@ -69,9 +69,20 @@ Full request/response details, validation rules, and error codes are in
 | `GET` | `/api/portfolio/:address` | — | Indexed deposit/withdraw history for an address |
 | `POST` | `/api/admin/update-scores` | Bearer token | Submit impact score update(s) to the Soroban contract |
 
-Errors return a consistent `{ "error": "<code>", "message": "<detail>" }` JSON
-shape (never a stack trace). All `/api/*` routes are rate limited and return
-`429` with a `Retry-After` header once the limit is exceeded.
+Errors return a consistent `{ "error": { "code": "<code>", "message": "<detail>" } }`
+JSON shape (never a stack trace). `code` is a stable, machine-readable
+identifier; `message` is human-readable detail. All `/api/*` routes are rate
+limited and return `429` with a `Retry-After` header once the limit is
+exceeded.
+
+```json
+{
+  "error": {
+    "code": "bad_request",
+    "message": "project id must be a positive integer"
+  }
+}
+```
 
 ### `GET /health`
 
@@ -125,7 +136,12 @@ Omit `project_ids` (or send an empty array) to update every project registered o
       "green_impact": 69
     }
   ],
-  "errors": []
+  "errors": [
+    {
+      "project_id": 4,
+      "error": { "code": "update_failed", "message": "Soroban RPC timeout" }
+    }
+  ]
 }
 ```
 
