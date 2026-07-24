@@ -15,7 +15,9 @@ const router = Router();
 // Bearer token auth — enforced when ADMIN_API_KEY env var is set
 router.use((req: Request, res: Response, next: NextFunction) => {
   const apiKey = process.env.ADMIN_API_KEY;
-  if (!apiKey) return next();
+  if (!apiKey) {
+    return res.status(500).json({ error: "server misconfigured" });
+  }
   if (req.headers.authorization !== `Bearer ${apiKey}`) {
     return res
       .status(401)

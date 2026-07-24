@@ -51,6 +51,7 @@ import { sendAlertIfSignificant } from "./lib/email";
 import { triggerWebhooks } from "./lib/webhooks";
 import { indexer } from "./lib/indexer";
 import { getHealth, getReadiness, recordCronRun } from "./lib/health";
+import { getMetrics } from "./lib/metrics";
 import { attachWebSocketServer, broadcastScoreUpdate } from "./lib/websocket";
 import { rpcPool } from "./lib/stellar";
 import { openApiSpec } from "./lib/swagger";
@@ -78,6 +79,10 @@ const env = initEnv();
 // Initialize APM before any other imports
 await initApm();
 
+if (!process.env.ADMIN_API_KEY) {
+  console.warn("[startup] WARNING: ADMIN_API_KEY is not set. Admin endpoints will return 500 errors.");
+}
+
 const app = express();
 const PORT = env.PORT;
 
@@ -104,6 +109,11 @@ app.get("/health", (_req, res) => res.json(getHealth()));
 app.get("/ready", (_req, res) => {
   const readiness = getReadiness();
   res.status(readiness.status === "ready" ? 200 : 503).json(readiness);
+});
+
+// ── Metrics dashboard ────────────────────────────────────────────────────────
+app.get("/v1/metrics", adminLimiter, (_req, res) => {
+  res.json(getMetrics());
 });
 
 // ── Trace export ─────────────────────────────────────────────────────────────
