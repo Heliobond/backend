@@ -7,13 +7,12 @@ import {
   rpc,
 } from "@stellar/stellar-sdk";
 import { withRpcConnection, networkPassphrase, getAdminKeypair, signAndSubmit } from "./stellar";
-import dotenv from "dotenv";
-dotenv.config();
+import { config } from "../config";
 
-if (!process.env.PROJECT_REGISTRY_CONTRACT_ID) {
+if (!config.PROJECT_REGISTRY_CONTRACT_ID) {
   throw new Error("PROJECT_REGISTRY_CONTRACT_ID env var is required");
 }
-const REGISTRY_CONTRACT_ID = process.env.PROJECT_REGISTRY_CONTRACT_ID;
+const REGISTRY_CONTRACT_ID = config.PROJECT_REGISTRY_CONTRACT_ID;
 
 export async function updateImpactScore(
   projectId: number,
