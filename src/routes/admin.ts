@@ -10,6 +10,7 @@ import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-dete
 import { RpcDegradedError } from "../lib/registry";
 import { withProjectLock } from "../lib/request-queue";
 import { config } from "../config";
+import { logger } from "../lib/logger";
 
 const router = Router();
 
@@ -90,7 +91,7 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
             const solar = getSolarData(projectId);
             const satellite = await fetchSatelliteWithFallback(projectId);
             if (satellite.dataSource !== "live") {
-              console.warn(
+              logger.warn(
                 `[oracle] project ${projectId}: satellite data degraded (dataSource=${satellite.dataSource})`,
               );
             }
@@ -104,7 +105,7 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
               );
             } catch (updateErr) {
               if (updateErr instanceof RpcDegradedError) {
-                console.warn(`[oracle] project ${projectId}: RPC degraded, score queued for later`);
+                logger.warn(`[oracle] project ${projectId}: RPC degraded, score queued for later`);
                 markCompleted(projectId);
                 return { project_id: projectId, tx_hash: "deferred", ...scores };
               }
@@ -124,7 +125,7 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
               green_impact: scores.green_impact,
               timestamp: Date.now(),
             });
-            console.log(
+            logger.info(
               `[oracle] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`,
             );
             return { project_id: projectId, tx_hash, ...scores };
@@ -136,7 +137,7 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
 
         if (result.skipped) {
           skipped.push({ project_id: projectId, reason: result.reason });
-          console.log(`[oracle] skipping project ${projectId}: ${result.reason}`);
+          logger.info(`[oracle] skipping project ${projectId}: ${result.reason}`);
         } else {
           const r = result as {
             project_id: number;
@@ -148,7 +149,7 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
           results.push(result as any);
         }
       } catch (err) {
-        console.error(`[oracle] project ${projectId} failed:`, err);
+        logger.error(`[oracle] project ${projectId} failed`, logger.formatError(err));
         errors.push({ project_id: projectId, error: String(err) });
       }
     }
