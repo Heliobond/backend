@@ -50,11 +50,23 @@ function emit(level: LogLevel, message: string, meta?: Record<string, unknown>):
   }
 }
 
+function formatError(err: unknown): Record<string, unknown> {
+  if (err instanceof Error) {
+    return {
+      error_name: err.name,
+      error_message: err.message,
+      error_stack: err.stack,
+    };
+  }
+  return { error: String(err) };
+}
+
 export const logger = {
   debug: (message: string, meta?: Record<string, unknown>) => emit("debug", message, meta),
   info: (message: string, meta?: Record<string, unknown>) => emit("info", message, meta),
   warn: (message: string, meta?: Record<string, unknown>) => emit("warn", message, meta),
   error: (message: string, meta?: Record<string, unknown>) => emit("error", message, meta),
+  formatError,
 };
 
 export function setLogLevel(level: LogLevel): void {
