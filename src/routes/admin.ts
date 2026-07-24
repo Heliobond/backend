@@ -9,12 +9,13 @@ import { broadcastScoreUpdate } from "../lib/websocket";
 import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
 import { RpcDegradedError } from "../lib/registry";
 import { withProjectLock } from "../lib/request-queue";
+import { config } from "../config";
 
 const router = Router();
 
 // Bearer token auth — enforced when ADMIN_API_KEY env var is set
 router.use((req: Request, res: Response, next: NextFunction) => {
-  const apiKey = process.env.ADMIN_API_KEY;
+  const apiKey = config.ADMIN_API_KEY;
   if (!apiKey) {
     return res.status(500).json({ error: "server misconfigured" });
   }
