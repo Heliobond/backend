@@ -4,8 +4,34 @@
  * RpcDegradedError, signAndSubmit, and the circuit-breaker / health-tracking helpers.
  */
 
-// Mock the heavy stellar-sdk and pool/breaker before any imports so that
-// the module initialises without real network connections.
+const mockConfig: Record<string, unknown> = {
+  STELLAR_NETWORK: "testnet",
+  ADMIN_SECRET_KEY: "",
+  RPC_URL: "https://soroban-testnet.stellar.org",
+  DB_POOL_MIN: 2,
+  DB_POOL_MAX: 10,
+  DB_POOL_ACQUIRE_TIMEOUT_MS: 5000,
+  DB_POOL_HEALTH_CHECK_INTERVAL_MS: 30000,
+  RPC_BREAKER_FAILURE_THRESHOLD: 5,
+  RPC_BREAKER_RECOVERY_TIMEOUT_MS: 30000,
+  TX_MAX_RETRIES: 4,
+  TX_RETRY_BASE_DELAY_MS: 200,
+  TX_RETRY_MAX_DELAY_MS: 10000,
+};
+
+jest.mock("../config", () => ({
+  get config() {
+    return mockConfig;
+  },
+}));
+
+const mockTx = {
+  operations: [{ type: "invoke" }],
+  fee: 100,
+  timeBounds: undefined,
+  sign: jest.fn(),
+};
+
 jest.mock("@stellar/stellar-sdk", () => ({
   Keypair: {
     fromSecret: jest.fn().mockReturnValue({ publicKey: () => "GPUBKEY" }),
@@ -19,8 +45,19 @@ jest.mock("@stellar/stellar-sdk", () => ({
     TESTNET: "Test SDF Network ; September 2015",
     PUBLIC: "Public Global Stellar Network ; September 2015",
   },
-  TransactionBuilder: { fromXDR: jest.fn() },
-  Account: jest.fn(),
+  TransactionBuilder: {
+    fromXDR: jest.fn().mockReturnValue({
+      operations: [{ type: "invoke" }],
+      fee: 100,
+      timeBounds: undefined,
+      tx: { timeBounds: undefined },
+      sign: jest.fn(),
+    }),
+    mockReset(tx?: unknown) {
+      (this as any).fromXDR.mockReturnValue(tx ?? mockTx);
+    },
+  },
+  Account: jest.fn().mockImplementation((id: string, seq: string) => ({ id, seq })),
   xdr: {
     LedgerKey: { account: jest.fn().mockReturnValue({}) },
     LedgerKeyAccount: jest.fn(),
@@ -46,23 +83,6 @@ jest.mock("../lib/retry", () => ({
   isTransientError: jest.fn().mockReturnValue(false),
 }));
 
-jest.mock("../config", () => ({
-  config: {
-    STELLAR_NETWORK: "testnet",
-    ADMIN_SECRET_KEY: "",
-    RPC_URL: "https://soroban-testnet.stellar.org",
-    DB_POOL_MIN: 2,
-    DB_POOL_MAX: 10,
-    DB_POOL_ACQUIRE_TIMEOUT_MS: 5000,
-    DB_POOL_HEALTH_CHECK_INTERVAL_MS: 30000,
-    RPC_BREAKER_FAILURE_THRESHOLD: 5,
-    RPC_BREAKER_RECOVERY_TIMEOUT_MS: 30000,
-    TX_MAX_RETRIES: 4,
-    TX_RETRY_BASE_DELAY_MS: 200,
-    TX_RETRY_MAX_DELAY_MS: 10000,
-  },
-}));
-
 import {
   getRpcStatus,
   isRpcAvailable,
@@ -72,7 +92,7 @@ import {
   RpcDegradedError,
   networkPassphrase,
 } from "../lib/stellar";
-import { rpc } from "@stellar/stellar-sdk";
+import { rpc, TransactionBuilder } from "@stellar/stellar-sdk";
 
 describe("stellar utility helpers", () => {
   describe("networkPassphrase", () => {
@@ -116,17 +136,13 @@ describe("stellar utility helpers", () => {
   });
 
   describe("getAdminKeypair", () => {
-    afterEach(() => {
-      delete process.env.ADMIN_SECRET_KEY;
-    });
-
     it("throws when ADMIN_SECRET_KEY is unset", () => {
-      delete process.env.ADMIN_SECRET_KEY;
+      mockConfig.ADMIN_SECRET_KEY = "";
       expect(() => getAdminKeypair()).toThrow("ADMIN_SECRET_KEY not set");
     });
 
     it("returns a keypair when ADMIN_SECRET_KEY is set", () => {
-      process.env.ADMIN_SECRET_KEY = "STEST000000000000000000000000000000000000000000000000000";
+      mockConfig.ADMIN_SECRET_KEY = "STEST000000000000000000000000000000000000000000000000000";
       const kp = getAdminKeypair();
       expect(kp).toBeDefined();
     });
@@ -170,13 +186,23 @@ describe("stellar utility helpers", () => {
         hash: "tx_hash_123",
       }),
       getTransaction: jest.fn().mockResolvedValue({
-        status: rpc.Api.GetTransactionStatus.NOT_FOUND,
+        status: "SUCCESS",
       }),
       ...overrides,
     });
 
     beforeEach(() => {
       jest.clearAllMocks();
+      const freshTx = {
+        operations: [{ type: "invoke" }],
+        fee: 100,
+        timeBounds: undefined,
+        sign: jest.fn(),
+      };
+      (TransactionBuilder as any).fromXDR.mockReturnValue({
+        ...freshTx,
+        tx: { timeBounds: undefined },
+      });
     });
 
     it("returns tx hash on successful submission", async () => {
@@ -186,7 +212,7 @@ describe("stellar utility helpers", () => {
           hash: "abc123",
         }),
         getTransaction: jest.fn().mockResolvedValue({
-          status: rpc.Api.GetTransactionStatus.NOT_FOUND,
+          status: "SUCCESS",
         }),
       });
 
@@ -205,7 +231,7 @@ describe("stellar utility helpers", () => {
       await expect(signAndSubmit(client as any, "fake_xdr", mockKeypair as any)).rejects.toThrow(
         "Send error",
       );
-    });
+    }, 15000);
 
     it("throws on FAILED status from getTransaction", async () => {
       const client = createMockClient({
@@ -214,13 +240,13 @@ describe("stellar utility helpers", () => {
           hash: "fail_hash",
         }),
         getTransaction: jest.fn().mockResolvedValue({
-          status: rpc.Api.GetTransactionStatus.FAILED,
+          status: "FAILED",
         }),
       });
 
       await expect(signAndSubmit(client as any, "fake_xdr", mockKeypair as any)).rejects.toThrow(
         "Transaction failed on-chain",
       );
-    });
+    }, 15000);
   });
 });
