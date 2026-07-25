@@ -3,7 +3,7 @@ import { getSolarData } from "../lib/iot";
 import { fetchSatelliteWithFallback } from "../lib/satellite-sources";
 import { computeScores } from "../lib/scoring";
 import { updateImpactScore, getTotalProjects } from "../lib/registry";
-import { ApiError, badRequest, parseOptionalInt, errorBody } from "../middleware/errors";
+import { badRequest, parseOptionalInt, errorBody } from "../middleware/errors";
 import { recordAudit, getAuditLog, auditToCsv } from "../lib/audit";
 import { broadcastScoreUpdate } from "../lib/websocket";
 import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
@@ -83,7 +83,7 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
     for (const projectId of projectIds) {
       try {
         const result = await withProjectLock(projectId, async () => {
-          const { allowed, key, reason } = tryBeginUpdate(projectId);
+          const { allowed, reason } = tryBeginUpdate(projectId);
           if (!allowed) {
             return { skipped: true, reason: reason! };
           }
@@ -149,7 +149,10 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
         }
       } catch (err) {
         logger.error(`[oracle] project ${projectId} failed`, logger.formatError(err));
-        errors.push({ project_id: projectId, error: String(err) });
+        errors.push({
+          project_id: projectId,
+          error: { code: "update_failed", message: String(err) },
+        });
       }
     }
 
