@@ -5,16 +5,25 @@ Base URL (local): `http://localhost:3001`
 All responses are JSON. Errors use a consistent shape:
 
 ```json
-{ "error": "bad_request", "message": "project id must be a positive integer" }
+{
+  "error": {
+    "code": "bad_request",
+    "message": "project id must be a positive integer"
+  }
+}
 ```
 
-| Status | `error` code         | When |
-|--------|----------------------|------|
-| `400`  | `bad_request`        | Invalid params, body, or malformed JSON |
-| `401`  | `unauthorized`       | Missing/invalid admin bearer token |
-| `404`  | `not_found`          | Unknown route |
-| `429`  | `too_many_requests`  | Rate limit exceeded (see `Retry-After`) |
-| `500`  | `internal_error`     | Unexpected server error |
+`code` is a stable, machine-readable identifier for programmatic handling;
+`message` is human-readable detail.
+
+| Status | `error.code`             | When |
+|--------|--------------------------|------|
+| `400`  | `bad_request`            | Invalid params, body, or malformed JSON |
+| `401`  | `unauthorized`           | Missing/invalid admin bearer token |
+| `404`  | `not_found`              | Unknown route |
+| `429`  | `too_many_requests`      | Rate limit exceeded (see `Retry-After`) |
+| `500`  | `server_misconfigured`   | Admin endpoint called without `ADMIN_API_KEY` configured |
+| `500`  | `internal_error`         | Unexpected server error |
 
 ## Rate limiting
 
@@ -220,17 +229,24 @@ Stricter rate limit than public endpoints.
   "results": [
     { "project_id": 1, "tx_hash": "abc123...", "credit_quality": 74, "green_impact": 69 }
   ],
-  "errors": []
+  "errors": [
+    {
+      "project_id": 4,
+      "error": { "code": "update_failed", "message": "Soroban RPC timeout" }
+    }
+  ]
 }
 ```
 
 Per-project failures are collected in `errors` (the request still returns `200`);
-Soroban does not support multi-call batching, so transactions are submitted
+each entry's `error` follows the standard `{ code, message }` shape. Soroban
+does not support multi-call batching, so transactions are submitted
 sequentially.
 
 **Errors:**
 - `400` if `project_ids` is present but not an array of positive integers, or the JSON body is malformed.
 - `401` if `ADMIN_API_KEY` is set and the bearer token is missing/incorrect.
+- `500` (`server_misconfigured`) if `ADMIN_API_KEY` is not configured on the server.
 
 ---
 

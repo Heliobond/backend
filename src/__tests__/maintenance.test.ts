@@ -264,6 +264,6 @@ describe("maintenance API routes", () => {
 
   it("GET /api/maintenance/abc/trend — 400 for invalid id", async () => {
     const res = await request(app).get("/api/maintenance/abc/trend").expect(400);
-    expect(res.body.error).toBe("bad_request");
+    expect(res.body.error.code).toBe("bad_request");
   });
 });

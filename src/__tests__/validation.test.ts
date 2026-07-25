@@ -23,26 +23,30 @@ describe("request validation + structured errors", () => {
   it("returns 400 { error, message } for a non-numeric id", async () => {
     const res = await request(app).get("/api/iot/solar/abc").expect(400);
     expect(res.body).toEqual({
-      error: "bad_request",
-      message: expect.stringContaining("positive integer"),
+      error: {
+        code: "bad_request",
+        message: expect.stringContaining("positive integer"),
+      },
     });
   });
 
   it("returns 400 for a zero id", async () => {
     const res = await request(app).get("/api/iot/satellite/0").expect(400);
-    expect(res.body.error).toBe("bad_request");
+    expect(res.body.error.code).toBe("bad_request");
   });
 
   it("returns 400 for a negative / malformed id", async () => {
     const res = await request(app).get("/api/iot/satellite/-3").expect(400);
-    expect(res.body.error).toBe("bad_request");
+    expect(res.body.error.code).toBe("bad_request");
   });
 
   it("returns a JSON 404 for unknown routes (no stack trace)", async () => {
     const res = await request(app).get("/api/iot/does-not-exist").expect(404);
     expect(res.body).toEqual({
-      error: "not_found",
-      message: expect.stringContaining("/api/iot/does-not-exist"),
+      error: {
+        code: "not_found",
+        message: expect.stringContaining("/api/iot/does-not-exist"),
+      },
     });
   });
 
@@ -53,8 +57,10 @@ describe("request validation + structured errors", () => {
       .send('{ "bad": ')
       .expect(400);
     expect(res.body).toEqual({
-      error: "bad_request",
-      message: "Request body is not valid JSON",
+      error: {
+        code: "bad_request",
+        message: "Request body is not valid JSON",
+      },
     });
   });
 });

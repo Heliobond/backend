@@ -1,5 +1,6 @@
 import rateLimit, { RateLimitRequestHandler } from "express-rate-limit";
 import { Request, Response } from "express";
+import { errorBody } from "./errors";
 
 /**
  * Rate limiting middleware. Limits are configurable via environment variables
@@ -27,10 +28,9 @@ export function createRateLimiter(windowMs: number, max: number): RateLimitReque
     legacyHeaders: false, // disable X-RateLimit-* headers
     // express-rate-limit sets `Retry-After` automatically on the 429 response.
     handler: (_req: Request, res: Response) => {
-      res.status(429).json({
-        error: "too_many_requests",
-        message: "Rate limit exceeded. Please retry later.",
-      });
+      res
+        .status(429)
+        .json(errorBody("too_many_requests", "Rate limit exceeded. Please retry later."));
     },
   });
 }

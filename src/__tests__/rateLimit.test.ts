@@ -22,8 +22,10 @@ describe("rate limiting", () => {
 
     const res = await request(app).get("/ping").expect(429);
     expect(res.body).toEqual({
-      error: "too_many_requests",
-      message: expect.stringContaining("Rate limit"),
+      error: {
+        code: "too_many_requests",
+        message: expect.stringContaining("Rate limit"),
+      },
     });
     expect(res.headers["retry-after"]).toBeDefined();
   });

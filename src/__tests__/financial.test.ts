@@ -27,8 +27,8 @@ describe("createDefaultFinancialInput", () => {
     expect(input.system_capacity_kw).toBe(500);
     expect(input.installation_cost).toBe(500_000);
     expect(input.annual_maintenance_cost).toBe(7500);
-    expect(input.annual_energy_output_kwh).toBe(500 * 8760 * 0.20);
-    expect(input.electricity_price_per_kwh).toBe(0.10);
+    expect(input.annual_energy_output_kwh).toBe(500 * 8760 * 0.2);
+    expect(input.electricity_price_per_kwh).toBe(0.1);
     expect(input.degradation_rate).toBe(0.005);
     expect(input.discount_rate).toBe(0.07);
     expect(input.project_lifetime_years).toBe(25);
@@ -177,8 +177,14 @@ describe("compareROI", () => {
 
   it("ranks by ROI descending", () => {
     const result = compareROI([
-      { project_id: 1, input: createDefaultFinancialInput(500, 80, { installation_cost: 100_000 }) },
-      { project_id: 2, input: createDefaultFinancialInput(500, 80, { installation_cost: 1_000_000 }) },
+      {
+        project_id: 1,
+        input: createDefaultFinancialInput(500, 80, { installation_cost: 100_000 }),
+      },
+      {
+        project_id: 2,
+        input: createDefaultFinancialInput(500, 80, { installation_cost: 1_000_000 }),
+      },
     ]);
     expect(result.rankings.by_roi[0].project_id).toBe(1);
     expect(result.rankings.by_roi[0].roi_pct).toBeGreaterThan(result.rankings.by_roi[1].roi_pct);
@@ -186,8 +192,14 @@ describe("compareROI", () => {
 
   it("ranks by payback ascending", () => {
     const result = compareROI([
-      { project_id: 1, input: createDefaultFinancialInput(500, 80, { installation_cost: 100_000 }) },
-      { project_id: 2, input: createDefaultFinancialInput(500, 80, { installation_cost: 1_000_000 }) },
+      {
+        project_id: 1,
+        input: createDefaultFinancialInput(500, 80, { installation_cost: 100_000 }),
+      },
+      {
+        project_id: 2,
+        input: createDefaultFinancialInput(500, 80, { installation_cost: 1_000_000 }),
+      },
     ]);
     expect(result.rankings.by_payback[0].payback_years).toBeLessThanOrEqual(
       result.rankings.by_payback[1].payback_years,
@@ -203,9 +215,7 @@ describe("financial API routes", () => {
   });
 
   it("GET /api/financial/cost-benefit/:id — returns cost/benefit analysis", async () => {
-    const res = await request(app)
-      .get("/api/financial/cost-benefit/1")
-      .expect(200);
+    const res = await request(app).get("/api/financial/cost-benefit/1").expect(200);
     expect(res.body).toHaveProperty("total_installation_cost");
     expect(res.body).toHaveProperty("total_revenue");
     expect(res.body).toHaveProperty("net_benefit");
@@ -215,16 +225,12 @@ describe("financial API routes", () => {
   });
 
   it("GET /api/financial/cost-benefit/:id — 400 for invalid id", async () => {
-    const res = await request(app)
-      .get("/api/financial/cost-benefit/abc")
-      .expect(400);
-    expect(res.body.error).toBe("bad_request");
+    const res = await request(app).get("/api/financial/cost-benefit/abc").expect(400);
+    expect(res.body.error.code).toBe("bad_request");
   });
 
   it("GET /api/financial/payback/:id — returns payback period", async () => {
-    const res = await request(app)
-      .get("/api/financial/payback/1")
-      .expect(200);
+    const res = await request(app).get("/api/financial/payback/1").expect(200);
     expect(res.body).toHaveProperty("payback_years");
     expect(res.body).toHaveProperty("simple_payback_years");
     expect(res.body).toHaveProperty("discounted_payback_years");
@@ -234,9 +240,7 @@ describe("financial API routes", () => {
   });
 
   it("GET /api/financial/npv/:id — returns NPV calculation", async () => {
-    const res = await request(app)
-      .get("/api/financial/npv/1")
-      .expect(200);
+    const res = await request(app).get("/api/financial/npv/1").expect(200);
     expect(res.body).toHaveProperty("npv");
     expect(res.body).toHaveProperty("irr");
     expect(res.body).toHaveProperty("profitability_index");
@@ -245,9 +249,7 @@ describe("financial API routes", () => {
   });
 
   it("GET /api/financial/sensitivity/:id — returns sensitivity analysis", async () => {
-    const res = await request(app)
-      .get("/api/financial/sensitivity/1")
-      .expect(200);
+    const res = await request(app).get("/api/financial/sensitivity/1").expect(200);
     expect(res.body).toHaveProperty("base_case");
     expect(res.body).toHaveProperty("sensitivities");
     expect(res.body.base_case).toHaveProperty("npv");
@@ -259,9 +261,7 @@ describe("financial API routes", () => {
   });
 
   it("GET /api/financial/roi-comparison — compares ROI across projects", async () => {
-    const res = await request(app)
-      .get("/api/financial/roi-comparison?ids=1,2,3")
-      .expect(200);
+    const res = await request(app).get("/api/financial/roi-comparison?ids=1,2,3").expect(200);
     expect(res.body).toHaveProperty("comparison");
     expect(res.body).toHaveProperty("rankings");
     expect(res.body.comparison).toHaveLength(3);
@@ -272,17 +272,13 @@ describe("financial API routes", () => {
   });
 
   it("GET /api/financial/roi-comparison — 400 for missing ids", async () => {
-    const res = await request(app)
-      .get("/api/financial/roi-comparison")
-      .expect(400);
-    expect(res.body.error).toBe("bad_request");
+    const res = await request(app).get("/api/financial/roi-comparison").expect(400);
+    expect(res.body.error.code).toBe("bad_request");
   });
 
   it("GET /api/financial/roi-comparison — 400 for invalid id", async () => {
-    const res = await request(app)
-      .get("/api/financial/roi-comparison?ids=abc")
-      .expect(400);
-    expect(res.body.error).toBe("bad_request");
+    const res = await request(app).get("/api/financial/roi-comparison?ids=abc").expect(400);
+    expect(res.body.error.code).toBe("bad_request");
   });
 
   it("accepts optional query parameters to override defaults", async () => {
@@ -309,9 +305,7 @@ describe("financial API routes", () => {
 
   it("GET /api/financial/roi-comparison — 400 for too many ids", async () => {
     const ids = Array.from({ length: 21 }, (_, i) => i + 1).join(",");
-    const res = await request(app)
-      .get(`/api/financial/roi-comparison?ids=${ids}`)
-      .expect(400);
-    expect(res.body.error).toBe("bad_request");
+    const res = await request(app).get(`/api/financial/roi-comparison?ids=${ids}`).expect(400);
+    expect(res.body.error.code).toBe("bad_request");
   });
 });

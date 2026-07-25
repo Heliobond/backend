@@ -1,9 +1,9 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { getSolarData } from "./iot";
+import { getSolarData } from "../lib/iot";
 import { fetchSatelliteWithFallback } from "../lib/satellite-sources";
 import { computeScores } from "../lib/scoring";
 import { updateImpactScore, getTotalProjects } from "../lib/registry";
-import { ApiError, badRequest, parseOptionalInt } from "../middleware/errors";
+import { ApiError, badRequest, parseOptionalInt, errorBody } from "../middleware/errors";
 import { recordAudit, getAuditLog, auditToCsv } from "../lib/audit";
 import { broadcastScoreUpdate } from "../lib/websocket";
 import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
@@ -18,12 +18,12 @@ const router = Router();
 router.use((req: Request, res: Response, next: NextFunction) => {
   const apiKey = config.ADMIN_API_KEY;
   if (!apiKey) {
-    return res.status(500).json({ error: "server misconfigured" });
+    return res
+      .status(500)
+      .json(errorBody("server_misconfigured", "Admin API key is not configured"));
   }
   if (req.headers.authorization !== `Bearer ${apiKey}`) {
-    return res
-      .status(401)
-      .json({ error: "unauthorized", message: "Missing or invalid bearer token" });
+    return res.status(401).json(errorBody("unauthorized", "Missing or invalid bearer token"));
   }
   next();
 });
@@ -73,7 +73,7 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
       credit_quality: number;
       green_impact: number;
     }> = [];
-    const errors: Array<{ project_id: number; error: string }> = [];
+    const errors: Array<{ project_id: number; error: { code: string; message: string } }> = [];
     const skipped: Array<{ project_id: number; reason: string }> = [];
 
     // Soroban does not support multi-call batching — submit sequentially.
@@ -146,7 +146,6 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
             green_impact: number;
           };
           results.push(r);
-          results.push(result as any);
         }
       } catch (err) {
         logger.error(`[oracle] project ${projectId} failed`, logger.formatError(err));

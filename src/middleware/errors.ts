@@ -1,10 +1,23 @@
 import { Request, Response, NextFunction } from "express";
 
 /**
+ * Standard error response shape returned by `errorHandler` and any route that
+ * reports an error directly: `{ error: { code, message } }`. `code` is a
+ * stable, machine-readable identifier; `message` is human-readable.
+ */
+export interface ErrorBody {
+  error: { code: string; message: string };
+}
+
+export function errorBody(code: string, message: string): ErrorBody {
+  return { error: { code, message } };
+}
+
+/**
  * Structured API error. Thrown from anywhere in a route handler (sync or async)
- * and rendered as `{ error, message }` JSON by `errorHandler`.
+ * and rendered as `{ error: { code, message } }` JSON by `errorHandler`.
  *
- * `error` is a stable, machine-readable code; `message` is human-readable.
+ * `code` is a stable, machine-readable identifier; `message` is human-readable.
  */
 export class ApiError extends Error {
   readonly status: number;
@@ -45,7 +58,7 @@ export function parseProjectId(raw: string | string[] | undefined, field = "id")
 export function parseOptionalInt(
   raw: string | string[] | undefined,
   field: string,
-  fallback: number
+  fallback: number,
 ): number {
   if (raw === undefined) return fallback;
   const value = Array.isArray(raw) ? raw[0] : raw;
@@ -58,10 +71,7 @@ export function parseOptionalInt(
 
 /** JSON 404 for unmatched routes — keeps clients off Express' HTML default. */
 export function notFoundHandler(req: Request, res: Response): void {
-  res.status(404).json({
-    error: "not_found",
-    message: `Cannot ${req.method} ${req.originalUrl}`,
-  });
+  res.status(404).json(errorBody("not_found", `Cannot ${req.method} ${req.originalUrl}`));
 }
 
 /**
@@ -72,21 +82,21 @@ export function errorHandler(
   err: unknown,
   _req: Request,
   res: Response,
-  _next: NextFunction
+  _next: NextFunction,
 ): void {
   if (res.headersSent) return;
 
   if (err instanceof ApiError) {
-    res.status(err.status).json({ error: err.code, message: err.message });
+    res.status(err.status).json(errorBody(err.code, err.message));
     return;
   }
 
   // Body parser raises a SyntaxError (with a `body` field) on malformed JSON.
   if (err instanceof SyntaxError && "body" in err) {
-    res.status(400).json({ error: "bad_request", message: "Request body is not valid JSON" });
+    res.status(400).json(errorBody("bad_request", "Request body is not valid JSON"));
     return;
   }
 
   console.error("[error]", err);
-  res.status(500).json({ error: "internal_error", message: "An unexpected error occurred" });
+  res.status(500).json(errorBody("internal_error", "An unexpected error occurred"));
 }
