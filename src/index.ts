@@ -64,6 +64,7 @@ import { versionHeaders, acceptVersion, deprecationHeaders } from "./middleware/
 import { runWithCorrelationId, generateCorrelationId } from "./lib/correlation";
 import { logger } from "./lib/logger";
 import { getTraces, getTraceSummary } from "./lib/tracer";
+import { tracingMiddleware } from "./middleware/tracing";
 import { withProjectLock } from "./lib/request-queue";
 import { checkScheduledRotations } from "./lib/apiKeys";
 import { ipWhitelist } from "./middleware/ipWhitelist";
@@ -72,6 +73,10 @@ import { initApm } from "./lib/apm";
 import { csrfProtection, setCsrfCookie } from "./middleware/csrf";
 import { startSecretRotation, stopSecretRotation, getSecretsStatus } from "./lib/secrets";
 import { setLogLevel, getLogLevel } from "./lib/logger";
+import { getMigrationStatus, runMigrations, rollbackMigration } from "./lib/migrations";
+import { featureFlagContext, registerFlagRoutes } from "./middleware/featureFlags";
+import { loadFlags, getFlagAnalytics } from "./lib/feature-flags";
+import { compressionMiddleware, getCompressionMetrics } from "./middleware/compression";
 
 dotenv.config();
 const env = initEnv();
@@ -94,16 +99,22 @@ const CRON_TIMEZONE = process.env.CRON_TIMEZONE ?? "UTC";
 // 100% failure is always recorded as an error regardless of this threshold.
 const CRON_FAILURE_THRESHOLD = parseFloat(process.env.CRON_FAILURE_THRESHOLD ?? "0.5");
 
+app.use(tracingMiddleware);
 app.use(securityHeaders);
 app.use(permissionsHeaders);
 app.use(cors({ origin: env.FRONTEND_URL }));
+app.use(compressionMiddleware({
+  threshold: parseInt(process.env.COMPRESSION_THRESHOLD ?? "1024", 10),
+  level: parseInt(process.env.COMPRESSION_LEVEL ?? "6", 10),
+}));
 app.use(express.json());
 app.use(sanitizeInputs);
 app.use(csrfProtection);
 app.use(requestLogger);
+app.use(featureFlagContext);
 
 // ── Liveness ────────────────────────────────────────────────────────────────
-app.get("/health", (_req, res) => res.json(getHealth()));
+app.get("/health", async (_req, res) => res.json(await getHealth()));
 
 // ── Readiness ────────────────────────────────────────────────────────────────
 app.get("/ready", (_req, res) => {
@@ -114,6 +125,11 @@ app.get("/ready", (_req, res) => {
 // ── Metrics dashboard ────────────────────────────────────────────────────────
 app.get("/v1/metrics", adminLimiter, (_req, res) => {
   res.json(getMetrics());
+});
+
+// ── Compression metrics ────────────────────────────────────────────────────
+app.get("/v1/admin/compression", ipWhitelist, adminLimiter, (_req, res) => {
+  res.json(getCompressionMetrics());
 });
 
 // ── Trace export ─────────────────────────────────────────────────────────────
@@ -137,6 +153,34 @@ app.get("/v1/admin/secrets/status", ipWhitelist, adminLimiter, (_req, res) => {
   res.json(getSecretsStatus());
 });
 
+// ── Migration management ──────────────────────────────────────────────────
+app.get("/v1/admin/migrations", ipWhitelist, adminLimiter, async (_req, res, next) => {
+  try {
+    const status = await getMigrationStatus();
+    res.json(status);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/v1/admin/migrations/up", ipWhitelist, adminLimiter, async (_req, res, next) => {
+  try {
+    const result = await runMigrations();
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/v1/admin/migrations/rollback", ipWhitelist, adminLimiter, async (_req, res, next) => {
+  try {
+    const result = await rollbackMigration();
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ── Log level management ───────────────────────────────────────────────────
 app.get("/v1/admin/logging/level", ipWhitelist, adminLimiter, (_req, res) => {
   res.json({ level: getLogLevel() });
@@ -155,6 +199,16 @@ app.put("/v1/admin/logging/level", ipWhitelist, adminLimiter, (req, res) => {
     res.status(400).json({ error: "invalid_level", message: err.message });
   }
 });
+
+// ── Feature flag analytics ───────────────────────────────────────────────
+app.get("/v1/admin/feature-flags/analytics", ipWhitelist, adminLimiter, (_req, res) => {
+  res.json(getFlagAnalytics());
+});
+
+// Register feature flag CRUD routes under /v1/admin
+const flagAdminRouter = express.Router();
+registerFlagRoutes(flagAdminRouter);
+app.use("/v1/admin", ipWhitelist, adminLimiter, flagAdminRouter);
 
 // ── v1 routes (current) ──────────────────────────────────────────────────────
 const v1 = express.Router();

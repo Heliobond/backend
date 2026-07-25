@@ -2,6 +2,8 @@ import { rpcPool, rpcBreaker, getRpcStatus } from "./stellar";
 import type { PoolMetrics } from "./db-pool";
 import type { BreakerMetrics } from "./circuit-breaker";
 import { getSourceHealth, getOutageState, getCacheStats } from "./satellite-sources";
+import { getMigrationHealth } from "./migrations";
+import { listFlags } from "./feature-flags";
 
 const startedAt = Date.now();
 
@@ -34,9 +36,11 @@ export interface HealthReport {
   circuit_breaker: BreakerMetrics;
   rpc_status: ReturnType<typeof getRpcStatus>;
   satellite_data: SatelliteHealthReport;
+  migrations: Awaited<ReturnType<typeof getMigrationHealth>>;
+  feature_flags: { loaded_count: number };
 }
 
-export function getHealth(): HealthReport {
+export async function getHealth(): Promise<HealthReport> {
   return {
     status: "ok",
     uptime_seconds: Math.floor((Date.now() - startedAt) / 1000),
@@ -50,6 +54,8 @@ export function getHealth(): HealthReport {
       cache: getCacheStats(),
       outage: getOutageState(),
     },
+    migrations: await getMigrationHealth(),
+    feature_flags: { loaded_count: Object.keys(listFlags()).length },
   };
 }
 

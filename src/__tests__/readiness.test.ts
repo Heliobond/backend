@@ -7,7 +7,7 @@ describe("Health and Readiness Endpoints", () => {
 
   beforeAll(() => {
     app = express();
-    app.get("/health", (_req, res) => res.json(getHealth()));
+    app.get("/health", async (_req, res) => res.json(await getHealth()));
     app.get("/ready", (_req, res) => {
       const readiness = getReadiness();
       res.status(readiness.status === "ready" ? 200 : 503).json(readiness);
