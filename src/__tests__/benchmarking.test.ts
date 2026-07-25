@@ -24,9 +24,7 @@ describe("benchmarking routes", () => {
   });
 
   it("GET /api/benchmarking/benchmarks — lists all benchmarks", async () => {
-    const res = await request(app)
-      .get("/api/benchmarking/benchmarks")
-      .expect(200);
+    const res = await request(app).get("/api/benchmarking/benchmarks").expect(200);
     expect(res.body.benchmarks).toBeInstanceOf(Array);
     expect(res.body.benchmarks.length).toBeGreaterThanOrEqual(5);
     expect(res.body.benchmarks[0]).toHaveProperty("id");
@@ -34,18 +32,14 @@ describe("benchmarking routes", () => {
   });
 
   it("GET /api/benchmarking/benchmarks/:id — returns a benchmark", async () => {
-    const res = await request(app)
-      .get("/api/benchmarking/benchmarks/credit_quality")
-      .expect(200);
+    const res = await request(app).get("/api/benchmarking/benchmarks/credit_quality").expect(200);
     expect(res.body.id).toBe("credit_quality");
     expect(res.body).toHaveProperty("thresholds");
   });
 
   it("GET /api/benchmarking/benchmarks/:id — 404 for unknown benchmark", async () => {
-    const res = await request(app)
-      .get("/api/benchmarking/benchmarks/nonexistent")
-      .expect(400);
-    expect(res.body.error).toBe("bad_request");
+    const res = await request(app).get("/api/benchmarking/benchmarks/nonexistent").expect(400);
+    expect(res.body.error.code).toBe("bad_request");
   });
 
   it("POST /api/benchmarking/benchmarks — creates a custom benchmark", async () => {
@@ -67,13 +61,11 @@ describe("benchmarking routes", () => {
       .post("/api/benchmarking/benchmarks")
       .send({ name: "Incomplete" })
       .expect(400);
-    expect(res.body.error).toBe("bad_request");
+    expect(res.body.error.code).toBe("bad_request");
   });
 
   it("GET /api/benchmarking/:id — evaluates all benchmarks for a project", async () => {
-    const res = await request(app)
-      .get("/api/benchmarking/1")
-      .expect(200);
+    const res = await request(app).get("/api/benchmarking/1").expect(200);
     expect(res.body.project_id).toBe(1);
     expect(res.body.benchmarks).toBeInstanceOf(Array);
     expect(res.body.benchmarks.length).toBeGreaterThanOrEqual(5);
@@ -91,9 +83,7 @@ describe("benchmarking routes", () => {
   });
 
   it("GET /api/benchmarking/:id/alerts — returns benchmark alerts", async () => {
-    const res = await request(app)
-      .get("/api/benchmarking/1/alerts")
-      .expect(200);
+    const res = await request(app).get("/api/benchmarking/1/alerts").expect(200);
     expect(res.body.project_id).toBe(1);
     expect(res.body.alerts).toBeInstanceOf(Array);
     expect(res.body).toHaveProperty("count");
@@ -111,8 +101,6 @@ describe("benchmarking routes", () => {
   });
 
   it("GET /api/benchmarking/:id — 400 for invalid id", async () => {
-    await request(app)
-      .get("/api/benchmarking/abc")
-      .expect(400);
+    await request(app).get("/api/benchmarking/abc").expect(400);
   });
 });

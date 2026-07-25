@@ -1,7 +1,4 @@
-import { Router, Request, Response, NextFunction } from "express";
-import { parseProjectId } from "../middleware/errors";
-import { fetchSatelliteWithFallback } from "../lib/satellite-sources";
-import { getSolarData, getSatelliteData } from "../lib/iot";
+import { logger } from "./logger";
 
 const MAX_POWER_KW = 1000;
 const DEFAULT_EFFICIENCY_PCT = 60;
@@ -28,8 +25,14 @@ function getHourSeed(): number {
       timeZone: CRON_TIMEZONE,
     });
     const parts = formatter.formatToParts(now);
-    const get = (type: string) => parseInt(parts.find((p) => p.type === type)?.value ?? "0", 10);
-    return (get("year") * 10000 + get("month") * 100 + get("day")) * 24 + get("hour");
+    const get = (type: string): number => {
+      const val = parts.find((p) => p.type === type)?.value;
+      const parsed = parseInt(val ?? "0", 10);
+      return Number.isNaN(parsed) ? 0 : parsed;
+    };
+
+    const seed = (get("year") * 10000 + get("month") * 100 + get("day")) * 24 + get("hour");
+    return Number.isNaN(seed) ? Math.floor(Date.now() / 3_600_000) : seed;
   } catch (error) {
     logger.error("Invalid CRON_TIMEZONE configuration, falling back to UTC epoch hours", {
       CRON_TIMEZONE,
@@ -77,10 +80,7 @@ export function getSolarData(projectId: number) {
     });
   }
 
-  const safeBase = Number.isNaN(base) ? 0 : base;
-  const safeDrift = Number.isNaN(drift) ? 0 : drift;
-
-  const efficiency_pct = Math.min(98, Math.max(40, 40 + safeBase * 58 + safeDrift * 2 - 1));
+  const efficiency_pct = Math.min(98, Math.max(40, 40 + base * 58 + drift * 2 - 1));
   const power_output_kw = (efficiency_pct / 100) * MAX_POWER_KW;
 
   return {
@@ -112,37 +112,10 @@ export function getSatelliteData(projectId: number) {
     });
   }
 
-  const safeBase = Number.isNaN(base) ? 0 : base;
-  const safeDrift = Number.isNaN(drift) ? 0 : drift;
-
-  const forest_density_pct = Math.min(100, Math.max(0, 30 + safeBase * 65 + safeDrift * 5 - 2.5));
+  const forest_density_pct = Math.min(100, Math.max(0, 30 + base * 65 + drift * 5 - 2.5));
   return {
     forest_density_pct: Math.round(forest_density_pct * 100) / 100,
     ndvi_score: Math.round(Math.min(1, forest_density_pct / 100) * 1000) / 1000,
     timestamp: Date.now(),
   };
 }
-export { getSolarData, getSatelliteData };
-
-const router = Router();
-
-router.get("/solar/:id", (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const id = parseProjectId(req.params.id, "project id");
-    res.json(getSolarData(id));
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.get("/satellite/:id", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const id = parseProjectId(req.params.id, "project id");
-    const data = await fetchSatelliteWithFallback(id);
-    res.json(data);
-  } catch (err) {
-    next(err);
-  }
-});
-
-export default router;

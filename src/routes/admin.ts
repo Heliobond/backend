@@ -1,27 +1,29 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { getSolarData } from "./iot";
+import { getSolarData } from "../lib/iot";
 import { fetchSatelliteWithFallback } from "../lib/satellite-sources";
 import { computeScores } from "../lib/scoring";
 import { updateImpactScore, getTotalProjects } from "../lib/registry";
-import { ApiError, badRequest, parseOptionalInt } from "../middleware/errors";
+import { ApiError, badRequest, parseOptionalInt, errorBody } from "../middleware/errors";
 import { recordAudit, getAuditLog, auditToCsv } from "../lib/audit";
 import { broadcastScoreUpdate } from "../lib/websocket";
 import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
 import { RpcDegradedError } from "../lib/registry";
 import { withProjectLock } from "../lib/request-queue";
+import { config } from "../config";
+import { logger } from "../lib/logger";
 
 const router = Router();
 
 // Bearer token auth — enforced when ADMIN_API_KEY env var is set
 router.use((req: Request, res: Response, next: NextFunction) => {
-  const apiKey = process.env.ADMIN_API_KEY;
+  const apiKey = config.ADMIN_API_KEY;
   if (!apiKey) {
-    return res.status(500).json({ error: "server misconfigured" });
+    return res
+      .status(500)
+      .json(errorBody("server_misconfigured", "Admin API key is not configured"));
   }
   if (req.headers.authorization !== `Bearer ${apiKey}`) {
-    return res
-      .status(401)
-      .json({ error: "unauthorized", message: "Missing or invalid bearer token" });
+    return res.status(401).json(errorBody("unauthorized", "Missing or invalid bearer token"));
   }
   next();
 });
@@ -71,7 +73,7 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
       credit_quality: number;
       green_impact: number;
     }> = [];
-    const errors: Array<{ project_id: number; error: string }> = [];
+    const errors: Array<{ project_id: number; error: { code: string; message: string } }> = [];
     const skipped: Array<{ project_id: number; reason: string }> = [];
 
     // Soroban does not support multi-call batching — submit sequentially.
@@ -89,7 +91,7 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
             const solar = getSolarData(projectId);
             const satellite = await fetchSatelliteWithFallback(projectId);
             if (satellite.dataSource !== "live") {
-              console.warn(
+              logger.warn(
                 `[oracle] project ${projectId}: satellite data degraded (dataSource=${satellite.dataSource})`,
               );
             }
@@ -103,7 +105,7 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
               );
             } catch (updateErr) {
               if (updateErr instanceof RpcDegradedError) {
-                console.warn(`[oracle] project ${projectId}: RPC degraded, score queued for later`);
+                logger.warn(`[oracle] project ${projectId}: RPC degraded, score queued for later`);
                 markCompleted(projectId);
                 return { project_id: projectId, tx_hash: "deferred", ...scores };
               }
@@ -123,7 +125,7 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
               green_impact: scores.green_impact,
               timestamp: Date.now(),
             });
-            console.log(
+            logger.info(
               `[oracle] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`,
             );
             return { project_id: projectId, tx_hash, ...scores };
@@ -135,7 +137,7 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
 
         if (result.skipped) {
           skipped.push({ project_id: projectId, reason: result.reason });
-          console.log(`[oracle] skipping project ${projectId}: ${result.reason}`);
+          logger.info(`[oracle] skipping project ${projectId}: ${result.reason}`);
         } else {
           const r = result as {
             project_id: number;
@@ -146,7 +148,7 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
           results.push(r);
         }
       } catch (err) {
-        console.error(`[oracle] project ${projectId} failed:`, err);
+        logger.error(`[oracle] project ${projectId} failed`, logger.formatError(err));
         errors.push({ project_id: projectId, error: String(err) });
       }
     }

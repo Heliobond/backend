@@ -1,8 +1,7 @@
 import express from "express";
 import cors from "cors";
 import cron from "node-cron";
-import dotenv from "dotenv";
-import { initEnv } from "./lib/env";
+import { config, initEnv } from "./config";
 import swaggerUi from "swagger-ui-express";
 import iotRouter from "./routes/iot";
 import adminRouter from "./routes/admin";
@@ -31,7 +30,7 @@ import apiKeysRouter from "./routes/apiKeys";
 import { createHandler } from "graphql-http/lib/use/express";
 import { graphqlSchema, graphqlRoot, createGraphQLContext } from "./graphql/schema";
 import { startGrpcServer } from "./grpc/server";
-import { getSolarData } from "./routes/iot";
+import { getSolarData } from "./lib/iot";
 import { fetchSatelliteWithFallback } from "./lib/satellite-sources";
 import { computeScores } from "./lib/scoring";
 import { updateImpactScore, getTotalProjects, RpcDegradedError } from "./lib/registry";
@@ -78,14 +77,15 @@ import { featureFlagContext, registerFlagRoutes } from "./middleware/featureFlag
 import { loadFlags, getFlagAnalytics } from "./lib/feature-flags";
 import { compressionMiddleware, getCompressionMetrics } from "./middleware/compression";
 
-dotenv.config();
 const env = initEnv();
 
 // Initialize APM before any other imports
 await initApm();
 
 if (!process.env.ADMIN_API_KEY) {
-  console.warn("[startup] WARNING: ADMIN_API_KEY is not set. Admin endpoints will return 500 errors.");
+  console.warn(
+    "[startup] WARNING: ADMIN_API_KEY is not set. Admin endpoints will return 500 errors.",
+  );
 }
 
 const app = express();
@@ -93,11 +93,11 @@ const PORT = env.PORT;
 
 // Timezone for all cron schedules. Defaults to UTC so behaviour is identical
 // across servers regardless of OS locale. Override with e.g. CRON_TIMEZONE=America/New_York.
-const CRON_TIMEZONE = process.env.CRON_TIMEZONE ?? "UTC";
+const CRON_TIMEZONE = config.CRON_TIMEZONE;
 
 // Fraction of projects that must fail before we escalate to a warning.
 // 100% failure is always recorded as an error regardless of this threshold.
-const CRON_FAILURE_THRESHOLD = parseFloat(process.env.CRON_FAILURE_THRESHOLD ?? "0.5");
+const CRON_FAILURE_THRESHOLD = config.CRON_FAILURE_THRESHOLD;
 
 app.use(tracingMiddleware);
 app.use(securityHeaders);
@@ -276,12 +276,12 @@ scheduleCron(
   async () => {
     if (isShuttingDown) return;
     try {
-      console.log("[cron] indexing new events");
+      logger.info("[cron] indexing new events");
       await indexer.poll();
       recordCronRun("indexer", "success");
     } catch (err) {
       if (!isErrorRateLimited("cron:indexer")) {
-        console.error("[cron] indexer poll failed:", err);
+        logger.error("[cron] indexer poll failed", logger.formatError(err));
       }
       recordCronRun("indexer", "error");
     }
@@ -290,12 +290,22 @@ scheduleCron(
 );
 
 // ── Cron: hourly score update ────────────────────────────────────────────────
+// Guards against overlapping runs: with many projects and sequential Soroban
+// transactions, a run can take longer than the 1-hour schedule interval. Without
+// this lock, an overlapping invocation could submit duplicate on-chain updates.
+let isScoreUpdateRunning = false;
+
 scheduleCron(
   "0 * * * *",
   async () => {
     if (isShuttingDown) return;
+    if (isScoreUpdateRunning) {
+      logger.warn("[cron] hourly score update already in progress, skipping this run");
+      return;
+    }
+    isScoreUpdateRunning = true;
     try {
-      console.log("[cron] running hourly score update");
+      logger.info("[cron] running hourly score update");
       const total = await getTotalProjects();
       const projectIds = Array.from({ length: total }, (_, i) => i + 1);
 
@@ -306,7 +316,7 @@ scheduleCron(
         await withProjectLock(projectId, async () => {
           const { allowed, key, reason } = tryBeginUpdate(projectId);
           if (!allowed) {
-            console.log(`[cron] skipping project ${projectId}: ${reason}`);
+            logger.info(`[cron] skipping project ${projectId}: ${reason}`);
             return;
           }
           try {
@@ -329,7 +339,7 @@ scheduleCron(
               );
             } catch (updateErr) {
               if (updateErr instanceof RpcDegradedError) {
-                console.warn(`[cron] project ${projectId}: RPC degraded, score queued for later`);
+                logger.warn(`[cron] project ${projectId}: RPC degraded, score queued for later`);
                 enqueue(projectId, scores.credit_quality, scores.green_impact, "RPC degraded");
               } else {
                 throw updateErr;
@@ -362,11 +372,11 @@ scheduleCron(
             });
             broadcastScoreUpdate({ project_id: projectId, ...scores, timestamp });
             if (tx_hash) {
-              console.log(
+              logger.info(
                 `[cron] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`,
               );
             } else {
-              console.log(
+              logger.info(
                 `[cron] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} (queued)`,
               );
             }
@@ -376,7 +386,7 @@ scheduleCron(
           } catch (err) {
             markFailed(projectId);
             if (!isErrorRateLimited(`cron:project-${projectId}`)) {
-              console.error(`[cron] project ${projectId} failed:`, err);
+              logger.error(`[cron] project ${projectId} failed`, logger.formatError(err));
             }
             failureCount++;
           }
@@ -388,14 +398,14 @@ scheduleCron(
 
       if (totalProcessed > 0 && failureCount === totalProcessed) {
         // All attempted projects failed — likely a systemic RPC or contract issue.
-        console.error(
+        logger.error(
           `[cron] ALERT: ALL ${failureCount} projects failed in score-update batch — ` +
             `check Soroban RPC connectivity and contract state`,
         );
         recordCronRun("score-update", "error");
       } else {
         if (failureCount > 0 && failureRate >= CRON_FAILURE_THRESHOLD) {
-          console.error(
+          logger.error(
             `[cron] WARN: high failure rate in score-update batch: ` +
               `${failureCount}/${totalProcessed} (${(failureRate * 100).toFixed(1)}%)`,
           );
@@ -408,6 +418,8 @@ scheduleCron(
         logger.error("[cron] score update failed", { error: err?.message });
       }
       recordCronRun("score-update", "error");
+    } finally {
+      isScoreUpdateRunning = false;
     }
   },
   { timezone: CRON_TIMEZONE },
@@ -421,11 +433,11 @@ scheduleCron(
     if (getQueueSize() === 0) return;
 
     if (!isRpcAvailable()) {
-      console.log(`[cron] tx-queue: RPC unavailable, ${getQueueSize()} transactions pending`);
+      logger.info(`[cron] tx-queue: RPC unavailable, ${getQueueSize()} transactions pending`);
       return;
     }
 
-    console.log(`[cron] tx-queue: processing ${getQueueSize()} queued transactions`);
+    logger.info(`[cron] tx-queue: processing ${getQueueSize()} queued transactions`);
     const maxRetries = 10;
     const processed: number[] = [];
 
@@ -444,7 +456,7 @@ scheduleCron(
           fresh.green_impact,
         );
         processed.push(item.projectId);
-        console.log(
+        logger.info(
           `[cron] tx-queue: project ${item.projectId} retried successfully tx=${tx_hash}`,
         );
       } catch (err) {
@@ -452,12 +464,12 @@ scheduleCron(
         incrementRetry(item.projectId, errMsg);
 
         if (hasExceededMaxRetries(item.projectId)) {
-          console.error(
+          logger.error(
             `[cron] tx-queue: project ${item.projectId} exceeded max retries (${maxRetries}), dropping`,
           );
           remove(item.projectId);
         } else {
-          console.warn(
+          logger.warn(
             `[cron] tx-queue: project ${item.projectId} retry failed (attempt ${item.retryCount + 1}), will retry`,
           );
         }
@@ -465,7 +477,7 @@ scheduleCron(
     }
 
     if (processed.length > 0) {
-      console.log(`[cron] tx-queue: successfully retried ${processed.length} transactions`);
+      logger.info(`[cron] tx-queue: successfully retried ${processed.length} transactions`);
     }
   },
   { timezone: CRON_TIMEZONE },
@@ -478,7 +490,7 @@ scheduleCron(
     if (isShuttingDown) return;
     if (isRpcOutageExtended(300_000)) {
       const status = getRpcStatus();
-      console.error(
+      logger.error(
         `[alert] Stellar RPC outage detected: ` +
           `consecutiveFailures=${status.consecutiveFailures}, ` +
           `outageDurationMs=${status.outageDurationMs}, ` +
@@ -562,7 +574,11 @@ startGrpcServer(50051);
 // Track all scheduled cron tasks so we can stop them cleanly.
 const cronTasks: cron.ScheduledTask[] = [];
 
-function scheduleCron(expression: string, fn: () => void | Promise<void>, opts?: { timezone?: string }): void {
+function scheduleCron(
+  expression: string,
+  fn: () => void | Promise<void>,
+  opts?: { timezone?: string },
+): void {
   const task = cron.schedule(expression, fn, opts);
   cronTasks.push(task);
 }
@@ -573,31 +589,48 @@ async function gracefulShutdown(signal: string): Promise<void> {
   if (isShuttingDown) return;
   isShuttingDown = true;
 
-  logger.info(`[${signal}] graceful shutdown initiated`);
+  const shutdownTimeoutMs = config.SHUTDOWN_TIMEOUT_MS;
+  logger.info(`[${signal}] graceful shutdown initiated (timeout: ${shutdownTimeoutMs}ms)`);
 
-  // 1. Stop accepting new HTTP requests
-  logger.info("[shutdown] closing HTTP server (draining in-flight requests)…");
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  logger.info("[shutdown] HTTP server closed");
+  const shutdownPromise = (async () => {
+    // 1. Stop accepting new HTTP requests
+    logger.info("[shutdown] closing HTTP server (draining in-flight requests)…");
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    logger.info("[shutdown] HTTP server closed");
 
-  // 2. Stop all cron jobs so no new work starts
-  logger.info(`[shutdown] stopping ${cronTasks.length} cron jobs…`);
-  for (const task of cronTasks) {
-    task.stop();
-  }
-  logger.info("[shutdown] cron jobs stopped");
+    // 2. Stop all cron jobs so no new work starts
+    logger.info(`[shutdown] stopping ${cronTasks.length} cron jobs…`);
+    for (const task of cronTasks) {
+      task.stop();
+    }
+    logger.info("[shutdown] cron jobs stopped");
 
-  // 3. Drain the RPC connection pool (waits up to 10 s for active connections)
-  logger.info("[shutdown] draining RPC connection pool…");
+    // 3. Drain the RPC connection pool (waits up to 10 s for active connections)
+    logger.info("[shutdown] draining RPC connection pool…");
+    try {
+      await rpcPool.shutdown();
+      logger.info("[shutdown] connection pool drained");
+    } catch (err: any) {
+      logger.error("[shutdown] pool drain error", { error: err?.message });
+    }
+
+    logger.info("[shutdown] clean exit");
+    process.exit(0);
+  })();
+
+  // Apply overall shutdown timeout — force exit if graceful cleanup takes too long
+  const timeoutPromise = new Promise<void>((_, reject) => {
+    setTimeout(() => {
+      reject(new Error(`Shutdown timed out after ${shutdownTimeoutMs}ms`));
+    }, shutdownTimeoutMs);
+  });
+
   try {
-    await rpcPool.shutdown();
-    logger.info("[shutdown] connection pool drained");
+    await Promise.race([shutdownPromise, timeoutPromise]);
   } catch (err: any) {
-    logger.error("[shutdown] pool drain error", { error: err?.message });
+    logger.error("[shutdown] forced exit", { error: err?.message });
+    process.exit(1);
   }
-
-  logger.info("[shutdown] clean exit");
-  process.exit(0);
 }
 
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
