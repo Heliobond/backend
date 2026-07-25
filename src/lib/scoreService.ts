@@ -2,27 +2,20 @@ import { getSolarData } from "./iot";
 import { fetchSatelliteWithFallback } from "./satellite-sources";
 import { computeScores } from "./scoring";
 import { updateImpactScore, RpcDegradedError } from "./registry";
-import { tryBeginUpdate, markCompleted, markFailed } from "./duplicate-detection";
 
 export interface ScoreUpdateSuccess {
   status: "success";
   projectId: number;
-  credit_quality: number;
-  green_impact: number;
+  creditQuality: number;
+  greenImpact: number;
   txHash: string;
 }
 
 export interface ScoreUpdateDeferred {
   status: "deferred";
   projectId: number;
-  credit_quality: number;
-  green_impact: number;
-}
-
-export interface ScoreUpdateSkipped {
-  status: "skipped";
-  projectId: number;
-  reason: string;
+  creditQuality: number;
+  greenImpact: number;
 }
 
 export interface ScoreUpdateError {
@@ -31,8 +24,7 @@ export interface ScoreUpdateError {
   error: string;
 }
 
-export type ScoreUpdateResult =
-  ScoreUpdateSuccess | ScoreUpdateDeferred | ScoreUpdateSkipped | ScoreUpdateError;
+export type ScoreUpdateResult = ScoreUpdateSuccess | ScoreUpdateDeferred | ScoreUpdateError;
 
 /**
  * Fetch IoT + satellite data, compute impact scores, and submit to the
@@ -41,11 +33,6 @@ export type ScoreUpdateResult =
  * to apply — the service itself stays side-effect-free.
  */
 export async function updateScoreForProject(projectId: number): Promise<ScoreUpdateResult> {
-  const { allowed, reason } = tryBeginUpdate(projectId);
-  if (!allowed) {
-    return { status: "skipped", projectId, reason: reason! };
-  }
-
   try {
     const solar = getSolarData(projectId);
     const satellite = await fetchSatelliteWithFallback(projectId);
@@ -56,27 +43,24 @@ export async function updateScoreForProject(projectId: number): Promise<ScoreUpd
       txHash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact);
     } catch (updateErr) {
       if (updateErr instanceof RpcDegradedError) {
-        markCompleted(projectId);
         return {
           status: "deferred",
           projectId,
-          credit_quality: scores.credit_quality,
-          green_impact: scores.green_impact,
+          creditQuality: scores.credit_quality,
+          greenImpact: scores.green_impact,
         };
       }
       throw updateErr;
     }
 
-    markCompleted(projectId);
     return {
       status: "success",
       projectId,
-      credit_quality: scores.credit_quality,
-      green_impact: scores.green_impact,
+      creditQuality: scores.credit_quality,
+      greenImpact: scores.green_impact,
       txHash,
     };
   } catch (err) {
-    markFailed(projectId);
     return { status: "error", projectId, error: String(err) };
   }
 }

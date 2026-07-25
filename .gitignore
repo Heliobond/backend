@@ -4,3 +4,4 @@ dist/
 coverage/
 .env.local
 load-tests/reports/
+.mimocode/
