@@ -85,7 +85,11 @@ function recordEvaluation(result: EvaluationResult, ctx: EvaluationContext): voi
   }
 }
 
-export function getEvaluations(filter?: { flag?: string; user_id?: string; since?: number }): FlagEvaluation[] {
+export function getEvaluations(filter?: {
+  flag?: string;
+  user_id?: string;
+  since?: number;
+}): FlagEvaluation[] {
   let results = evaluationLog;
   if (filter?.flag) results = results.filter((e) => e.flag === filter.flag);
   if (filter?.user_id) results = results.filter((e) => e.user_id === filter.user_id);
@@ -113,7 +117,8 @@ export function getFlagAnalytics(): FlagAnalyticsSummary {
     byReason[e.reason] = (byReason[e.reason] ?? 0) + 1;
   }
 
-  const byFlagFormatted: Record<string, { enabled: number; disabled: number; avg_rate: number }> = {};
+  const byFlagFormatted: Record<string, { enabled: number; disabled: number; avg_rate: number }> =
+    {};
   for (const [flag, counts] of Object.entries(byFlag)) {
     const total = counts.enabled + counts.disabled;
     byFlagFormatted[flag] = {
@@ -135,7 +140,7 @@ export function getFlagAnalytics(): FlagAnalyticsSummary {
 // ── Feature Flag Engine ─────────────────────────────────────────────────────
 
 let flags: FlagSet = {};
-let dependencyCache: Map<string, boolean> = new Map();
+const dependencyCache: Map<string, boolean> = new Map();
 
 /**
  * Load or replace the entire flag set (e.g. from a JSON config file or remote source).

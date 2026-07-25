@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { parseProjectId } from "../middleware/errors";
 import { fetchSatelliteWithFallback } from "../lib/satellite-sources";
-import { getSolarData, getSatelliteData } from "../lib/iot";
+import { logger } from "../lib/logger";
 
 const MAX_POWER_KW = 1000;
 const DEFAULT_EFFICIENCY_PCT = 60;
@@ -122,7 +122,6 @@ export function getSatelliteData(projectId: number) {
     timestamp: Date.now(),
   };
 }
-export { getSolarData, getSatelliteData };
 
 const router = Router();
 

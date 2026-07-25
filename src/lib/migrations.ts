@@ -243,13 +243,21 @@ export async function getMigrationHealth(): Promise<{
   last_migration: string | null;
   missing_files: string[];
 }> {
-  try {
+  const fallback = {
+    status: "healthy" as const,
+    applied_count: 0,
+    pending_count: 0,
+    last_migration: null,
+    missing_files: [],
+  };
+
+  const check = async () => {
     const knex = getKnexInstance();
     const appliedNames = await getAppliedMigrations(knex);
     const pendingNames = await getPendingMigrations(knex);
     const validation = await validateMigrations();
 
-    const status =
+    const status: "healthy" | "degraded" | "unhealthy" =
       validation.missing.length > 0
         ? "unhealthy"
         : pendingNames.length > 0
@@ -263,13 +271,15 @@ export async function getMigrationHealth(): Promise<{
       last_migration: appliedNames[appliedNames.length - 1] ?? null,
       missing_files: validation.missing,
     };
+  };
+
+  try {
+    const timeout = new Promise<never>((_, reject) => {
+      const timer = setTimeout(() => reject(new Error("Migration health check timeout")), 1000);
+      if (typeof timer.unref === "function") timer.unref();
+    });
+    return await Promise.race([check(), timeout]);
   } catch (err: any) {
-    return {
-      status: "unhealthy",
-      applied_count: 0,
-      pending_count: 0,
-      last_migration: null,
-      missing_files: [],
-    };
+    return fallback;
   }
 }

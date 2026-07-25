@@ -149,7 +149,13 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
         }
       } catch (err) {
         logger.error(`[oracle] project ${projectId} failed`, logger.formatError(err));
-        errors.push({ project_id: projectId, error: String(err) });
+        errors.push({
+          project_id: projectId,
+          error: {
+            code: "update_failed",
+            message: (err as Error)?.message || String(err),
+          },
+        });
       }
     }
 

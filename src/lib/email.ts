@@ -48,7 +48,7 @@ export interface ScoreChange {
 const subscribers = new Map<string, Subscriber>();
 const templates = new Map<string, EmailTemplate>();
 
-let thresholds: AlertThresholds = {
+const thresholds: AlertThresholds = {
   credit_quality_delta: 5,
   green_impact_delta: 5,
 };
@@ -140,7 +140,10 @@ export function listTemplates(): EmailTemplate[] {
 }
 
 /** Substitute {{key}} placeholders from `vars`. Missing keys become "". */
-export function renderTemplate(name: string, vars: Record<string, string | number>): { subject: string; body: string } {
+export function renderTemplate(
+  name: string,
+  vars: Record<string, string | number>,
+): { subject: string; body: string } {
   const tpl = templates.get(name);
   if (!tpl) throw new Error(`unknown template: ${name}`);
   const apply = (s: string) => s.replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k) => String(vars[k] ?? ""));
@@ -164,7 +167,9 @@ async function sendViaSendGrid(msg: EmailMessage, apiKey: string): Promise<void>
 }
 
 /** Deliver a single email through the configured provider (or console). */
-export async function sendEmail(msg: EmailMessage): Promise<{ provider: string; delivered: boolean }> {
+export async function sendEmail(
+  msg: EmailMessage,
+): Promise<{ provider: string; delivered: boolean }> {
   const apiKey = process.env.SENDGRID_API_KEY;
   if (apiKey) {
     await sendViaSendGrid(msg, apiKey);
@@ -202,7 +207,9 @@ export async function sendDigest(frequency: Frequency, changes: ScoreChange[]): 
   const recipients = listSubscribers(frequency);
   if (recipients.length === 0) return 0;
   const lines = changes
-    .map((c) => `- project ${c.project_id}: cq ${c.credit_quality_delta}, gi ${c.green_impact_delta}`)
+    .map(
+      (c) => `- project ${c.project_id}: cq ${c.credit_quality_delta}, gi ${c.green_impact_delta}`,
+    )
     .join("\n");
   const { subject, body } = renderTemplate("digest", {
     frequency,

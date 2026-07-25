@@ -193,11 +193,15 @@ async function _attemptSubmit(
   let getResult: rpc.Api.GetTransactionResponse;
   let pollAttempts = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const pollIntervalMs = parseInt(
+    process.env.TX_POLL_INTERVAL_MS || (process.env.NODE_ENV === "test" ? "10" : "1500"),
+    10,
+  );
 
   try {
     do {
       await new Promise<void>((r) => {
-        timer = setTimeout(r, 1500);
+        timer = setTimeout(r, pollIntervalMs);
       });
       timer = undefined;
       getResult = await client.getTransaction(result.hash);

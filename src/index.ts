@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import cron from "node-cron";
+import cron, { ScheduledTask } from "node-cron";
 import { config, initEnv } from "./config";
 import swaggerUi from "swagger-ui-express";
 import iotRouter from "./routes/iot";
@@ -79,8 +79,10 @@ import { compressionMiddleware, getCompressionMetrics } from "./middleware/compr
 
 const env = initEnv();
 
-// Initialize APM before any other imports
-await initApm();
+// Initialize APM in background — errors are logged but don't block startup
+initApm().catch((err: Error) => {
+  console.error("[startup] APM initialization failed:", err.message);
+});
 
 if (!process.env.ADMIN_API_KEY) {
   console.warn(
@@ -103,10 +105,12 @@ app.use(tracingMiddleware);
 app.use(securityHeaders);
 app.use(permissionsHeaders);
 app.use(cors({ origin: env.FRONTEND_URL }));
-app.use(compressionMiddleware({
-  threshold: parseInt(process.env.COMPRESSION_THRESHOLD ?? "1024", 10),
-  level: parseInt(process.env.COMPRESSION_LEVEL ?? "6", 10),
-}));
+app.use(
+  compressionMiddleware({
+    threshold: parseInt(process.env.COMPRESSION_THRESHOLD ?? "1024", 10),
+    level: parseInt(process.env.COMPRESSION_LEVEL ?? "6", 10),
+  }),
+);
 app.use(express.json());
 app.use(sanitizeInputs);
 app.use(csrfProtection);
@@ -572,7 +576,7 @@ startGrpcServer(50051);
 
 // ── Graceful shutdown (#57) ──────────────────────────────────────────────────
 // Track all scheduled cron tasks so we can stop them cleanly.
-const cronTasks: cron.ScheduledTask[] = [];
+const cronTasks: ScheduledTask[] = [];
 
 function scheduleCron(
   expression: string,
