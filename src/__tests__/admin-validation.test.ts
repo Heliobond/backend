@@ -14,6 +14,11 @@ jest.mock("../lib/registry", () => ({
 }));
 jest.mock("../routes/iot");
 jest.mock("../lib/scoring");
+jest.mock("../config", () => ({
+  config: {
+    ADMIN_API_KEY: "test-key",
+  },
+}));
 
 function buildApp(): Express {
   const app = express();
@@ -31,7 +36,6 @@ describe("admin /update-scores input validation", () => {
 
   beforeEach(() => {
     app = buildApp();
-    process.env.ADMIN_API_KEY = ADMIN_API_KEY;
     jest.clearAllMocks();
     (iot.getSolarData as jest.Mock).mockReturnValue({
       efficiency_pct: 85,
@@ -48,10 +52,6 @@ describe("admin /update-scores input validation", () => {
     });
     (registry.updateImpactScore as jest.Mock).mockResolvedValue("tx-hash");
     (registry.getTotalProjects as jest.Mock).mockResolvedValue(2);
-  });
-
-  afterEach(() => {
-    delete process.env.ADMIN_API_KEY;
   });
 
   it("returns 400 { error, message } when project_ids is not an array", async () => {
@@ -131,7 +131,6 @@ describe("admin /update-scores input validation", () => {
   });
 
   it("rejects unauthorized requests with 401 { error, message }", async () => {
-    process.env.ADMIN_API_KEY = "secret";
     const res = await request(app).post("/api/admin/update-scores").send({}).expect(401);
     expect(res.body.error.code).toBe("unauthorized");
   });

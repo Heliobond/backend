@@ -34,6 +34,7 @@ import { getSolarData } from "./lib/iot";
 import { fetchSatelliteWithFallback } from "./lib/satellite-sources";
 import { computeScores } from "./lib/scoring";
 import { updateImpactScore, getTotalProjects, RpcDegradedError } from "./lib/registry";
+import { updateScoreForProject } from "./lib/scoreService";
 import { recordScoreHistory, getHistory } from "./lib/history";
 import { tryBeginUpdate, markCompleted, markFailed } from "./lib/duplicate-detection";
 import { isErrorRateLimited, resetErrorRateLimit } from "./lib/error-limiter";
@@ -318,42 +319,42 @@ scheduleCron(
 
       for (const projectId of projectIds) {
         await withProjectLock(projectId, async () => {
-          const { allowed, key, reason } = tryBeginUpdate(projectId);
+          const { allowed, reason } = tryBeginUpdate(projectId);
           if (!allowed) {
             logger.info(`[cron] skipping project ${projectId}: ${reason}`);
             return;
           }
           try {
-            const solar = getSolarData(projectId);
-            const satellite = await fetchSatelliteWithFallback(projectId);
-            if (satellite.dataSource !== "live") {
-              logger.warn("[cron] satellite data degraded", {
+            const scoreResult = await updateScoreForProject(projectId);
+
+            if (scoreResult.status === "deferred") {
+              logger.warn(`[cron] project ${projectId}: RPC degraded, score queued for later`);
+              enqueue(
                 projectId,
-                dataSource: satellite.dataSource,
-                source: satellite.source,
-              });
-            }
-            const scores = computeScores({ solar, satellite });
-            let tx_hash: string | undefined;
-            try {
-              tx_hash = await updateImpactScore(
-                projectId,
-                scores.credit_quality,
-                scores.green_impact,
+                scoreResult.creditQuality,
+                scoreResult.greenImpact,
+                "RPC degraded",
               );
-            } catch (updateErr) {
-              if (updateErr instanceof RpcDegradedError) {
-                logger.warn(`[cron] project ${projectId}: RPC degraded, score queued for later`);
-                enqueue(projectId, scores.credit_quality, scores.green_impact, "RPC degraded");
-              } else {
-                throw updateErr;
-              }
+              markCompleted(projectId);
+              resetErrorRateLimit(`cron:project-${projectId}`);
+              successCount++;
+              return;
             }
-            recordScoreHistory(projectId, scores.credit_quality, scores.green_impact);
+
+            if (scoreResult.status === "error") {
+              throw new Error(scoreResult.error);
+            }
+
+            const scores = {
+              credit_quality: scoreResult.creditQuality,
+              green_impact: scoreResult.greenImpact,
+            };
+            recordScoreHistory(projectId, scoreResult.creditQuality, scoreResult.greenImpact);
             triggerWebhooks({
               project_id: projectId,
-              ...scores,
-              tx_hash: tx_hash ?? "deferred",
+              credit_quality: scoreResult.creditQuality,
+              green_impact: scoreResult.greenImpact,
+              tx_hash: scoreResult.txHash,
               timestamp: Date.now(),
             });
 
@@ -367,23 +368,28 @@ scheduleCron(
               });
             }
             const timestamp = Date.now();
-            recordScoreHistory(projectId, scores.credit_quality, scores.green_impact, timestamp);
+            recordScoreHistory(
+              projectId,
+              scoreResult.creditQuality,
+              scoreResult.greenImpact,
+              timestamp,
+            );
             triggerWebhooks({
               project_id: projectId,
-              ...scores,
-              tx_hash: tx_hash ?? "deferred",
+              credit_quality: scoreResult.creditQuality,
+              green_impact: scoreResult.greenImpact,
+              tx_hash: scoreResult.txHash,
               timestamp,
             });
-            broadcastScoreUpdate({ project_id: projectId, ...scores, timestamp });
-            if (tx_hash) {
-              logger.info(
-                `[cron] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`,
-              );
-            } else {
-              logger.info(
-                `[cron] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} (queued)`,
-              );
-            }
+            broadcastScoreUpdate({
+              project_id: projectId,
+              credit_quality: scoreResult.creditQuality,
+              green_impact: scoreResult.greenImpact,
+              timestamp,
+            });
+            logger.info(
+              `[cron] project ${projectId}: cq=${scoreResult.creditQuality} gi=${scoreResult.greenImpact} tx=${scoreResult.txHash}`,
+            );
             markCompleted(projectId);
             resetErrorRateLimit(`cron:project-${projectId}`);
             successCount++;

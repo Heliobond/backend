@@ -1,13 +1,10 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { getSolarData } from "../lib/iot";
-import { fetchSatelliteWithFallback } from "../lib/satellite-sources";
-import { computeScores } from "../lib/scoring";
-import { updateImpactScore, getTotalProjects } from "../lib/registry";
-import { ApiError, badRequest, parseOptionalInt, errorBody } from "../middleware/errors";
+import { updateScoreForProject } from "../lib/scoreService";
+import { getTotalProjects } from "../lib/registry";
+import { badRequest, parseOptionalInt, errorBody } from "../middleware/errors";
 import { recordAudit, getAuditLog, auditToCsv } from "../lib/audit";
 import { broadcastScoreUpdate } from "../lib/websocket";
 import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
-import { RpcDegradedError } from "../lib/registry";
 import { withProjectLock } from "../lib/request-queue";
 import { config } from "../config";
 import { logger } from "../lib/logger";
@@ -83,52 +80,51 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
     for (const projectId of projectIds) {
       try {
         const result = await withProjectLock(projectId, async () => {
-          const { allowed, key, reason } = tryBeginUpdate(projectId);
+          const { allowed, reason } = tryBeginUpdate(projectId);
           if (!allowed) {
             return { skipped: true, reason: reason! };
           }
           try {
-            const solar = getSolarData(projectId);
-            const satellite = await fetchSatelliteWithFallback(projectId);
-            if (satellite.dataSource !== "live") {
-              logger.warn(
-                `[oracle] project ${projectId}: satellite data degraded (dataSource=${satellite.dataSource})`,
-              );
+            const scoreResult = await updateScoreForProject(projectId);
+
+            if (scoreResult.status === "deferred") {
+              logger.warn(`[oracle] project ${projectId}: RPC degraded, score queued for later`);
+              markCompleted(projectId);
+              return {
+                project_id: projectId,
+                tx_hash: "deferred",
+                credit_quality: scoreResult.creditQuality,
+                green_impact: scoreResult.greenImpact,
+              };
             }
-            const scores = computeScores({ solar, satellite });
-            let tx_hash: string;
-            try {
-              tx_hash = await updateImpactScore(
-                projectId,
-                scores.credit_quality,
-                scores.green_impact,
-              );
-            } catch (updateErr) {
-              if (updateErr instanceof RpcDegradedError) {
-                logger.warn(`[oracle] project ${projectId}: RPC degraded, score queued for later`);
-                markCompleted(projectId);
-                return { project_id: projectId, tx_hash: "deferred", ...scores };
-              }
-              throw updateErr;
+
+            if (scoreResult.status === "error") {
+              throw new Error(scoreResult.error);
             }
+
             markCompleted(projectId);
             recordAudit({
               project_id: projectId,
-              credit_quality: scores.credit_quality,
-              green_impact: scores.green_impact,
-              tx_hash,
+              credit_quality: scoreResult.creditQuality,
+              green_impact: scoreResult.greenImpact,
+              tx_hash: scoreResult.txHash,
               triggered_by: "api",
             });
             broadcastScoreUpdate({
               project_id: projectId,
-              credit_quality: scores.credit_quality,
-              green_impact: scores.green_impact,
+              credit_quality: scoreResult.creditQuality,
+              green_impact: scoreResult.greenImpact,
               timestamp: Date.now(),
             });
             logger.info(
-              `[oracle] project ${projectId}: cq=${scores.credit_quality} gi=${scores.green_impact} tx=${tx_hash}`,
+              `[oracle] project ${projectId}: cq=${scoreResult.creditQuality} gi=${scoreResult.greenImpact} tx=${scoreResult.txHash}`,
             );
-            return { project_id: projectId, tx_hash, ...scores };
+            return {
+              project_id: projectId,
+              tx_hash: scoreResult.txHash,
+              credit_quality: scoreResult.creditQuality,
+              green_impact: scoreResult.greenImpact,
+            };
           } catch (err) {
             markFailed(projectId);
             throw err;

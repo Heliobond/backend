@@ -163,8 +163,34 @@ green_impact   = clamp(
                  )
 ```
 
-`credit_quality` reflects how efficiently the solar array is operating.  
+`credit_quality` reflects how efficiently the solar array is operating.
 `green_impact` is a 50/50 blend of power production ratio and vegetation health.
+
+---
+
+## Rate Limiting
+
+All API endpoints are rate-limited to prevent abuse and protect against fee-drain attacks on Soroban transactions.
+
+| Limiter | Default Window | Default Max | Applied To |
+|---------|---------------|-------------|------------|
+| Public | 60 seconds | 100 requests/IP | All unauthenticated endpoints |
+| Admin | 60 seconds | 20 requests/IP | All authenticated admin endpoints |
+
+When the limit is exceeded, the API returns `429 Too Many Requests` with:
+- `Retry-After` header (seconds until the window resets)
+- `RateLimit-Remaining: 0` and `RateLimit-Reset` headers (RFC 6585 standard)
+
+```json
+{
+  "error": {
+    "code": "too_many_requests",
+    "message": "Rate limit exceeded. Please retry later."
+  }
+}
+```
+
+Configure via environment variables (see below). Admin limits are stricter because each `POST /api/admin/update-scores` call triggers on-chain Soroban transactions that cost XLM.
 
 ---
 
