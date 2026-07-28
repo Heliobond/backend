@@ -29,7 +29,7 @@ export function requestSigning(req: Request, res: Response, next: NextFunction):
   const signature = req.headers[SIGNATURE_HEADER] as string | undefined;
   const timestamp = req.headers[TIMESTAMP_HEADER] as string | undefined;
 
-  if (!signature || !timestamp) {
+  if (signature === undefined || timestamp === undefined) {
     res.status(401).json({ error: "Missing signature or timestamp header" });
     return;
   }

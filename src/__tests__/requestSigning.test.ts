@@ -108,6 +108,68 @@ describe("requestSigning middleware", () => {
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith({ error: "Invalid request signature" });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("should return 401 for a wrong signature token", () => {
+    const timestamp = String(Date.now());
+    const req = createMockReq({
+      headers: {
+        "x-timestamp": timestamp,
+        "x-signature": "wrong-signature-token",
+      },
+      body: { data: "test" },
+    });
+    const res = createMockRes();
+    const next = jest.fn();
+
+    requestSigning(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: "Invalid request signature" });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("should return 401 for a partial signature match", () => {
+    const timestamp = String(Date.now());
+    const body = JSON.stringify({ data: "test" });
+    const validSignature = computeSignature(timestamp, "POST", "/test", body);
+    const partialSignature = validSignature.slice(0, validSignature.length - 1);
+
+    const req = createMockReq({
+      headers: {
+        "x-timestamp": timestamp,
+        "x-signature": partialSignature,
+      },
+      body: { data: "test" },
+    });
+    const res = createMockRes();
+    const next = jest.fn();
+
+    requestSigning(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: "Invalid request signature" });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("should return 401 for an empty signature token", () => {
+    const timestamp = String(Date.now());
+    const req = createMockReq({
+      headers: {
+        "x-timestamp": timestamp,
+        "x-signature": "",
+      },
+      body: { data: "test" },
+    });
+    const res = createMockRes();
+    const next = jest.fn();
+
+    requestSigning(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: "Invalid request signature" });
+    expect(next).not.toHaveBeenCalled();
   });
 
   it("should call next() with valid signature", () => {
