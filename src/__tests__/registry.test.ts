@@ -24,6 +24,7 @@ jest.mock("@stellar/stellar-sdk", () => {
         SimulateTransactionSuccessResponse: {},
       },
     },
+    Account: jest.fn().mockImplementation(() => ({})),
   };
 });
 

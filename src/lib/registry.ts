@@ -5,6 +5,7 @@ import {
   BASE_FEE,
   scValToNative,
   rpc,
+  Account,
 } from "@stellar/stellar-sdk";
 import { withRpcConnection, networkPassphrase, getAdminKeypair, signAndSubmit } from "./stellar";
 import { config } from "../config";
@@ -43,11 +44,13 @@ export async function updateImpactScore(
 
 export async function getTotalProjects(): Promise<number> {
   return withRpcConnection(async (client) => {
-    const keypair = getAdminKeypair();
-    const account = await client.getAccount(keypair.publicKey());
     const contract = new Contract(REGISTRY_CONTRACT_ID);
+    const dummyAccount = new Account(
+      "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+      "0",
+    );
 
-    const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase })
+    const tx = new TransactionBuilder(dummyAccount, { fee: BASE_FEE, networkPassphrase })
       .addOperation(contract.call("total_projects"))
       .setTimeout(30)
       .build();
