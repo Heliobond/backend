@@ -97,6 +97,12 @@ export function errorHandler(
     return;
   }
 
+  // Body parser raises PayloadTooLargeError when the request body exceeds the configured limit.
+  if (err instanceof Error && "statusCode" in err && err.statusCode === 413) {
+    res.status(413).json(errorBody("payload_too_large", "Request body is too large"));
+    return;
+  }
+
   console.error("[error]", err);
   res.status(500).json(errorBody("internal_error", "An unexpected error occurred"));
 }

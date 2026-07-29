@@ -103,6 +103,9 @@ export const config = {
   /** CSRF */
   CORS_ORIGINS: optionalEnv("CORS_ORIGINS", ""),
 
+  /** Body size limit */
+  BODY_SIZE_LIMIT: optionalEnv("BODY_SIZE_LIMIT", "100kb"),
+
   /** Secrets Management */
   SECRETS_PROVIDER: optionalEnv("SECRETS_PROVIDER", "env"),
 } as const;

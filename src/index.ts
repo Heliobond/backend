@@ -112,7 +112,7 @@ app.use(
     level: parseInt(process.env.COMPRESSION_LEVEL ?? "6", 10),
   }),
 );
-app.use(express.json());
+app.use(express.json({ limit: env.BODY_SIZE_LIMIT }));
 app.use(sanitizeInputs);
 app.use(csrfProtection);
 app.use(requestLogger);
