@@ -88,6 +88,37 @@ if (!process.env.ADMIN_API_KEY) {
 const app = express();
 const PORT = env.PORT;
 
+// Validate CORS origin
+function validateCorsOrigin(origin: string | undefined): string | undefined {
+  if (!origin) return undefined;
+
+  if (origin === "*") {
+    logger.warn("[startup] WARNING: CORS origin is wildcard ('*'), allowing all origins");
+    return origin;
+  }
+
+  try {
+    const url = new URL(origin);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      logger.warn(`[startup] WARNING: CORS origin has invalid protocol: ${origin}`);
+    }
+  } catch {
+    throw new Error(
+      `Invalid FRONTEND_URL format: "${origin}". Must be a valid URL (e.g., http://localhost:3000)`,
+    );
+  }
+
+  if (origin === "http://localhost:3000" && config.NODE_ENV === "production") {
+    logger.warn(
+      "[startup] WARNING: CORS origin is localhost default in production. Set FRONTEND_URL properly.",
+    );
+  }
+
+  return origin;
+}
+
+const corsOrigin = validateCorsOrigin(env.FRONTEND_URL);
+
 // Timezone for all cron schedules. Defaults to UTC so behaviour is identical
 // across servers regardless of OS locale. Override with e.g. CRON_TIMEZONE=America/New_York.
 const CRON_TIMEZONE = config.CRON_TIMEZONE;
@@ -95,7 +126,7 @@ const CRON_TIMEZONE = config.CRON_TIMEZONE;
 app.use(tracingMiddleware);
 app.use(securityHeaders);
 app.use(permissionsHeaders);
-app.use(cors({ origin: env.FRONTEND_URL }));
+app.use(cors({ origin: corsOrigin }));
 app.use(
   compressionMiddleware({
     threshold: parseInt(process.env.COMPRESSION_THRESHOLD ?? "1024", 10),
