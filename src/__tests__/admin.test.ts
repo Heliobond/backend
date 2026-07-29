@@ -104,6 +104,57 @@ describe("admin routes", () => {
       const res = await request(app).post("/api/admin/update-scores").set(AUTH_HEADER).send({});
       expect(res.status).toBe(200);
     });
+
+    it("returns 401 for 'Bearer' with no token appended", async () => {
+      const res = await request(app)
+        .post("/api/admin/update-scores")
+        .set("Authorization", "Bearer")
+        .send({});
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe("unauthorized");
+    });
+
+    it("returns 401 for 'Bearer ' with an empty token", async () => {
+      const res = await request(app)
+        .post("/api/admin/update-scores")
+        .set("Authorization", "Bearer ")
+        .send({});
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe("unauthorized");
+    });
+
+    it("returns 401 for the wrong auth scheme (Basic instead of Bearer)", async () => {
+      const res = await request(app)
+        .post("/api/admin/update-scores")
+        .set("Authorization", "Basic dGVzdC1rZXk6cGFzcw==")
+        .send({});
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe("unauthorized");
+    });
+
+    it("documents current behavior for a token with trailing whitespace", async () => {
+      // The middleware itself does a strict `!==` comparison with no
+      // trimming. However, HTTP header values are trimmed of leading/
+      // trailing whitespace by the underlying HTTP parser before the
+      // handler ever sees them (per RFC 7230), so in practice a trailing
+      // space on the wire does NOT survive to reach the `!==` check — the
+      // request passes through. This test pins down that actual observed
+      // behavior; it is not asserting this is the desired security posture.
+      const res = await request(app)
+        .post("/api/admin/update-scores")
+        .set("Authorization", "Bearer test-key ")
+        .send({});
+      expect(res.status).toBe(200);
+    });
+
+    it("is case-sensitive on the 'Bearer' scheme prefix", async () => {
+      const res = await request(app)
+        .post("/api/admin/update-scores")
+        .set("Authorization", "bearer test-key")
+        .send({});
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe("unauthorized");
+    });
   });
 
   // ── POST /update-scores ──────────────────────────────────────────────────

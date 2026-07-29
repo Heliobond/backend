@@ -33,26 +33,21 @@ import { startGrpcServer } from "./grpc/server";
 import { getSolarData } from "./lib/iot";
 import { fetchSatelliteWithFallback } from "./lib/satellite-sources";
 import { computeScores } from "./lib/scoring";
-import { updateImpactScore, getTotalProjects, RpcDegradedError } from "./lib/registry";
-import { updateScoreForProject } from "./lib/scoreService";
-import { recordScoreHistory, getHistory } from "./lib/history";
-import { tryBeginUpdate, markCompleted, markFailed } from "./lib/duplicate-detection";
-import { isErrorRateLimited, resetErrorRateLimit } from "./lib/error-limiter";
+import { updateImpactScore } from "./lib/registry";
+import { runHourlyScoreUpdate } from "./lib/scoreUpdateCron";
+import { isErrorRateLimited } from "./lib/error-limiter";
 import { isRpcOutageExtended, isRpcAvailable, getRpcStatus } from "./lib/stellar";
 import {
-  enqueue,
   getQueueSize,
   dequeue,
   remove,
   incrementRetry,
   hasExceededMaxRetries,
 } from "./lib/tx-queue";
-import { sendAlertIfSignificant } from "./lib/email";
-import { triggerWebhooks } from "./lib/webhooks";
 import { indexer } from "./lib/indexer";
 import { getHealth, getReadiness, recordCronRun } from "./lib/health";
 import { getMetrics } from "./lib/metrics";
-import { attachWebSocketServer, broadcastScoreUpdate } from "./lib/websocket";
+import { attachWebSocketServer } from "./lib/websocket";
 import { rpcPool } from "./lib/stellar";
 import { openApiSpec } from "./lib/swagger";
 import { requestLogger } from "./middleware/requestLogger";
@@ -65,7 +60,6 @@ import { runWithCorrelationId, generateCorrelationId } from "./lib/correlation";
 import { logger } from "./lib/logger";
 import { getTraces, getTraceSummary } from "./lib/tracer";
 import { tracingMiddleware } from "./middleware/tracing";
-import { withProjectLock } from "./lib/request-queue";
 import { checkScheduledRotations } from "./lib/apiKeys";
 import { ipWhitelist } from "./middleware/ipWhitelist";
 import { requestSigning } from "./middleware/requestSigning";
@@ -97,10 +91,6 @@ const PORT = env.PORT;
 // Timezone for all cron schedules. Defaults to UTC so behaviour is identical
 // across servers regardless of OS locale. Override with e.g. CRON_TIMEZONE=America/New_York.
 const CRON_TIMEZONE = config.CRON_TIMEZONE;
-
-// Fraction of projects that must fail before we escalate to a warning.
-// 100% failure is always recorded as an error regardless of this threshold.
-const CRON_FAILURE_THRESHOLD = config.CRON_FAILURE_THRESHOLD;
 
 app.use(tracingMiddleware);
 app.use(securityHeaders);
@@ -310,124 +300,7 @@ scheduleCron(
     }
     isScoreUpdateRunning = true;
     try {
-      logger.info("[cron] running hourly score update");
-      const total = await getTotalProjects();
-      const projectIds = Array.from({ length: total }, (_, i) => i + 1);
-
-      let successCount = 0;
-      let failureCount = 0;
-
-      for (const projectId of projectIds) {
-        await withProjectLock(projectId, async () => {
-          const { allowed, reason } = tryBeginUpdate(projectId);
-          if (!allowed) {
-            logger.info(`[cron] skipping project ${projectId}: ${reason}`);
-            return;
-          }
-          try {
-            const scoreResult = await updateScoreForProject(projectId);
-
-            if (scoreResult.status === "deferred") {
-              logger.warn(`[cron] project ${projectId}: RPC degraded, score queued for later`);
-              enqueue(
-                projectId,
-                scoreResult.creditQuality,
-                scoreResult.greenImpact,
-                "RPC degraded",
-              );
-              markCompleted(projectId);
-              resetErrorRateLimit(`cron:project-${projectId}`);
-              successCount++;
-              return;
-            }
-
-            if (scoreResult.status === "error") {
-              throw new Error(scoreResult.error);
-            }
-
-            const scores = {
-              credit_quality: scoreResult.creditQuality,
-              green_impact: scoreResult.greenImpact,
-            };
-            recordScoreHistory(projectId, scoreResult.creditQuality, scoreResult.greenImpact);
-            triggerWebhooks({
-              project_id: projectId,
-              credit_quality: scoreResult.creditQuality,
-              green_impact: scoreResult.greenImpact,
-              tx_hash: scoreResult.txHash,
-              timestamp: Date.now(),
-            });
-
-            // Email alert when this update moved scores significantly (#22).
-            const recent = getHistory(projectId).slice(-2);
-            if (recent.length === 2) {
-              await sendAlertIfSignificant({
-                project_id: projectId,
-                credit_quality_delta: recent[1].credit_quality - recent[0].credit_quality,
-                green_impact_delta: recent[1].green_impact - recent[0].green_impact,
-              });
-            }
-            const timestamp = Date.now();
-            recordScoreHistory(
-              projectId,
-              scoreResult.creditQuality,
-              scoreResult.greenImpact,
-              timestamp,
-            );
-            triggerWebhooks({
-              project_id: projectId,
-              credit_quality: scoreResult.creditQuality,
-              green_impact: scoreResult.greenImpact,
-              tx_hash: scoreResult.txHash,
-              timestamp,
-            });
-            broadcastScoreUpdate({
-              project_id: projectId,
-              credit_quality: scoreResult.creditQuality,
-              green_impact: scoreResult.greenImpact,
-              timestamp,
-            });
-            logger.info(
-              `[cron] project ${projectId}: cq=${scoreResult.creditQuality} gi=${scoreResult.greenImpact} tx=${scoreResult.txHash}`,
-            );
-            markCompleted(projectId);
-            resetErrorRateLimit(`cron:project-${projectId}`);
-            successCount++;
-          } catch (err) {
-            markFailed(projectId);
-            if (!isErrorRateLimited(`cron:project-${projectId}`)) {
-              logger.error(`[cron] project ${projectId} failed`, logger.formatError(err));
-            }
-            failureCount++;
-          }
-        });
-      }
-
-      const totalProcessed = successCount + failureCount;
-      const failureRate = totalProcessed > 0 ? failureCount / totalProcessed : 0;
-
-      if (totalProcessed > 0 && failureCount === totalProcessed) {
-        // All attempted projects failed — likely a systemic RPC or contract issue.
-        logger.error(
-          `[cron] ALERT: ALL ${failureCount} projects failed in score-update batch — ` +
-            `check Soroban RPC connectivity and contract state`,
-        );
-        recordCronRun("score-update", "error");
-      } else {
-        if (failureCount > 0 && failureRate >= CRON_FAILURE_THRESHOLD) {
-          logger.error(
-            `[cron] WARN: high failure rate in score-update batch: ` +
-              `${failureCount}/${totalProcessed} (${(failureRate * 100).toFixed(1)}%)`,
-          );
-        }
-        logger.info("[cron] hourly score update complete", { total, successCount, failureCount });
-        recordCronRun("score-update", "success");
-      }
-    } catch (err: any) {
-      if (!isErrorRateLimited("cron:score-update")) {
-        logger.error("[cron] score update failed", { error: err?.message });
-      }
-      recordCronRun("score-update", "error");
+      await runHourlyScoreUpdate();
     } finally {
       isScoreUpdateRunning = false;
     }

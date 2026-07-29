@@ -56,7 +56,13 @@ jest.mock("../config", () => ({
 
 import { updateImpactScore, getTotalProjects, RpcDegradedError } from "../lib/registry";
 import { withRpcConnection, signAndSubmit } from "../lib/stellar";
-import { Contract, TransactionBuilder, nativeToScVal, BASE_FEE } from "@stellar/stellar-sdk";
+import {
+  Contract,
+  TransactionBuilder,
+  nativeToScVal,
+  BASE_FEE,
+  scValToNative,
+} from "@stellar/stellar-sdk";
 
 describe("registry module", () => {
   beforeEach(() => {
@@ -114,6 +120,57 @@ describe("registry module", () => {
       await getTotalProjects();
 
       expect(Contract).toHaveBeenCalledWith("CONTRACT123");
+    });
+
+    it("throws a clear error when simulation returns an error object", async () => {
+      (withRpcConnection as jest.Mock).mockImplementationOnce((fn: (client: any) => Promise<any>) =>
+        fn({
+          getAccount: jest.fn().mockResolvedValue({ sequence: "0" }),
+          simulateTransaction: jest.fn().mockResolvedValue({
+            error: "simulation failed: contract trapped",
+          }),
+        }),
+      );
+
+      await expect(getTotalProjects()).rejects.toThrow("simulation failed: contract trapped");
+    });
+
+    it("returns a number when simulation succeeds with a retval", async () => {
+      (withRpcConnection as jest.Mock).mockImplementationOnce((fn: (client: any) => Promise<any>) =>
+        fn({
+          getAccount: jest.fn().mockResolvedValue({ sequence: "0" }),
+          simulateTransaction: jest.fn().mockResolvedValue({
+            result: { retval: { _value: 7 } },
+          }),
+        }),
+      );
+
+      const total = await getTotalProjects();
+      expect(total).toBe(42); // scValToNative is mocked to always return 42
+      expect(typeof total).toBe("number");
+    });
+
+    it("throws when the simulation succeeds but retval is missing", async () => {
+      // scValToNative is globally mocked to always return 42 regardless of
+      // input, so simulate the real SDK's behavior of throwing when handed
+      // an undefined ScVal — this is what a missing `retval` actually
+      // produces once passed through `scValToNative`.
+      (scValToNative as jest.Mock).mockImplementationOnce((val: unknown) => {
+        if (val === undefined) {
+          throw new TypeError("scValToNative: value is undefined");
+        }
+        return 42;
+      });
+      (withRpcConnection as jest.Mock).mockImplementationOnce((fn: (client: any) => Promise<any>) =>
+        fn({
+          getAccount: jest.fn().mockResolvedValue({ sequence: "0" }),
+          simulateTransaction: jest.fn().mockResolvedValue({
+            result: {},
+          }),
+        }),
+      );
+
+      await expect(getTotalProjects()).rejects.toThrow();
     });
   });
 

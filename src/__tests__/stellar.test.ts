@@ -175,11 +175,13 @@ describe("stellar utility helpers", () => {
       sign: jest.fn(),
     };
 
-    const createMockClient = (overrides: Partial<{
-      getLedgerEntries: jest.Mock;
-      sendTransaction: jest.Mock;
-      getTransaction: jest.Mock;
-    }> = {}) => ({
+    const createMockClient = (
+      overrides: Partial<{
+        getLedgerEntries: jest.Mock;
+        sendTransaction: jest.Mock;
+        getTransaction: jest.Mock;
+      }> = {},
+    ) => ({
       getLedgerEntries: jest.fn().mockResolvedValue({ entries: [] }),
       sendTransaction: jest.fn().mockResolvedValue({
         status: "SUCCESS",
@@ -247,6 +249,26 @@ describe("stellar utility helpers", () => {
       await expect(signAndSubmit(client as any, "fake_xdr", mockKeypair as any)).rejects.toThrow(
         "Transaction failed on-chain",
       );
+    }, 15000);
+
+    it("throws a timeout error when polling exceeds the max attempts", async () => {
+      const client = createMockClient({
+        sendTransaction: jest.fn().mockResolvedValue({
+          status: "SUCCESS",
+          hash: "pending_hash",
+        }),
+        // Always NOT_FOUND — never confirms, forcing the poll loop to exhaust
+        // its max attempts (20) and throw the timeout error.
+        getTransaction: jest.fn().mockResolvedValue({
+          status: rpc.Api.GetTransactionStatus.NOT_FOUND,
+        }),
+      });
+
+      await expect(signAndSubmit(client as any, "fake_xdr", mockKeypair as any)).rejects.toThrow(
+        "Transaction confirmation timeout",
+      );
+      // 20 max attempts before throwing
+      expect(client.getTransaction).toHaveBeenCalledTimes(21);
     }, 15000);
   });
 });
