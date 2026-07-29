@@ -250,6 +250,19 @@ bun run build        # tsc type-check
 bun run test         # jest suite
 ```
 
+
+## Dependency Audit
+
+Dependency vulnerability checks run in the CI workflow for every pull request. The audit gate uses `npm audit --audit-level=high`, so CI fails when npm reports any high or critical dependency vulnerabilities. Moderate and low findings are still included in the workflow summary for visibility.
+
+Run the same audit locally before opening a PR:
+
+```bash
+npm audit --audit-level=high
+```
+
+Use `npm audit --json` if you need machine-readable details while triaging a finding.
+
 ## Deployment
 
 ### Docker

@@ -82,11 +82,11 @@ describe("SAST Scanning Configuration (Issue #285)", () => {
       expect(workflow.jobs).toHaveProperty("dependency-audit");
     });
 
-    it("CI fails on critical vulnerabilities", () => {
+    it("CI fails on high or critical vulnerabilities", () => {
       const content = fs.readFileSync(ciWorkflowPath, "utf-8");
       
-      expect(content).toContain("npm audit --audit-level=critical");
-      expect(content).toContain("Fail on critical vulnerabilities");
+      expect(content).toContain("npm audit --audit-level=high");
+      expect(content).toContain("Fail on high or critical vulnerabilities");
     });
   });
 

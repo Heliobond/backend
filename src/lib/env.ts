@@ -4,7 +4,7 @@ export interface Env {
 }
 
 export function initEnv(): Env {
-  const port = parseInt(process.env.PORT ?? "3000", 10);
+  const port = parseInt(process.env.PORT ?? "3001", 10);
   const frontendUrl = process.env.FRONTEND_URL ?? "http://localhost:3000";
 
   return {
