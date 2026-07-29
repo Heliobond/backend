@@ -43,7 +43,7 @@ function getHourSeed(): number {
  * Generates a deterministic pseudo-random number in [0, 1) for a given seed.
  * Uses MurmurHash3 avalanche properties to avoid adjacent collision.
  */
-function seededRandom(seed: number): number {
+export function seededRandom(seed: number): number {
   const hourSeed = getHourSeed();
   // Ensure the inputs aren't NaN before bitwise operations
   const safeSeed = Number.isNaN(seed) ? 0 : seed;

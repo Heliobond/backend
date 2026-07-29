@@ -76,3 +76,35 @@ describe("IoT route validation - non-numeric IDs", () => {
     });
   });
 });
+
+describe("IoT route validation - id < 1", () => {
+  const app = buildApp();
+
+  it("GET /api/iot/solar/0 → 400 (id < 1)", async () => {
+    const res = await request(app).get("/api/iot/solar/0").expect(400);
+    expect(res.body).toEqual({
+      error: { code: "bad_request", message: expect.stringContaining("positive integer") },
+    });
+  });
+
+  it("GET /api/iot/solar/-5 → 400 (negative id)", async () => {
+    const res = await request(app).get("/api/iot/solar/-5").expect(400);
+    expect(res.body).toEqual({
+      error: { code: "bad_request", message: expect.stringContaining("positive integer") },
+    });
+  });
+
+  it("GET /api/iot/satellite/0 → 400 (id < 1)", async () => {
+    const res = await request(app).get("/api/iot/satellite/0").expect(400);
+    expect(res.body).toEqual({
+      error: { code: "bad_request", message: expect.stringContaining("positive integer") },
+    });
+  });
+
+  it("GET /api/iot/satellite/-5 → 400 (negative id)", async () => {
+    const res = await request(app).get("/api/iot/satellite/-5").expect(400);
+    expect(res.body).toEqual({
+      error: { code: "bad_request", message: expect.stringContaining("positive integer") },
+    });
+  });
+});

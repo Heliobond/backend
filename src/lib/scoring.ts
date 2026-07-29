@@ -10,7 +10,7 @@ export interface ImpactScores {
   green_impact: number;
 }
 
-function clamp(v: number, min: number, max: number): number {
+export function clamp(v: number, min: number, max: number): number {
   if (isNaN(v)) return 0;
   return Math.max(min, Math.min(max, v));
 }
@@ -32,8 +32,6 @@ export function computeScores(input: IotInput): ImpactScores {
 
   const credit_quality = Math.round(efficiency);
   const powerRatio = maxPower > 0 ? powerOutput / maxPower : 0;
-  const green_impact = Math.round(
-    clamp(powerRatio * 50 + (forestDensity / 100) * 50, 0, 100)
-  );
+  const green_impact = Math.round(clamp(powerRatio * 50 + (forestDensity / 100) * 50, 0, 100));
   return { credit_quality, green_impact };
 }

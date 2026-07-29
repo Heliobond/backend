@@ -231,6 +231,27 @@ describe("admin routes", () => {
       });
     });
 
+    it("isolates a single failing project: only the failing id appears in errors, the rest in results", async () => {
+      (registry.updateImpactScore as jest.Mock)
+        .mockResolvedValueOnce("tx-1")
+        .mockRejectedValueOnce(new Error("project 2 blew up"))
+        .mockResolvedValueOnce("tx-3");
+
+      const res = await request(app)
+        .post("/api/admin/update-scores")
+        .set(AUTH_HEADER)
+        .send({ project_ids: [1, 2, 3] })
+        .expect(200);
+
+      const resultIds = res.body.results.map((r: { project_id: number }) => r.project_id).sort();
+      const errorIds = res.body.errors.map((e: { project_id: number }) => e.project_id).sort();
+
+      expect(resultIds).toEqual([1, 3]);
+      expect(errorIds).toEqual([2]);
+      expect(res.body.updated).toBe(res.body.results.length);
+      expect(res.body.updated).toBe(2);
+    });
+
     it("returns 400 for negative project IDs", async () => {
       const res = await request(app)
         .post("/api/admin/update-scores")
