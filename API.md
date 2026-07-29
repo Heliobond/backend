@@ -27,7 +27,7 @@ All responses are JSON. Errors use a consistent shape:
 
 ## Rate limiting
 
-All `/api/*` endpoints are rate limited per client IP. Responses include the
+All `/v1/*` endpoints are rate limited per client IP. Responses include the
 standard `RateLimit-*` headers; a `429` additionally sets `Retry-After`.
 Limits are configurable via environment variables (see
 [`.env.example`](./.env.example)): `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`
@@ -58,7 +58,7 @@ Liveness and basic operational visibility. Not rate limited.
 
 ---
 
-## `GET /api/iot/solar/:id`
+## `GET /v1/iot/solar/:id`
 
 Simulated solar-panel reading for project `id`. Readings are deterministic per
 `(project_id, clock hour)`.
@@ -82,7 +82,7 @@ Simulated solar-panel reading for project `id`. Readings are deterministic per
 
 ---
 
-## `GET /api/iot/satellite/:id`
+## `GET /v1/iot/satellite/:id`
 
 Simulated satellite / vegetation reading for project `id`.
 
@@ -104,7 +104,7 @@ Simulated satellite / vegetation reading for project `id`.
 
 ---
 
-## `GET /api/projects`
+## `GET /v1/projects`
 
 Paginated list of projects with their computed scores and latest readings.
 
@@ -140,7 +140,7 @@ Paginated list of projects with their computed scores and latest readings.
 
 ---
 
-## `GET /api/projects/:id`
+## `GET /v1/projects/:id`
 
 Detail for a single project.
 
@@ -168,7 +168,7 @@ Detail for a single project.
 
 ---
 
-## `GET /api/portfolio/:address`
+## `GET /v1/portfolio/:address`
 
 Indexed deposit/withdraw history and current position for an address.
 
@@ -200,7 +200,7 @@ Indexed deposit/withdraw history and current position for an address.
 
 ---
 
-## `POST /api/admin/update-scores`
+## `POST /v1/admin/update-scores`
 
 Compute and submit `update_impact_score` transactions to the Soroban contract.
 Stricter rate limit than public endpoints.

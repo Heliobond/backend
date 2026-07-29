@@ -23,8 +23,8 @@ flowchart TD
 
     subgraph Express["Express (src/index.ts)"]
         H[GET /health]
-        IOT[iot.ts\nGET /api/iot/solar/:id\nGET /api/iot/satellite/:id]
-        ADMIN[admin.ts\nPOST /api/admin/update-scores\n— Bearer token required]
+        IOT[iot.ts\nGET /v1/iot/solar/:id\nGET /v1/iot/satellite/:id]
+        ADMIN[admin.ts\nPOST /v1/admin/update-scores\n— Bearer token required]
         CRON[node-cron\nhourly @ :00]
     end
 
@@ -71,12 +71,12 @@ Full request/response details, validation rules, and error codes are in
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/health` | — | Liveness + uptime and last cron run |
-| `GET` | `/api/iot/solar/:id` | — | Simulated solar panel reading for project `id` |
-| `GET` | `/api/iot/satellite/:id` | — | Simulated satellite / vegetation reading for project `id` |
-| `GET` | `/api/projects` | — | Paginated list of projects with scores (`?limit=&cursor=`) |
-| `GET` | `/api/projects/:id` | — | Single project detail |
-| `GET` | `/api/portfolio/:address` | — | Indexed deposit/withdraw history for an address |
-| `POST` | `/api/admin/update-scores` | Bearer token | Submit impact score update(s) to the Soroban contract |
+| `GET` | `/v1/iot/solar/:id` | — | Simulated solar panel reading for project `id` |
+| `GET` | `/v1/iot/satellite/:id` | — | Simulated satellite / vegetation reading for project `id` |
+| `GET` | `/v1/projects` | — | Paginated list of projects with scores (`?limit=&cursor=`) |
+| `GET` | `/v1/projects/:id` | — | Single project detail |
+| `GET` | `/v1/portfolio/:address` | — | Indexed deposit/withdraw history for an address |
+| `POST` | `/v1/admin/update-scores` | Bearer token | Submit impact score update(s) to the Soroban contract |
 
 Errors return a consistent `{ "error": { "code": "<code>", "message": "<detail>" } }`
 JSON shape (never a stack trace). `code` is a stable, machine-readable
@@ -99,7 +99,7 @@ exceeded.
 { "status": "ok" }
 ```
 
-### `GET /api/iot/solar/:id`
+### `GET /v1/iot/solar/:id`
 
 ```json
 {
@@ -112,7 +112,7 @@ exceeded.
 
 Readings are deterministic per `(project_id, hour)` — the same id returns the same values within a given clock hour.
 
-### `GET /api/iot/satellite/:id`
+### `GET /v1/iot/satellite/:id`
 
 ```json
 {
@@ -122,7 +122,7 @@ Readings are deterministic per `(project_id, hour)` — the same id returns the 
 }
 ```
 
-### `POST /api/admin/update-scores`
+### `POST /v1/admin/update-scores`
 
 **Headers:** `Authorization: Bearer <ADMIN_API_KEY>`
 
@@ -199,7 +199,7 @@ When the limit is exceeded, the API returns `429 Too Many Requests` with:
 }
 ```
 
-Configure via environment variables (see below). Admin limits are stricter because each `POST /api/admin/update-scores` call triggers on-chain Soroban transactions that cost XLM.
+Configure via environment variables (see below). Admin limits are stricter because each `POST /v1/admin/update-scores` call triggers on-chain Soroban transactions that cost XLM.
 
 ---
 

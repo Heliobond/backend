@@ -7,10 +7,6 @@ const MAX_POWER_KW = 1000;
 const DEFAULT_EFFICIENCY_PCT = 60;
 const DEFAULT_FOREST_DENSITY_PCT = 50;
 
-export function seededRandom(seed: number): number {
-  const hourSeed = Math.floor(Date.now() / 3_600_000);
-  const x = Math.sin(seed * 9301 + hourSeed * 49297 + 233) * 10000;
-  return x - Math.floor(x);
 // Configurable timezone for seeded-random hour boundaries.
 // Defaults to UTC so results are identical across servers regardless of OS locale.
 // Set CRON_TIMEZONE=America/New_York to align hourly boundaries with a local clock.
