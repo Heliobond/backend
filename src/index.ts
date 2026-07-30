@@ -73,6 +73,7 @@ import { getMigrationStatus, runMigrations, rollbackMigration } from "./lib/migr
 import { featureFlagContext, registerFlagRoutes } from "./middleware/featureFlags";
 import { loadFlags, getFlagAnalytics } from "./lib/feature-flags";
 import { compressionMiddleware, getCompressionMetrics } from "./middleware/compression";
+import { handleListenError } from "./lib/listen-errors";
 
 const env = initEnv();
 
@@ -450,6 +451,10 @@ scheduleCron(
 const server = app.listen(PORT, () => {
   logger.info(`Heliobond backend listening on port ${PORT}`);
 });
+
+// Bind failures (EADDRINUSE, EACCES, …) surface here instead of as an uncaught
+// exception with a raw stack trace. Exits 1 so supervisors treat it as a failure.
+server.on("error", (err: NodeJS.ErrnoException) => handleListenError(err, PORT));
 
 // Real-time score updates over WebSocket (ws://<host>/ws)
 attachWebSocketServer(server);
