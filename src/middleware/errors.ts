@@ -35,9 +35,33 @@ export function badRequest(message: string): ApiError {
   return new ApiError(400, "bad_request", message);
 }
 
+/** Default inclusive upper bound for project IDs; overridable via MAX_PROJECT_ID. */
+export const DEFAULT_MAX_PROJECT_ID = 1_000_000;
+
 /**
- * Parse and validate a `:id` style path/route param as a positive integer.
- * Throws `ApiError` (400) on anything that isn't a whole number >= 1.
+ * Resolved inclusive upper bound for project IDs.
+ *
+ * Read per call so the bound can be raised without a rebuild as the registry
+ * grows. A missing, non-numeric or non-positive value falls back to the default
+ * rather than throwing: a typo in this variable must not turn every project
+ * lookup into a 500.
+ */
+export function maxProjectId(): number {
+  const raw = process.env.MAX_PROJECT_ID;
+  if (!raw) return DEFAULT_MAX_PROJECT_ID;
+  const parsed = parseInt(raw, 10);
+  if (Number.isNaN(parsed) || parsed < 1) return DEFAULT_MAX_PROJECT_ID;
+  return parsed;
+}
+
+/**
+ * Parse and validate a `:id` style path/route param as a project ID.
+ *
+ * Accepts only a whole number in `[1, MAX_PROJECT_ID]` (default 1..1000000).
+ * The digits-only regex rejects floats (`1.5`), signs (`-5`, `+5`), whitespace
+ * and exponent notation (`1e6`) before any numeric coercion happens, and the
+ * upper bound keeps absurd IDs from reaching downstream lookups. Anything else
+ * throws `ApiError` (400).
  */
 export function parseProjectId(raw: string | string[] | undefined, field = "id"): number {
   const value = Array.isArray(raw) ? raw[0] : raw;
@@ -48,6 +72,12 @@ export function parseProjectId(raw: string | string[] | undefined, field = "id")
   if (!Number.isInteger(id) || id < 1) {
     throw badRequest(`${field} must be a positive integer`);
   }
+
+  const max = maxProjectId();
+  if (id > max) {
+    throw badRequest(`${field} must be between 1 and ${max}`);
+  }
+
   return id;
 }
 
