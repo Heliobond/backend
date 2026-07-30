@@ -59,6 +59,8 @@ declare namespace NodeJS {
     COMPRESSION_LEVEL?: string;
     /** Integer ms to wait for in-flight work on shutdown. Default: 30000 */
     SHUTDOWN_TIMEOUT_MS?: string;
+    /** Integer inclusive upper bound accepted for a `:id` project param. Default: 1000000 */
+    MAX_PROJECT_ID?: string;
 
     // ── Database ────────────────────────────────────────────────────────
     DB_HOST?: string;
@@ -95,6 +97,8 @@ declare namespace NodeJS {
     CRON_FAILURE_THRESHOLD?: string;
     /** "true" disables the in-memory IoT reading cache. */
     IOT_CACHE_DISABLED?: string;
+    /** Integer max entries retained by the IoT reading cache. Default: 1000 */
+    IOT_CACHE_MAX_SIZE?: string;
     /** Integer ms satellite readings stay cached. Default: 7200000 */
     SATELLITE_CACHE_TTL_MS?: string;
     /** Integer consecutive source failures before alerting. Default: 3 */

@@ -78,7 +78,7 @@ Simulated solar-panel reading for project `id`. Readings are deterministic per
 }
 ```
 
-**Errors:** `400` if `id` is not a positive integer.
+**Errors:** `400` if `id` is not a whole number in `1..1000000` (bound configurable via `MAX_PROJECT_ID`).
 
 ---
 
@@ -100,7 +100,7 @@ Simulated satellite / vegetation reading for project `id`.
 }
 ```
 
-**Errors:** `400` if `id` is not a positive integer.
+**Errors:** `400` if `id` is not a whole number in `1..1000000` (bound configurable via `MAX_PROJECT_ID`).
 
 ---
 
@@ -164,7 +164,7 @@ Detail for a single project.
 }
 ```
 
-**Errors:** `400` if `id` is not a positive integer.
+**Errors:** `400` if `id` is not a whole number in `1..1000000` (bound configurable via `MAX_PROJECT_ID`).
 
 ---
 
