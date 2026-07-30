@@ -8,6 +8,7 @@ import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-dete
 import { withProjectLock } from "../lib/request-queue";
 import { config } from "../config";
 import { logger } from "../lib/logger";
+import { timingSafeCompare } from "../lib/timing-safe";
 
 const router = Router();
 
@@ -19,7 +20,9 @@ router.use((req: Request, res: Response, next: NextFunction) => {
       .status(500)
       .json(errorBody("server_misconfigured", "Admin API key is not configured"));
   }
-  if (req.headers.authorization !== `Bearer ${apiKey}`) {
+  // Constant-time compare so response timing can't be used to guess the key.
+  const authorization = req.headers.authorization ?? "";
+  if (!timingSafeCompare(authorization, `Bearer ${apiKey}`)) {
     return res.status(401).json(errorBody("unauthorized", "Missing or invalid bearer token"));
   }
   next();

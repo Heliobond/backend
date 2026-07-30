@@ -133,11 +133,11 @@ describe("admin routes", () => {
     });
 
     it("documents current behavior for a token with trailing whitespace", async () => {
-      // The middleware itself does a strict `!==` comparison with no
+      // The middleware itself does an exact constant-time comparison with no
       // trimming. However, HTTP header values are trimmed of leading/
       // trailing whitespace by the underlying HTTP parser before the
       // handler ever sees them (per RFC 7230), so in practice a trailing
-      // space on the wire does NOT survive to reach the `!==` check — the
+      // space on the wire does NOT survive to reach the comparison — the
       // request passes through. This test pins down that actual observed
       // behavior; it is not asserting this is the desired security posture.
       const res = await request(app)
@@ -151,6 +151,37 @@ describe("admin routes", () => {
       const res = await request(app)
         .post("/api/admin/update-scores")
         .set("Authorization", "bearer test-key")
+        .send({});
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe("unauthorized");
+    });
+
+    // ── Constant-time comparison (#209) ────────────────────────────────────
+    // The comparison is timing-safe, so near-miss tokens must be rejected the
+    // same way as completely wrong ones — no early exit on the first mismatch.
+
+    it("rejects a token that differs only in the last character", async () => {
+      const res = await request(app)
+        .post("/api/admin/update-scores")
+        .set("Authorization", "Bearer test-keZ")
+        .send({});
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe("unauthorized");
+    });
+
+    it("rejects a token that is a prefix of the real key", async () => {
+      const res = await request(app)
+        .post("/api/admin/update-scores")
+        .set("Authorization", "Bearer test-k")
+        .send({});
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe("unauthorized");
+    });
+
+    it("rejects a token that extends the real key", async () => {
+      const res = await request(app)
+        .post("/api/admin/update-scores")
+        .set("Authorization", "Bearer test-key-extra")
         .send({});
       expect(res.status).toBe(401);
       expect(res.body.error.code).toBe("unauthorized");
