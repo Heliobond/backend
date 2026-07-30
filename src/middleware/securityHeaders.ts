@@ -4,7 +4,7 @@ import { RequestHandler } from "express";
 /**
  * Composed helmet middleware that sets the following security headers:
  *   Content-Security-Policy  — restricts resource origins
- *   X-Frame-Options          — blocks clickjacking (SAMEORIGIN)
+ *   X-Frame-Options          — blocks clickjacking (DENY; this is an API, never framed)
  *   X-Content-Type-Options   — prevents MIME sniffing
  *   Strict-Transport-Security — enforces HTTPS for 1 year
  *   X-XSS-Protection         — legacy browser XSS filter
@@ -26,7 +26,7 @@ export const securityHeaders: RequestHandler = helmet({
       formAction: ["'self'"],
     },
   },
-  frameguard: { action: "sameorigin" },
+  frameguard: { action: "deny" },
   noSniff: true,
   hsts: {
     maxAge: 31_536_000,

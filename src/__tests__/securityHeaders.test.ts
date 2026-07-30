@@ -18,9 +18,9 @@ describe("securityHeaders middleware", () => {
       expect(res.headers["x-content-type-options"]).toBe("nosniff");
     });
 
-    it("sets X-Frame-Options: SAMEORIGIN", async () => {
+    it("sets X-Frame-Options: DENY", async () => {
       const res = await request(app).get("/test");
-      expect(res.headers["x-frame-options"]).toBe("SAMEORIGIN");
+      expect(res.headers["x-frame-options"]).toBe("DENY");
     });
 
     it("sets X-XSS-Protection header", async () => {
@@ -44,20 +44,20 @@ describe("securityHeaders middleware", () => {
 
       const jsonRes = await request(app).get("/json");
       expect(jsonRes.headers["x-content-type-options"]).toBe("nosniff");
-      expect(jsonRes.headers["x-frame-options"]).toBe("SAMEORIGIN");
+      expect(jsonRes.headers["x-frame-options"]).toBe("DENY");
 
       const textRes = await request(app).get("/text");
       expect(textRes.headers["x-content-type-options"]).toBe("nosniff");
-      expect(textRes.headers["x-frame-options"]).toBe("SAMEORIGIN");
+      expect(textRes.headers["x-frame-options"]).toBe("DENY");
 
       const postRes = await request(app).post("/post");
       expect(postRes.headers["x-content-type-options"]).toBe("nosniff");
-      expect(postRes.headers["x-frame-options"]).toBe("SAMEORIGIN");
+      expect(postRes.headers["x-frame-options"]).toBe("DENY");
     });
 
     it("sets all expected security headers on every request", async () => {
       const res = await request(app).get("/test");
-      
+
       const expectedHeaders = [
         "x-content-type-options",
         "x-frame-options",
