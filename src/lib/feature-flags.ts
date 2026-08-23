@@ -140,14 +140,12 @@ export function getFlagAnalytics(): FlagAnalyticsSummary {
 // ── Feature Flag Engine ─────────────────────────────────────────────────────
 
 let flags: FlagSet = {};
-const dependencyCache: Map<string, boolean> = new Map();
 
 /**
  * Load or replace the entire flag set (e.g. from a JSON config file or remote source).
  */
 export function loadFlags(flagSet: FlagSet): void {
   flags = { ...flagSet };
-  dependencyCache.clear();
   logger.info("[feature-flags] loaded", { count: Object.keys(flags).length });
 }
 
@@ -156,7 +154,6 @@ export function loadFlags(flagSet: FlagSet): void {
  */
 export function mergeFlags(partial: FlagSet): void {
   Object.assign(flags, partial);
-  dependencyCache.clear();
   logger.info("[feature-flags] merged", { count: Object.keys(partial).length });
 }
 
