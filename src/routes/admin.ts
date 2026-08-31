@@ -13,6 +13,37 @@ import { timingSafeCompare } from "../lib/timing-safe";
 
 const router = Router();
 
+const ADMIN_REQUEST_TIMEOUT_MS = Number(process.env.ADMIN_REQUEST_TIMEOUT_MS ?? 60000);
+const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS ?? 30000);
+
+export function requestTimeoutMiddleware(timeoutMs: number = REQUEST_TIMEOUT_MS) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    let timedOut = false;
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      if (!res.headersSent) {
+        res.status(408).json({
+          error: { code: "request_timeout", message: "Request timed out" },
+        });
+      } else {
+        req.destroy();
+      }
+    }, timeoutMs);
+
+    res.on("finish", () => {
+      clearTimeout(timer);
+      if (timedOut) {
+        req.destroy();
+      }
+    });
+    res.on("close", () => clearTimeout(timer));
+    next();
+  };
+}
+
+router.use(requestTimeoutMiddleware(ADMIN_REQUEST_TIMEOUT_MS));
+
 // Bearer token auth — enforced when ADMIN_API_KEY env var is set
 router.use((req: Request, res: Response, next: NextFunction) => {
   const apiKey = config.ADMIN_API_KEY;
