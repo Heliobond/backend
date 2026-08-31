@@ -1,6 +1,6 @@
 import request from "supertest";
 import express, { Express } from "express";
-import investorRouter from "../routes/investor";
+import investorRouter, { CARBON_OFFSET_FACTOR, CARBON_CREDIT_FACTOR } from "../routes/investor";
 import { errorHandler } from "../middleware/errors";
 import * as registry from "../lib/registry";
 import * as iot from "../routes/iot";
@@ -137,6 +137,13 @@ describe("Investor Reporting Endpoints", () => {
         .post("/api/investor/custom-report")
         .send({ sections: ["invalid-section"] });
       expect(res.status).toBe(400);
+    });
+  });
+
+  describe("Carbon Constants", () => {
+    it("should export defined carbon calculation factor constants", () => {
+      expect(CARBON_OFFSET_FACTOR).toBe(0.05);
+      expect(CARBON_CREDIT_FACTOR).toBe(0.5);
     });
   });
 });
