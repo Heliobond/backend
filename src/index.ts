@@ -282,25 +282,25 @@ app.use("/v1", v1);
 // ── Legacy /api paths (deprecated) ──────────────────────────────────────────
 // Kept for backward compatibility; will be removed after 2027-01-01.
 app.use("/api", deprecationHeaders, versionHeaders);
-app.use("/api/iot", publicLimiter, iotRouter);
+app.use("/api/iot", publicLimiter, apiKeyAuth, iotRouter);
 app.use("/api/admin", ipWhitelist, adminLimiter, adminRouter);
 app.use("/api/admin/batch", ipWhitelist, adminLimiter, batchRouter);
-app.use("/api/projects", publicLimiter, projectsRouter);
-app.use("/api/projects/:id/history", publicLimiter, historyRouter);
-app.use("/api/projects/aggregate", publicLimiter, aggregateRouter);
-app.use("/api/portfolio", publicLimiter, portfolioRouter);
+app.use("/api/projects", publicLimiter, apiKeyAuth, projectsRouter);
+app.use("/api/projects/:id/history", publicLimiter, apiKeyAuth, historyRouter);
+app.use("/api/projects/aggregate", publicLimiter, apiKeyAuth, aggregateRouter);
+app.use("/api/portfolio", publicLimiter, apiKeyAuth, portfolioRouter);
 app.use("/api/roles", ipWhitelist, adminLimiter, rolesRouter);
 app.use("/api/webhooks", ipWhitelist, adminLimiter, webhooksRouter);
 app.use("/api/panels", ipWhitelist, adminLimiter, panelsRouter);
 app.use("/api/metadata", ipWhitelist, adminLimiter, metadataRouter);
-app.use("/api/dashboard", publicLimiter, dashboardRouter);
+app.use("/api/dashboard", publicLimiter, apiKeyAuth, dashboardRouter);
 app.use("/api/email", ipWhitelist, adminLimiter, emailRouter);
-app.use("/api/comparison", publicLimiter, comparisonRouter);
-app.use("/api/benchmarking", publicLimiter, benchmarkingRouter);
-app.use("/api/financial", publicLimiter, financialRouter);
-app.use("/api/forecast", publicLimiter, forecastRouter);
-app.use("/api/maintenance", publicLimiter, maintenanceRouter);
-app.use("/api/investor", publicLimiter, investorRouter);
+app.use("/api/comparison", publicLimiter, apiKeyAuth, comparisonRouter);
+app.use("/api/benchmarking", publicLimiter, apiKeyAuth, benchmarkingRouter);
+app.use("/api/financial", publicLimiter, apiKeyAuth, financialRouter);
+app.use("/api/forecast", publicLimiter, apiKeyAuth, forecastRouter);
+app.use("/api/maintenance", publicLimiter, apiKeyAuth, maintenanceRouter);
+app.use("/api/investor", publicLimiter, apiKeyAuth, investorRouter);
 app.use("/api/admin/api-keys", ipWhitelist, adminLimiter, apiKeysRouter);
 
 // JSON 404 for anything unmatched, then the structured error handler.
