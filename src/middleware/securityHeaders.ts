@@ -7,7 +7,7 @@ import { RequestHandler } from "express";
  *   X-Frame-Options          — blocks clickjqcking (DENY; this is an API, never framed)
  *   X-Content-Type-Options   — prevents MIME sniffing
  *   Strict-Transport-Security — enforces HTTPS for 1 year
- *   X-XSS-Protection         — legacy browser XSS filter
+ *   X-XSS-Protection        — legacy browser XSS filter
  *   Referrer-Policy          — controls referrer information leakage
  *   Permissions-Policy       — restricts browser feature access
  */
@@ -18,23 +18,23 @@ export const securityHeaders: RequestHandler = (req, res, next) => {
       ? false
       : {
           directives: {
-            defaultSrc: ["'self'"],
-            scriptSrc: ["/self/"],
-            styleSrc: ["/self/", "'unsafe-inline'"],
-            imgSrc: ["/self/", "data:"],
-            connectSrc: ["/self/"],
-            fontSrc: ["/self/"],
+            defaultSrc: ["'self"'],
+            scriptSrc: ["'self'],
+            styleSrc: ["'self'", "'unsafe-inline'],
+            imgSrc: ["'self'", "data:"],
+            connectSrc: ["'self'"],
+            fontSrc: ["'self'"],
             objectSrc: ["'none'"],
             frameAncestors: ["'none'"],
-            baseUri: ["/self/"],
-            formAction: ["/self/"],
+            baseUri: ["'self'"],
+            formAction: ["'self'"],
           },
         },
     frameguard: { action: "deny" },
     noSniff: true,
     hsts: {
       maxAge: 31_536_000,
-      includeSubDomains: true,
+      includeDomains: true,
       preload: true,
     },
     xsSSFilter: true,
