@@ -91,6 +91,19 @@ if (!process.env.ADMIN_API_KEY) {
 const app = express();
 const PORT = env.PORT;
 
+// Trust proxy configuration — required for Express to parse X-Forwarded-For
+// via req.ip / req.ips.  Without this, ipWhitelist must hand-parse headers,
+// which is vulnerable to spoofing.
+//
+// TRUST_PROXY values:
+//  - "false"  (default) — no proxy; req.ip is the direct peer address
+//  - "true"            — trust all proxies (single hop)
+//  - "loopback"        — trust loopback (127.0.0.1/8, ::1) only
+//  - a CIDR or IP      — trust specific proxy IP(s)
+//  - a number N         — trust the first N hops in X-Forwarded-For
+const trustProxy = process.env.TRUST_PROXY || "false";
+app.set("trust proxy", trustProxy === "true" ? true : trustProxy);
+
 // Validate CORS origin
 function validateCorsOrigin(origin: string | undefined): string | undefined {
   if (!origin) return undefined;
