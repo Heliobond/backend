@@ -288,6 +288,24 @@ npm audit --audit-level=high
 
 Use `npm audit --json` if you need machine-readable details while triaging a finding.
 
+## Dependency Pinning
+
+Critical packages are pinned to exact versions in `package.json` to prevent
+compromised or buggy minor/patch releases from being silently installed by
+`bun install`. The lockfile (`bun.lock`) records the resolved versions and is
+checked in so installs are reproducible.
+
+The following packages are pinned because they are security-sensitive or
+directly handle blockchain and HTTP trust boundaries:
+
+- `@stellar/stellar-sdk` — pinned; Stellar transaction signing and submission.
+- `express` — pinned; HTTP server and request routing.
+- `dotenv` — pinned; loads secrets and configuration.
+
+Only the packages listed above are pinned; all other dependencies retain their
+existing caret ranges. When upgrading a pinned package, change the exact version
+in `package.json`, run `bun install`, and commit the updated `bun.lock`.
+
 ## Deployment
 
 ### Docker
