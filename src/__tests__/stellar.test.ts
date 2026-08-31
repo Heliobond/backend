@@ -32,6 +32,7 @@ jest.mock("../config", () => ({
 const mockTx = {
   operations: [{ type: "invoke" }],
   fee: 100,
+  sequence: "1000",
   timeBounds: undefined,
   sign: jest.fn(),
 };
@@ -53,6 +54,7 @@ jest.mock("@stellar/stellar-sdk", () => ({
     fromXDR: jest.fn().mockReturnValue({
       operations: [{ type: "invoke" }],
       fee: 100,
+      sequence: "1000",
       timeBounds: undefined,
       tx: { timeBounds: undefined },
       sign: jest.fn(),
@@ -202,6 +204,7 @@ describe("stellar utility helpers", () => {
       const freshTx = {
         operations: [{ type: "invoke" }],
         fee: 100,
+        sequence: "1000",
         timeBounds: undefined,
         sign: jest.fn(),
       };
