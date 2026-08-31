@@ -304,7 +304,8 @@ directly handle blockchain and HTTP trust boundaries:
 
 Only the packages listed above are pinned; all other dependencies retain their
 existing caret ranges. When upgrading a pinned package, change the exact version
-in `package.json`, run `bun install`, and commit the updated `bun.lock`.
+in `package.json`, run `bun install`, and commit the updated `bun.lock`. Do not
+change a pinned dependency back to a caret range.
 
 ## Deployment
 
