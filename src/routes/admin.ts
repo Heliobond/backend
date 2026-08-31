@@ -1,7 +1,5 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { getSolarData, getSatelliteData } from "./iot";
-import { computeScores } from "../lib/scoring";
-import { updateImpactScore, getTotalProjects } from "../lib/registry";
+import { getTotalProjects } from "../lib/registry";
 import { updateScoreForProject } from "../lib/scoreService";
 import { badRequest, parseOptionalInt, MAX_PROJECT_ID, errorBody } from "../middleware/errors";
 import { recordAudit, getAuditLog, auditToCsv } from "../lib/audit";

@@ -43,17 +43,6 @@ export async function updateImpactScore(
   });
 }
 
-/**
- * Narrowing guard for a failed simulation. Defined locally rather than using
- * the SDK's `rpc.Api.isSimulationError` so the check stays a plain shape test
- * and does not depend on that helper being present at runtime.
- */
-function isSimulationError(
-  sim: rpc.Api.SimulateTransactionResponse,
-): sim is rpc.Api.SimulateTransactionErrorResponse {
-  return "error" in sim && typeof sim.error === "string";
-}
-
 export async function getTotalProjects(): Promise<number> {
   return withRpcConnection(async (client) => {
     const contract = new Contract(REGISTRY_CONTRACT_ID);
