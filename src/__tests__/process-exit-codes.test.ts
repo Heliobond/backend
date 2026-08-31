@@ -1,6 +1,8 @@
 import { spawnSync } from "child_process";
+import path from "path";
 
 describe("process exit codes", () => {
+  const repoRoot = path.resolve(__dirname, "../..");
   it("exits with code 1 when required env vars are missing", () => {
     const result = spawnSyncWithEnv(
       {
