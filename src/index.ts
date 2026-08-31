@@ -416,9 +416,9 @@ scheduleCron(
       const status = getRpcStatus();
       logger.error(
         `[alert] Stellar RPC outage detected: ` +
-          `consecutiveFailures=${status.consecutiveFailures}, ` +
-          `outageDurationMs=${status.outageDurationMs}, ` +
-          `lastSuccessAgoMs=${status.lastSuccessAgoMs}`,
+        `consecutiveFailures=${status.consecutiveFailures}, ` +
+        `outageDurationMs=${status.outageDurationMs}, ` +
+        `lastSuccessAgoMs=${status.lastSuccessAgoMs}`,
       );
     }
   },
@@ -470,7 +470,16 @@ app.all(
 );
 
 app.get("/graphql-playground", (req, res) => {
+  // Generate a nonce for inline script CSP
+  const nonce = require('crypto').randomBytes(16).toString('hex');
+
   res.setHeader("Content-Type", "text/html");
+  // Override CSP to allow inline script with nonce
+  res.setHeader(
+    "Content-Security-Policy",
+    `default-src 'self'; script-src 'self' https://unpkg.com 'nonce-${nonce}'; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; connect-src 'self'`
+  );
+
   res.send(`
     <!DOCTYPE html>
     <html>
@@ -483,7 +492,7 @@ app.get("/graphql-playground", (req, res) => {
         <script crossorigin src="https://unpkg.com/react/umd/react.production.min.js"></script>
         <script crossorigin src="https://unpkg.com/react-dom/umd/react-dom.production.min.js"></script>
         <script crossorigin src="https://unpkg.com/graphiql/graphiql.min.js"></script>
-        <script>
+        <script nonce="${nonce}">
           const fetcher = GraphiQL.createFetcher({ url: '/graphql' });
           ReactDOM.render(
             React.createElement(GraphiQL, { fetcher: fetcher }),
