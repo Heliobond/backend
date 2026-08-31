@@ -31,6 +31,7 @@ import { createHandler } from "graphql-http/lib/use/express";
 import { graphqlSchema, graphqlRoot, createGraphQLContext } from "./graphql/schema";
 import { startGrpcServer } from "./grpc/server";
 import { getSolarData } from "./lib/iot";
+import { assignRole } from "./lib/roles";
 import { fetchSatelliteWithFallback } from "./lib/satellite-sources";
 import { computeScores } from "./lib/scoring";
 import { updateImpactScore } from "./lib/registry";
@@ -76,6 +77,12 @@ import { compressionMiddleware, getCompressionMetrics } from "./middleware/compr
 import { handleListenError } from "./lib/listen-errors";
 
 const env = initEnv();
+
+// Seed initial admin from env var (RBAC bootstrap)
+const initialAdminUserId = process.env.INITIAL_ADMIN_USER_ID?.trim();
+if (initialAdminUserId) {
+  assignRole(initialAdminUserId, "admin");
+}
 
 // Initialize APM in background — errors are logged but don't block startup
 initApm().catch((err: Error) => {
