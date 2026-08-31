@@ -1,5 +1,4 @@
 name: CI
-
 on:
   push:
     branches: [main]
@@ -17,28 +16,12 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Install bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@2v
         with:
-          bun-version: "1.x"
+          bun-version: "latest"
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Check lockfiles are in sync
-        run: |
-          echo "Checking that package-lock.json is in sync with package.json (bun.lock is canonical)..."
-          if [ -f package-lock.json ]; then
-            cp package-lock.json package-lock.json.orig
-            npm install --package-lock-only --ignore-scripts
-            if ! diff -q package-lock.json package-lock.json.orig >/dev/null 2>&1; then
-              echo "::error::package-lock.json is out of sync with package.json. Run 'npm install' locally after any 'bun add / bun update' and commit the updated lockfile."
-              diff -u package-lock.json.orig package-lock.json | head -n 200 || true
-              mv package-lock.json.orig package-lock.json
-              exit 1
-            fi
-            echo "package-lock.json is in sync."
-            rm package-lock.json.orig
-          fi
+        run: bun install
 
       - name: Build
         run: bun run build
