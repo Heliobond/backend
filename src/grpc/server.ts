@@ -6,6 +6,8 @@ import { computeScores } from "../lib/scoring";
 import { getTotalProjects } from "../lib/registry";
 import { validateApiKey, isRateLimited, incrementUsage } from "../lib/apiKeys";
 import { scoreEvents, SCORE_UPDATE_EVENT } from "../lib/events";
+import { handleListenError } from "../lib/listen-errors";
+import { logger } from "../lib/logger";
 import { timingSafeCompare } from "../lib/timing-safe";
 
 const PROTO_PATH = path.join(__dirname, "../proto/heliobond.proto");
@@ -166,7 +168,10 @@ function chatProjectScores(call: grpc.ServerDuplexStream<any, any>) {
   });
 }
 
-export function startGrpcServer(port = 50051): grpc.Server {
+export function startGrpcServer(
+  port = 50051,
+  handleBindError: (err: NodeJS.ErrnoException, port: number | string) => void = handleListenError,
+): grpc.Server {
   const server = new grpc.Server({
     "grpc.keepalive_time_ms": 120000,
     "grpc.keepalive_timeout_ms": 20000,
@@ -182,10 +187,10 @@ export function startGrpcServer(port = 50051): grpc.Server {
 
   server.bindAsync(`0.0.0.0:${port}`, grpc.ServerCredentials.createInsecure(), (err, boundPort) => {
     if (err) {
-      console.error(`[gRPC] Failed to bind to port ${port}:`, err);
+      handleBindError(err as NodeJS.ErrnoException, port);
       return;
     }
-    console.log(`[gRPC] Server running on 0.0.0.0:${boundPort}`);
+    logger.info(`[gRPC] Server running on 0.0.0.0:${boundPort}`);
   });
 
   return server;

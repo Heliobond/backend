@@ -36,7 +36,7 @@ describe("gRPC Service Integration", () => {
 
     client = new heliobondProto.HeliobondService(
       `localhost:${PORT}`,
-      grpc.credentials.createInsecure()
+      grpc.credentials.createInsecure(),
     );
     // Give the server a small moment to bind
     setTimeout(done, 500);
@@ -156,5 +156,21 @@ describe("gRPC Service Integration", () => {
 
     stream.write({ project_id: 1 });
     stream.write({ project_id: 2 });
+  });
+
+  it("should route bind failures through the listen error handler", (done) => {
+    const handleBindError = jest.fn((err: NodeJS.ErrnoException, port: number | string) => {
+      try {
+        expect(err).toBeInstanceOf(Error);
+        expect(err.message).toContain("No address added");
+        expect(port).toBe(PORT);
+        duplicateServer.forceShutdown();
+        done();
+      } catch (assertionError) {
+        duplicateServer.forceShutdown();
+        done(assertionError);
+      }
+    });
+    const duplicateServer = startGrpcServer(PORT, handleBindError);
   });
 });
