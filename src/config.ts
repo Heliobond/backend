@@ -171,5 +171,11 @@ export function validateRequiredEnv(): void {
  */
 export function initEnv() {
   validateRequiredEnv();
+
+  // Initialize API key roles from environment variables
+  // This must be called before any routes that use role-based auth
+  const { loadApiKeysFromEnv } = require("./lib/apiKeyRoles");
+  loadApiKeysFromEnv();
+
   return config;
 }
