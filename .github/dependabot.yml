@@ -14,15 +14,9 @@ updates:
       - dependency-type: "indirect"
     groups:
       security:
-        dependency-types:
-          - "dev"
         patterns:
           - "*security*"
           - "*cve*"
-    auto-merge:
-      minor-and-patch: true
-      allow-conditions:
-        - check_status: "success"
     pull-request-branch-name:
       separator: "/"
     rebase-strategy: "auto"
