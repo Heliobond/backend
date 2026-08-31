@@ -156,6 +156,11 @@ async function _attemptSubmit(
   keypair: Keypair,
 ): Promise<string> {
   let tx = TransactionBuilder.fromXDR(preparedXdr, networkPassphrase) as any;
+  const originalSequence = BigInt(tx.sequence);
+
+  if (localSequenceTracker !== null && originalSequence <= localSequenceTracker) {
+    throw new Error("Stale sequence number detected");
+  }
 
   // 1. Fetch latest sequence number from ledger state
   const accountKey = xdr.LedgerKey.account(
@@ -174,6 +179,10 @@ async function _attemptSubmit(
       // Use the higher value between live ledger and local in-memory tracker
       if (localSequenceTracker === null || onChainSequence > localSequenceTracker) {
         localSequenceTracker = onChainSequence;
+      }
+
+      if (originalSequence <= localSequenceTracker) {
+        throw new Error("Stale sequence number detected");
       }
 
       const targetSequence = (localSequenceTracker + 1n).toString();
