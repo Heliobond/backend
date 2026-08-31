@@ -14,8 +14,9 @@ updates:
       - dependency-type: "indirect"
     groups:
       security:
-        dependency-types:
-          - "dev"
+        # No dependency-types restriction: a security patch of a production
+        # dependency (stellar-sdk, express, grpc-js, …) is usually higher
+        # priority than a dev-only one and must be grouped here too.
         patterns:
           - "*security*"
           - "*cve*"
