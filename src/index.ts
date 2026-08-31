@@ -180,6 +180,11 @@ app.get("/v1/traces", adminLimiter, (req, res) => {
 });
 
 // ── Swagger UI at /docs ─────────────────────────────────────────────────────
+// Swagger UI bootstraps with an inline script, which the global CSP blocks.
+app.use("/docs", (_req, res, next) => {
+  res.removeHeader("Content-Security-Policy");
+  next();
+});
 app.use("/docs", swaggerUi.serve, swaggerUi.setup(openApiSpec));
 // Raw OpenAPI spec for tooling
 app.get("/docs.json", (_req, res) => res.json(openApiSpec));
