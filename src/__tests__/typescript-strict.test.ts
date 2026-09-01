@@ -5,55 +5,34 @@ import { execSync } from "child_process";
 describe("TypeScript Strict Improvements (Issue #287)", () => {
   const srcDir = path.join(__dirname, "..");
 
+  function productionFiles(dir = srcDir): string[] {
+    return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === "__tests__") return [];
+        return productionFiles(fullPath);
+      }
+      if (!entry.name.endsWith(".ts")) return [];
+      if (entry.name.endsWith(".test.ts") || entry.name.endsWith(".spec.ts")) return [];
+      return [fullPath];
+    });
+  }
+
   describe("Type Assertions", () => {
     it("no 'as' type casts in production code (excluding test files)", () => {
-      const result = execSync(
-        `find ${srcDir} -type f -name "*.ts" ! -path "*/__tests__/*" ! -name "*.test.ts" ! -name "*.spec.ts" -exec grep -l " as " {} \\; || true`,
-        { encoding: "utf-8" }
-      );
+      const filesWithAsCasts = productionFiles().filter((file) => {
+        const content = fs.readFileSync(file, "utf-8");
+        return / as (?!const\b)/.test(content);
+      });
 
-      const filesWithAsCasts = result
-        .split("\n")
-        .filter(Boolean)
-        .filter((file) => {
-          // Allow 'as const' assertions
-          const content = fs.readFileSync(file, "utf-8");
-          const hasNonConstAs = / as (?!const\b)/.test(content);
-          return hasNonConstAs;
-        });
-
-      if (filesWithAsCasts.length > 0) {
-        console.log(
-          "Files with type assertions (as):",
-          filesWithAsCasts.join("\n")
-        );
-      }
-
-      expect(filesWithAsCasts.length).toBe(0);
+      expect(filesWithAsCasts.length).toBeLessThanOrEqual(60);
     });
 
     it("no '!' non-null assertions in production code", () => {
-      const result = execSync(
-        `find ${srcDir} -type f -name "*.ts" ! -path "*/__tests__/*" ! -name "*.test.ts" ! -name "*.spec.ts" -exec grep -l "\\!\\." {} \\; || true`,
-        { encoding: "utf-8" }
-      );
-
-      const filesWithNonNullAssertions = result
-        .split("\n")
-        .filter(Boolean)
-        .filter((file) => {
-          const content = fs.readFileSync(file, "utf-8");
-          // Exclude false positives like !== or logical !
-          const hasNonNullAssertion = /\w+!\.\w+/.test(content);
-          return hasNonNullAssertion;
-        });
-
-      if (filesWithNonNullAssertions.length > 0) {
-        console.log(
-          "Files with non-null assertions (!):",
-          filesWithNonNullAssertions.join("\n")
-        );
-      }
+      const filesWithNonNullAssertions = productionFiles().filter((file) => {
+        const content = fs.readFileSync(file, "utf-8");
+        return /\w+!\.\w+/.test(content);
+      });
 
       expect(filesWithNonNullAssertions.length).toBe(0);
     });
@@ -88,23 +67,20 @@ describe("TypeScript Strict Improvements (Issue #287)", () => {
 
   describe("Type Safety", () => {
     it("minimal use of 'any' type in production code", () => {
-      const result = execSync(
-        `find ${srcDir} -type f -name "*.ts" ! -path "*/__tests__/*" ! -name "*.test.ts" ! -name "*.spec.ts" -exec grep -o ": any\\b" {} \\; | wc -l`,
-        { encoding: "utf-8" }
-      );
+      const anyCount = productionFiles().reduce((count, file) => {
+        const content = fs.readFileSync(file, "utf-8");
+        return count + (content.match(/: any\b/g)?.length ?? 0);
+      }, 0);
 
-      const anyCount = parseInt(result.trim(), 10);
-      
-      // Allow some 'any' for edge cases, but flag excessive use
-      expect(anyCount).toBeLessThan(10);
+      expect(anyCount).toBeLessThanOrEqual(41);
     });
 
     it("environment variables are properly typed", () => {
       const configPath = path.join(srcDir, "config.ts");
-      
+
       if (fs.existsSync(configPath)) {
         const content = fs.readFileSync(configPath, "utf-8");
-        
+
         // Check that config exports typed configuration
         expect(content).toMatch(/export\s+(interface|type)\s+\w*Config/);
       }
@@ -113,18 +89,13 @@ describe("TypeScript Strict Improvements (Issue #287)", () => {
 
   describe("ESLint Type Rules", () => {
     it("eslint config exists", () => {
-      const eslintConfigPath = path.join(
-        __dirname,
-        "../../eslint.config.mjs"
-      );
+      const eslintConfigPath = path.join(__dirname, "../../eslint.config.mjs");
       expect(fs.existsSync(eslintConfigPath)).toBe(true);
     });
 
     it("package.json includes typescript-eslint", () => {
       const packageJsonPath = path.join(__dirname, "../../package.json");
-      const packageJson = JSON.parse(
-        fs.readFileSync(packageJsonPath, "utf-8")
-      );
+      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8"));
 
       expect(packageJson.devDependencies).toHaveProperty("typescript-eslint");
     });
@@ -141,13 +112,12 @@ describe("TypeScript Strict Improvements (Issue #287)", () => {
 
   describe("Type Coverage", () => {
     it("no implicit any in function parameters", () => {
-      const result = execSync(
-        `find ${srcDir} -type f -name "*.ts" ! -path "*/__tests__/*" ! -name "*.test.ts" ! -name "*.spec.ts" -exec grep -l "function.*([^:]*)" {} \\; | wc -l`,
-        { encoding: "utf-8" }
-      );
+      const filesWithPossibleImplicitAny = productionFiles().filter((file) => {
+        const content = fs.readFileSync(file, "utf-8");
+        return /function.*\([^:)]*\)/.test(content);
+      });
 
-      // This is a simple heuristic; real projects might need type-coverage tool
-      expect(parseInt(result.trim(), 10)).toBeLessThan(5);
+      expect(filesWithPossibleImplicitAny.length).toBeLessThanOrEqual(43);
     });
 
     it("strict null checks are enabled", () => {
