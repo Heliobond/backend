@@ -16,6 +16,12 @@ if (!config.PROJECT_REGISTRY_CONTRACT_ID) {
 }
 const REGISTRY_CONTRACT_ID = config.PROJECT_REGISTRY_CONTRACT_ID;
 
+function isSimulationErrorResponse(
+  sim: rpc.Api.SimulateTransactionResponse,
+): sim is rpc.Api.SimulateTransactionErrorResponse {
+  return "error" in sim;
+}
+
 export async function updateImpactScore(
   projectId: number,
   creditQuality: number,
@@ -43,17 +49,6 @@ export async function updateImpactScore(
   });
 }
 
-/**
- * Narrowing guard for a failed simulation. Defined locally rather than using
- * the SDK's `rpc.Api.isSimulationError` so the check stays a plain shape test
- * and does not depend on that helper being present at runtime.
- */
-function isSimulationError(
-  sim: rpc.Api.SimulateTransactionResponse,
-): sim is rpc.Api.SimulateTransactionErrorResponse {
-  return "error" in sim && typeof sim.error === "string";
-}
-
 export async function getTotalProjects(): Promise<number> {
   return withRpcConnection(async (client) => {
     const contract = new Contract(REGISTRY_CONTRACT_ID);
@@ -69,25 +64,20 @@ export async function getTotalProjects(): Promise<number> {
 
     const end = stellarRpcDuration.startTimer({ operation: "simulateTransaction" });
     try {
-      const result = await client.simulateTransaction(tx);
-      if ("error" in result) throw new Error((result as { error: string }).error);
-      const sim = result as rpc.Api.SimulateTransactionSuccessResponse;
+      const sim = await client.simulateTransaction(tx);
+      if (isSimulationErrorResponse(sim)) throw new Error(sim.error);
+      const retval = sim.result?.retval;
+      if (retval === undefined) {
+        throw new Error("total_projects simulation returned no result value");
+      }
       end();
       stellarRpcTotal.inc({ operation: "simulateTransaction", result: "success" });
-      return Number(scValToNative(sim.result!.retval));
+      return Number(scValToNative(retval));
     } catch (err) {
       end();
       stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });
       throw err;
     }
-    const sim = await client.simulateTransaction(tx);
-    if (isSimulationError(sim)) throw new Error(sim.error);
-
-    const retval = sim.result?.retval;
-    if (retval === undefined) {
-      throw new Error("total_projects simulation returned no result value");
-    }
-    return Number(scValToNative(retval));
   });
 }
 

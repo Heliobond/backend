@@ -3,12 +3,16 @@
   "version": "1.0.0",
   "private": true,
   "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20.0.0",
+    "bun": ">=1.0.0"
+  },
   "scripts": {
     "dev": "node --watch -r ts-node/register src/index.ts",
     "dev:no-watch": "ts-node src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "jest",
+    "test": "jest --runInBand",
     "test:coverage": "jest --coverage",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",

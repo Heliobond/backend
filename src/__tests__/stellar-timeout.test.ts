@@ -1,4 +1,4 @@
-import { signAndSubmit } from "../lib/stellar";
+import { rpcPool, signAndSubmit } from "../lib/stellar";
 import { rpc, TransactionBuilder, Keypair } from "@stellar/stellar-sdk";
 
 jest.mock("@stellar/stellar-sdk", () => {
@@ -13,7 +13,7 @@ jest.mock("@stellar/stellar-sdk", () => {
 });
 
 function makeGetTransactionResponse(
-  status: rpc.Api.GetTransactionStatus
+  status: rpc.Api.GetTransactionStatus,
 ): rpc.Api.GetTransactionResponse {
   return {
     status,
@@ -48,6 +48,7 @@ describe("signAndSubmit timeout behavior", () => {
     client = {
       sendTransaction: jest.fn(),
       getTransaction: jest.fn(),
+      getLedgerEntries: jest.fn().mockResolvedValue({ entries: [] }),
     } as unknown as rpc.Server;
     // Speed up the polling delay from 1500ms to 10ms
     global.setTimeout = ((fn: () => void) => {
@@ -59,6 +60,10 @@ describe("signAndSubmit timeout behavior", () => {
     global.setTimeout = originalSetTimeout;
   });
 
+  afterAll(async () => {
+    await rpcPool.shutdown();
+  });
+
   it("transaction succeeds when adequate timeout", async () => {
     (client.sendTransaction as jest.Mock).mockResolvedValue({
       status: "PENDING",
@@ -67,9 +72,7 @@ describe("signAndSubmit timeout behavior", () => {
     });
     (client.getTransaction as jest.Mock)
       .mockResolvedValueOnce(makeGetTransactionResponse(rpc.Api.GetTransactionStatus.NOT_FOUND))
-      .mockResolvedValueOnce(
-        makeGetTransactionResponse(rpc.Api.GetTransactionStatus.SUCCESS)
-      );
+      .mockResolvedValueOnce(makeGetTransactionResponse(rpc.Api.GetTransactionStatus.SUCCESS));
 
     const hash = await signAndSubmit(client, xdr, keypair);
     expect(hash).toBe("tx-hash-1");
@@ -82,11 +85,11 @@ describe("signAndSubmit timeout behavior", () => {
       errorResult: null,
     });
     (client.getTransaction as jest.Mock).mockResolvedValue(
-      makeGetTransactionResponse(rpc.Api.GetTransactionStatus.NOT_FOUND)
+      makeGetTransactionResponse(rpc.Api.GetTransactionStatus.NOT_FOUND),
     );
 
     await expect(signAndSubmit(client, xdr, keypair)).rejects.toThrow(
-      "Transaction confirmation timeout"
+      "Transaction confirmation timeout",
     );
   }, 10000);
 
@@ -97,7 +100,7 @@ describe("signAndSubmit timeout behavior", () => {
       errorResult: null,
     });
     (client.getTransaction as jest.Mock).mockResolvedValue(
-      makeGetTransactionResponse(rpc.Api.GetTransactionStatus.NOT_FOUND)
+      makeGetTransactionResponse(rpc.Api.GetTransactionStatus.NOT_FOUND),
     );
 
     try {

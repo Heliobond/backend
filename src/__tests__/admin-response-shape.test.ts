@@ -5,12 +5,28 @@ import { errorHandler } from "../middleware/errors";
 import * as registry from "../lib/registry";
 import * as iot from "../routes/iot";
 import * as scoring from "../lib/scoring";
+import { resetIdempotencyState } from "../lib/scoreService";
 
-jest.mock("../lib/registry", () => ({
-  updateImpactScore: jest.fn(),
-  getTotalProjects: jest.fn(),
-}));
+jest.mock("../lib/registry", () => {
+  class RpcDegradedError extends Error {
+    constructor(message?: string) {
+      super(message ?? "RPC is degraded");
+      this.name = "RpcDegradedError";
+    }
+  }
+  return {
+    updateImpactScore: jest.fn(),
+    getTotalProjects: jest.fn(),
+    RpcDegradedError,
+  };
+});
 jest.mock("../routes/iot");
+
+jest.mock("../config", () => ({
+  config: {
+    ADMIN_API_KEY: "test-key",
+  },
+}));
 jest.mock("../lib/scoring");
 
 function buildApp(): Express {
@@ -26,6 +42,7 @@ describe("admin /update-scores response shape", () => {
 
   beforeEach(() => {
     app = buildApp();
+    resetIdempotencyState();
     jest.clearAllMocks();
     (iot.getSolarData as jest.Mock).mockReturnValue({
       efficiency_pct: 85,
@@ -44,35 +61,51 @@ describe("admin /update-scores response shape", () => {
     (registry.getTotalProjects as jest.Mock).mockResolvedValue(2);
   });
 
-  afterEach(() => {
-    delete process.env.ADMIN_API_KEY;
-  });
-
   it("response has updated field (number)", async () => {
-    const res = await request(app).post("/api/admin/update-scores").send({}).expect(200);
+    const res = await request(app)
+      .post("/api/admin/update-scores")
+      .set("Authorization", "Bearer test-key")
+      .send({})
+      .expect(200);
     expect(res.body).toHaveProperty("updated");
     expect(typeof res.body.updated).toBe("number");
   });
 
   it("response has results field (array)", async () => {
-    const res = await request(app).post("/api/admin/update-scores").send({}).expect(200);
+    const res = await request(app)
+      .post("/api/admin/update-scores")
+      .set("Authorization", "Bearer test-key")
+      .send({})
+      .expect(200);
     expect(res.body).toHaveProperty("results");
     expect(Array.isArray(res.body.results)).toBe(true);
   });
 
   it("response has errors field (array)", async () => {
-    const res = await request(app).post("/api/admin/update-scores").send({}).expect(200);
+    const res = await request(app)
+      .post("/api/admin/update-scores")
+      .set("Authorization", "Bearer test-key")
+      .send({})
+      .expect(200);
     expect(res.body).toHaveProperty("errors");
     expect(Array.isArray(res.body.errors)).toBe(true);
   });
 
   it("response shape matches { updated, results, errors }", async () => {
-    const res = await request(app).post("/api/admin/update-scores").send({}).expect(200);
-    expect(Object.keys(res.body).sort()).toEqual(["errors", "results", "updated"]);
+    const res = await request(app)
+      .post("/api/admin/update-scores")
+      .set("Authorization", "Bearer test-key")
+      .send({})
+      .expect(200);
+    expect(Object.keys(res.body).sort()).toEqual(["errors", "results", "skipped", "updated"]);
   });
 
   it("results entries have correct shape", async () => {
-    const res = await request(app).post("/api/admin/update-scores").send({}).expect(200);
+    const res = await request(app)
+      .post("/api/admin/update-scores")
+      .set("Authorization", "Bearer test-key")
+      .send({})
+      .expect(200);
     for (const entry of res.body.results) {
       expect(entry).toHaveProperty("project_id");
       expect(entry).toHaveProperty("tx_hash");
@@ -91,6 +124,7 @@ describe("admin /update-scores response shape", () => {
       .mockRejectedValueOnce(new Error("RPC error"));
     const res = await request(app)
       .post("/api/admin/update-scores")
+      .set("Authorization", "Bearer test-key")
       .send({ project_ids: [1, 2] })
       .expect(200);
     expect(res.body.errors).toHaveLength(1);
@@ -98,6 +132,9 @@ describe("admin /update-scores response shape", () => {
     expect(entry).toHaveProperty("project_id");
     expect(entry).toHaveProperty("error");
     expect(typeof entry.project_id).toBe("number");
-    expect(typeof entry.error).toBe("string");
+    expect(entry.error).toMatchObject({
+      code: "update_failed",
+      message: expect.stringContaining("RPC error"),
+    });
   });
 });

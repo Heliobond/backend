@@ -56,7 +56,9 @@ export class RpcConnectionPool {
     for (let i = 0; i < config.minConnections; i++) {
       this.add();
     }
-    this.scheduleHealthChecks();
+    if (process.env.NODE_ENV !== "test") {
+      this.scheduleHealthChecks();
+    }
   }
 
   private add(): PooledConnection {
@@ -80,7 +82,7 @@ export class RpcConnectionPool {
       return Promise.reject(new Error("Pool is shutting down"));
     }
 
-    const idle = this.connections.find(c => !c.inUse && c.healthy);
+    const idle = this.connections.find((c) => !c.inUse && c.healthy);
     if (idle) {
       return Promise.resolve(this.checkout(idle));
     }
@@ -92,7 +94,7 @@ export class RpcConnectionPool {
     return new Promise<PooledConnection>((resolve, reject) => {
       this.metrics.pendingAcquires++;
       const timer = setTimeout(() => {
-        const idx = this.waitQueue.findIndex(e => e.timer === timer);
+        const idx = this.waitQueue.findIndex((e) => e.timer === timer);
         if (idx !== -1) this.waitQueue.splice(idx, 1);
         this.metrics.pendingAcquires--;
         reject(new Error(`Pool acquire timed out after ${this.config.acquireTimeoutMs}ms`));
@@ -139,16 +141,16 @@ export class RpcConnectionPool {
     return {
       ...this.metrics,
       total: this.connections.length,
-      active: this.connections.filter(c => c.inUse).length,
-      idle: this.connections.filter(c => !c.inUse && c.healthy).length,
+      active: this.connections.filter((c) => c.inUse).length,
+      idle: this.connections.filter((c) => !c.inUse && c.healthy).length,
     };
   }
 
   private scheduleHealthChecks(): void {
     this.healthTimer = setInterval(async () => {
-      const idle = this.connections.filter(c => !c.inUse);
+      const idle = this.connections.filter((c) => !c.inUse);
       await Promise.allSettled(
-        idle.map(async conn => {
+        idle.map(async (conn) => {
           try {
             await conn.client.getLatestLedger();
             conn.healthy = true;
@@ -156,7 +158,7 @@ export class RpcConnectionPool {
             conn.healthy = false;
             this.metrics.healthCheckErrors++;
           }
-        })
+        }),
       );
     }, this.config.healthCheckIntervalMs);
     // Don't keep the process alive just for health checks
@@ -180,8 +182,8 @@ export class RpcConnectionPool {
 
     // Drain active connections (max 10 s)
     const deadline = Date.now() + 10_000;
-    while (this.connections.some(c => c.inUse) && Date.now() < deadline) {
-      await new Promise(r => setTimeout(r, 50));
+    while (this.connections.some((c) => c.inUse) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50));
     }
 
     this.connections.length = 0;

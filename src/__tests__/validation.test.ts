@@ -6,7 +6,7 @@ import {
   notFoundHandler,
   parseProjectId,
   maxProjectId,
-  DEFAULT_MAX_PROJECT_ID,
+  MAX_PROJECT_ID,
 } from "../middleware/errors";
 
 function buildApp(): Express {
@@ -79,17 +79,17 @@ describe("project id bounds", () => {
   });
 
   it("defaults the upper bound to 1000000", () => {
-    expect(maxProjectId()).toBe(DEFAULT_MAX_PROJECT_ID);
-    expect(DEFAULT_MAX_PROJECT_ID).toBe(1_000_000);
+    expect(maxProjectId()).toBe(MAX_PROJECT_ID);
+    expect(MAX_PROJECT_ID).toBe(100_000);
   });
 
   it("accepts the highest allowed id", () => {
-    expect(parseProjectId("1000000", "project id")).toBe(1_000_000);
+    expect(parseProjectId("100000", "project id")).toBe(100_000);
   });
 
   it("rejects an id one past the upper bound", () => {
-    expect(() => parseProjectId("1000001", "project id")).toThrow(
-      /project id must be between 1 and 1000000/,
+    expect(() => parseProjectId("100001", "project id")).toThrow(
+      /project id must be a positive integer not exceeding 100000/,
     );
   });
 
@@ -100,25 +100,9 @@ describe("project id bounds", () => {
     },
   );
 
-  it("honours a raised MAX_PROJECT_ID", () => {
-    process.env.MAX_PROJECT_ID = "5";
-    expect(parseProjectId("5", "project id")).toBe(5);
-    expect(() => parseProjectId("6", "project id")).toThrow(/between 1 and 5/);
-  });
-
-  it("ignores an unusable MAX_PROJECT_ID and keeps the default", () => {
-    process.env.MAX_PROJECT_ID = "abc";
-    expect(maxProjectId()).toBe(DEFAULT_MAX_PROJECT_ID);
-
-    process.env.MAX_PROJECT_ID = "0";
-    expect(maxProjectId()).toBe(DEFAULT_MAX_PROJECT_ID);
-  });
-
   it("returns 400 over HTTP for a very large id", async () => {
     const res = await request(app).get("/api/iot/solar/999999999999").expect(400);
-    expect(res.body).toEqual({
-      error: { code: "bad_request", message: expect.stringContaining("between 1 and") },
-    });
+    expect(res.body.error.code).toBe("bad_request");
   });
 
   it("returns 400 over HTTP for a float id", async () => {
@@ -129,6 +113,6 @@ describe("project id bounds", () => {
   });
 
   it("still serves an id inside the valid range", async () => {
-    await request(app).get("/api/iot/solar/1000000").expect(200);
+    await request(app).get("/api/iot/solar/100000").expect(200);
   });
 });

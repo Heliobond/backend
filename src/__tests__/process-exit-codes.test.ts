@@ -1,9 +1,10 @@
 import { spawnSync } from "child_process";
+import http from "http";
 import path from "path";
 
-describe("process exit codes", () => {
-  const repoRoot = path.resolve(__dirname, "../..");
+const repoRoot = path.resolve(__dirname, "../..");
 
+describe("process exit codes", () => {
   it("exits with code 1 when required env vars are missing", () => {
     const result = spawnSyncWithEnv(
       {
@@ -11,7 +12,7 @@ describe("process exit codes", () => {
         PROJECT_REGISTRY_CONTRACT_ID: "",
         PORT: "0",
       },
-      ["-e", "require('./src/config').validateRequiredEnv();"],
+      ["-e", "require('ts-node/register'); require('./src/config').validateRequiredEnv();"],
     );
 
     expect(result.status).toBe(1);
@@ -19,7 +20,6 @@ describe("process exit codes", () => {
   });
 
   it("exits with code 1 when the port is already in use", () => {
-    const http = require("http") as typeof import("http");
     const port = 41000 + Math.floor(Math.random() * 1000);
 
     const firstServer = http.createServer();
@@ -47,10 +47,7 @@ describe("process exit codes", () => {
         PROJECT_REGISTRY_CONTRACT_ID: "x",
         PORT: "0",
       },
-      [
-        "-e",
-        "const { EventEmitter } = require('events'); const events = new EventEmitter(); process.once('SIGTERM', () => process.exit(0)); process.kill(process.pid, 'SIGTERM');",
-      ],
+      ["-e", "process.once('SIGTERM', () => process.exit(0)); process.emit('SIGTERM');"],
     );
 
     expect(result.status).toBe(0);

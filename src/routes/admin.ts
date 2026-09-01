@@ -1,8 +1,9 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { getSolarData, getSatelliteData } from "./iot";
 import { computeScores } from "../lib/scoring";
-import { updateImpactScore, getTotalProjects } from "../lib/registry";
-import { badRequest, parseOptionalInt, MAX_PROJECT_ID } from "../middleware/errors";
+import { getTotalProjects } from "../lib/registry";
+import { updateScoreForProject } from "../lib/scoreService";
+import { badRequest, errorBody, parseOptionalInt, MAX_PROJECT_ID } from "../middleware/errors";
 import { recordAudit, getAuditLog, auditToCsv } from "../lib/audit";
 import { broadcastScoreUpdate } from "../lib/websocket";
 import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
@@ -90,12 +91,12 @@ function parseProjectIds(body: unknown): number[] | null {
     if (!isPositiveInteger(entry)) {
       throw badRequest("project_ids must contain only positive integers");
     }
+    if (entry > MAX_PROJECT_ID) {
+      throw badRequest(`project_ids must not exceed maximum project id ${MAX_PROJECT_ID}`);
+    }
     projectIds.push(entry);
   }
-  if (!raw.every((n) => (n as number) <= MAX_PROJECT_ID)) {
-    throw badRequest(`project_ids must not exceed maximum project id ${MAX_PROJECT_ID}`);
-  }
-  return raw as number[];
+  return projectIds;
 }
 
 // POST /api/admin/update-scores

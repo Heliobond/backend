@@ -2,34 +2,32 @@ import { seededRandom } from "../routes/iot";
 
 describe("seededRandom", () => {
   const HOUR_MS = 3_600_000;
-  let dateNowSpy: jest.SpyInstance;
 
   afterEach(() => {
-    dateNowSpy?.mockRestore();
+    jest.useRealTimers();
   });
 
-  it("same project ID, same hour → same values", () => {
-    dateNowSpy = jest.spyOn(Date, "now").mockReturnValue(1000);
+  it("returns the same value for the same project ID in the same hour", () => {
+    jest.useFakeTimers().setSystemTime(1000);
     const a = seededRandom(1);
     const b = seededRandom(1);
     expect(a).toBe(b);
   });
 
-  it("same project ID, different hours → different values", () => {
-    dateNowSpy = jest.spyOn(Date, "now");
-    dateNowSpy.mockReturnValue(0);
+  it("returns different values for the same project ID in different hours", () => {
+    jest.useFakeTimers().setSystemTime(0);
     const val1 = seededRandom(1);
-    dateNowSpy.mockReturnValue(HOUR_MS);
+    jest.setSystemTime(HOUR_MS);
     const val2 = seededRandom(1);
-    dateNowSpy.mockReturnValue(HOUR_MS * 2);
+    jest.setSystemTime(HOUR_MS * 2);
     const val3 = seededRandom(1);
 
     const allSame = val1 === val2 && val2 === val3;
     expect(allSame).toBe(false);
   });
 
-  it("different project IDs → different values", () => {
-    dateNowSpy = jest.spyOn(Date, "now").mockReturnValue(1000);
+  it("returns different values for different project IDs", () => {
+    jest.useFakeTimers().setSystemTime(1000);
     const a = seededRandom(1);
     const b = seededRandom(2);
     const c = seededRandom(3);
@@ -38,7 +36,7 @@ describe("seededRandom", () => {
   });
 
   it("returns a value in [0, 1)", () => {
-    dateNowSpy = jest.spyOn(Date, "now").mockReturnValue(1000);
+    jest.useFakeTimers().setSystemTime(1000);
     for (let i = 0; i < 100; i++) {
       const val = seededRandom(i);
       expect(val).toBeGreaterThanOrEqual(0);
@@ -46,12 +44,12 @@ describe("seededRandom", () => {
     }
   });
 
-  it("values change across hours for same project ID", () => {
-    dateNowSpy = jest.spyOn(Date, "now").mockReturnValue(1000);
+  it("changes values across hours for the same project ID", () => {
+    jest.useFakeTimers().setSystemTime(1000);
     const hour0 = seededRandom(42);
-    dateNowSpy.mockReturnValue(1000 + HOUR_MS);
+    jest.setSystemTime(1000 + HOUR_MS);
     const hour1 = seededRandom(42);
-    dateNowSpy.mockReturnValue(1000 + HOUR_MS * 2);
+    jest.setSystemTime(1000 + HOUR_MS * 2);
     const hour2 = seededRandom(42);
 
     expect(hour0).not.toBe(hour1);
