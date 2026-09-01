@@ -546,6 +546,30 @@ async function gracefulShutdown(signal: string): Promise<void> {
       logger.error("[shutdown] pool drain error", { error: err?.message });
     }
 
+    // 4. Stop the secret rotation timer so it doesn't keep the process alive
+    // or fire after shutdown begins.
+    stopSecretRotation();
+
+    // 5. Gracefully stop the gRPC server, letting in-flight/streaming RPCs
+    // (e.g. StreamProjectScores) drain instead of being killed mid-stream.
+    logger.info("[shutdown] draining gRPC server…");
+    await new Promise<void>((resolve) => {
+      const forceTimer = setTimeout(() => {
+        logger.warn("[shutdown] gRPC drain timed out, forcing shutdown");
+        grpcServer.forceShutdown();
+        resolve();
+      }, shutdownTimeoutMs);
+      grpcServer.tryShutdown((err) => {
+        clearTimeout(forceTimer);
+        if (err) {
+          logger.error("[shutdown] gRPC shutdown error", { error: err.message });
+        } else {
+          logger.info("[shutdown] gRPC server stopped");
+        }
+        resolve();
+      });
+    });
+
     logger.info("[shutdown] clean exit");
     process.exit(0);
   })();
