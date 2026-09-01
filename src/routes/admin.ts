@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { getSolarData, getSatelliteData } from "./iot";
 import { computeScores } from "../lib/scoring";
 import { updateImpactScore, getTotalProjects } from "../lib/registry";
-import { badRequest, parseOptionalInt, MAX_PROJECT_ID } from "../middleware/errors";
+import { badRequest, parseOptionalInt, MAX_PROJECT_ID, errorBody } from "../middleware/errors";
 import { recordAudit, getAuditLog, auditToCsv } from "../lib/audit";
 import { broadcastScoreUpdate } from "../lib/websocket";
 import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
@@ -10,6 +10,7 @@ import { withProjectLock } from "../lib/request-queue";
 import { config } from "../config";
 import { logger } from "../lib/logger";
 import { timingSafeCompare } from "../lib/timing-safe";
+import { updateScoreForProject } from "../lib/scoreService";
 
 const router = Router();
 

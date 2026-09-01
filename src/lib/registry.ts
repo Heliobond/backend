@@ -81,13 +81,13 @@ export async function getTotalProjects(): Promise<number> {
       throw err;
     }
     const sim = await client.simulateTransaction(tx);
-    if (isSimulationError(sim)) throw new Error(sim.error);
+    if ("error" in sim) throw new Error((sim as { error: string }).error);
 
-    const retval = sim.result?.retval;
+    const retval = (sim as rpc.Api.SimulateTransactionSuccessResponse).result?.retval;
     if (retval === undefined) {
       throw new Error("total_projects simulation returned no result value");
     }
-    return Number(scValToNative(retval));
+    return Number(scValToNative(retval!));
   });
 }
 

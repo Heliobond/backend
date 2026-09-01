@@ -4,7 +4,9 @@ import { recordScoreHistory } from "../lib/history";
 import { triggerWebhooks } from "../lib/webhooks";
 import { getSolarData, getSatelliteData } from "./iot";
 import { computeScores } from "../lib/scoring";
-import { updateImpactScore, getTotalProjects } from "../lib/registry";
+import { updateImpactScore, RpcDegradedError, getTotalProjects } from "../lib/registry";
+import { withProjectLock } from "../lib/request-queue";
+import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
 import { badRequest, MAX_PROJECT_ID } from "../middleware/errors";
 
 const router = Router();
@@ -39,9 +41,10 @@ router.post("/score-update", async (req: Request, res: Response) => {
   }
 
   const rawConcurrency = body.concurrency as number | undefined;
-  const concurrency = rawConcurrency !== undefined
-    ? Math.min(MAX_CONCURRENCY, Math.max(1, Math.floor(rawConcurrency)))
-    : DEFAULT_CONCURRENCY;
+  const concurrency =
+    rawConcurrency !== undefined
+      ? Math.min(MAX_CONCURRENCY, Math.max(1, Math.floor(rawConcurrency)))
+      : DEFAULT_CONCURRENCY;
 
   const job = createJob(projectIds, concurrency);
 
@@ -62,7 +65,12 @@ router.post("/score-update", async (req: Request, res: Response) => {
         } catch (updateErr) {
           if (updateErr instanceof RpcDegradedError) {
             recordScoreHistory(projectId, scores.credit_quality, scores.green_impact);
-            triggerWebhooks({ project_id: projectId, ...scores, tx_hash: "deferred", timestamp: Date.now() });
+            triggerWebhooks({
+              project_id: projectId,
+              ...scores,
+              tx_hash: "deferred",
+              timestamp: Date.now(),
+            });
             markCompleted(projectId);
             return { project_id: projectId, tx_hash: "deferred", ...scores };
           }
