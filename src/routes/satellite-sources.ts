@@ -1,58 +1,12 @@
 import { Router, Request, Response, NextFunction } from "express";
-import {
-  getSources,
-  configureSource,
-  fetchSatelliteWithFallback,
-  getSourceHealth,
-  registerSource,
-} from "../lib/satellite-sources";
-import { parseProjectId, badRequest } from "../middleware/errors";
+import { badRequest, errorBody } from "../middleware/errors";
+import { config } from "../config";
+import { logger } from "../lib/logger";
 
 const router = Router();
 
-/** GET /v1/satellite-sources — list all configured sources with health */
-router.get("/", (_req: Request, res: Response) => {
-  const sources = getSources();
-  const health = getSourceHealth();
-  const healthMap = Object.fromEntries(health.map((h) => [h.name, h]));
-  res.json({
-    sources: sources.map((s) => ({
-      name: s.name,
-      priority: s.priority,
-      enabled: s.enabled,
-      health: healthMap[s.name] ?? { healthy: true, failureCount: 0 },
-    })),
-  });
-});
+const CUSTOM_SOURCE_FETCH_TIMEOUT_MS = 10000;
 
-/** GET /v1/satellite-sources/health — data source health status */
-router.get("/health", (_req: Request, res: Response) => {
-  res.json(getSourceHealth());
-});
-
-/**
- * PATCH /v1/satellite-sources/:name — configure a source (enable/disable, priority)
- */
-router.patch("/:name", (req: Request, res: Response) => {
-  const { enabled, priority } = req.body as { enabled?: boolean; priority?: number };
-
-  if (priority !== undefined && (!Number.isInteger(priority) || priority < 1)) {
-    throw badRequest("priority must be a positive integer");
-  }
-
-  const ok = configureSource(String(req.params.name), { enabled, priority });
-  if (!ok) return res.status(404).json({ error: "source not found" });
-
-  res.json({ ok: true, sources: getSources() });
-});
-
-/** Timeout for outbound requests to custom satellite source endpoints. */
-const CUSTOM_SOURCE_FETCH_TIMEOUT_MS = 10_000;
-
-/**
- * Call a custom source's fetchUrl for a project and validate the response
- * shape. Expects JSON with numeric forest_density_pct and ndvi_score fields.
- */
 async function fetchFromCustomUrl(
   fetchUrl: string,
   projectId: number,
@@ -61,9 +15,9 @@ async function fetchFromCustomUrl(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), CUSTOM_SOURCE_FETCH_TIMEOUT_MS);
 
-  let response: Response;
+  let httpResponse: any;
   try {
-    response = await fetch(`${fetchUrl}?projectId=${encodeURIComponent(String(projectId))}`, {
+    httpResponse = await fetch(`${fetchUrl}?projectId=${encodeURIComponent(String(projectId))}`, {
       method: "GET",
       headers: { Accept: "application/json" },
       signal: controller.signal,
@@ -72,79 +26,69 @@ async function fetchFromCustomUrl(
     clearTimeout(timeout);
   }
 
-  if (!response.ok) {
-    throw new Error(`Custom source ${sourceName} returned HTTP ${response.status}`);
+  if (!httpResponse.ok) {
+    throw new Error(`Custom source ${sourceName} returned HTTP ${httpResponse.status}`);
   }
 
-  const body = (await response.json()) as {
+  const body = (await httpResponse.json()) as {
     forest_density_pct?: unknown;
     ndvi_score?: unknown;
   };
 
-  if (typeof body.forest_density_pct !== "number" || typeof body.ndvi_score !== "number") {
-    throw new Error(
-      `Custom source ${sourceName} returned an invalid response shape (expected numeric forest_density_pct and ndvi_score)`,
-    );
+  if (body.forest_density_pct === undefined || body.forest_density_pct === null) {
+    throw new Error(`Custom source ${sourceName} response missing forest_density_pct`);
+  }
+  if (body.ndvi_score === undefined || body.ndvi_score === null) {
+    throw new Error(`Custom source ${sourceName} response missing ndvi_score`);
+  }
+
+  const density = Number(body.forest_density_pct);
+  const ndvi = Number(body.ndvi_score);
+
+  if (isNaN(density) || density < 0 || density > 100) {
+    throw new Error(`Custom source ${sourceName} returned invalid forest_density_pct: ${body.forest_density_pct}`);
+  }
+  if (isNaN(ndvi) || ndvi < 0 || ndvi > 100) {
+    throw new Error(`Custom source ${sourceName} returned invalid ndvi_score: ${body.ndvi_score}`);
   }
 
   return {
-    forest_density_pct: body.forest_density_pct,
-    ndvi_score: body.ndvi_score,
+    forest_density_pct: density,
+    ndvi_score: ndvi,
     timestamp: Date.now(),
-    source: sourceName,
+    source: `custom:${sourceName}`,
   };
 }
 
-/**
- * POST /v1/satellite-sources — register a custom data source adapter.
- * Body: { name, priority, fetchUrl } — fetchUrl is the external endpoint
- * queried (via `?projectId=<id>`) for live satellite readings.
- */
-router.post("/", (req: Request, res: Response) => {
-  const { name, priority, fetchUrl } = req.body as {
-    name?: string;
-    priority?: number;
-    fetchUrl?: string;
-  };
-
-  if (!name || typeof name !== "string") {
-    return res.status(400).json({ error: "name is required" });
-  }
-
-  if (!fetchUrl || typeof fetchUrl !== "string") {
-    return res.status(400).json({ error: "fetchUrl is required" });
-  }
-
+router.get("/", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    // eslint-disable-next-line no-new
-    new URL(fetchUrl);
-  } catch {
-    return res.status(400).json({ error: "fetchUrl must be a valid URL" });
-  }
+    const projectIdRaw = req.query.projectId;
+    if (!projectIdRaw) {
+      throw badRequest("Missing required query parameter: projectId");
+    }
+    const projectId = parseInt(String(projectIdRaw), 10);
+    if (isNaN(projectId) || projectId <= 0) {
+      throw badRequest("Invalid projectId parameter");
+    }
 
-  const sourcePriority = typeof priority === "number" ? priority : 99;
+    const sourceName = req.query.source;
+    if (!sourceName || typeof sourceName !== "string") {
+      throw badRequest("Missing or invalid required query parameter: source");
+    }
 
-  registerSource({
-    name,
-    priority: sourcePriority,
-    enabled: true,
-    fetch: (projectId: number) => fetchFromCustomUrl(fetchUrl, projectId, name),
-  });
+    const customSources = config.CUSTOM_SATELLITE_SOURCES as Record<string, string> | undefined;
+    const fetchUrl = customSources?.[sourceName];
 
-  res.status(201).json({ ok: true, name, priority: sourcePriority });
-});
+    if (!fetchUrl) {
+      return res.status(404).json(errorBody("source_not_found", `Satellite source '${sourceName}' is not configured`));
+    }
 
-/**
- * GET /v1/satellite-sources/fetch/:projectId
- * Fetch satellite data using the primary source with automatic fallback.
- */
-router.get("/fetch/:projectId", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const projectId = parseProjectId(req.params.projectId, "project id");
-    const data = await fetchSatelliteWithFallback(projectId);
+    logger.info(`[satellite] fetching data for project ${projectId} from custom source ${sourceName}`);
+    const data = await fetchFromCustomUrl(fetchUrl, projectId, sourceName);
+    
     res.json(data);
-  } catch (err) {
-    next(err);
+  } catch (error) {
+    next(error);
   }
 });
 
