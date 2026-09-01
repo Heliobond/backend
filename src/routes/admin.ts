@@ -127,6 +127,103 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
     // Each project is individually isolated: a failure on one does not abort
     // the rest. Accumulated errors are returned alongside successes so callers
     // can retry only the affected ids.
+import { Router, Request, Response, NextFunction } from "express";
+import { getSolarData, getSatelliteData } from "./iot";
+import { computeScores } from "../lib/scoring";
+import { updateImpactScore, getTotalProjects, updateScoreForProject } from "../lib/registry";
+import { badRequest, parseOptionalInt, MAX_PROJECT_ID, errorBody } from "../middleware/errors";
+import { recordAudit, getAuditLog, auditToCsv } from "../lib/audit";
+import { broadcastScoreUpdate } from "../lib/websocket";
+import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
+import { withProjectLock } from "../lib/request-queue";
+import { config } from "../config";
+import { logger } from "../lib/logger";
+import { timingSafeCompare } from "../lib/timing-safe";
+
+const router = Router();
+
+router.use((req: Request, res: Response, next: NextFunction) => {
+  const apiKey = config.ADMIN_API_KEY;
+  if (!apiKey) {
+    return res
+      .status(500)
+      .json(errorBody("server_misconfigured", "Admin API key is not configured"));
+  }
+  const authorization = req.headers.authorization ?? "";
+  if (!timingSafeCompare(authorization, `Bearer ${apiKey}`)) {
+    return res.status(401).json(errorBody("unauthorized", "Missing or invalid bearer token"));
+  }
+  next();
+});
+
+type ScoreUpdateResult = {
+  project_id: number;
+  tx_hash: string;
+  credit_quality: number;
+  green_impact: number;
+};
+
+type ProjectUpdateOutcome =
+  { skipped: true; reason: string } | ({ skipped: false } & ScoreUpdateResult);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1;
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function queryValue(value: unknown): string | string[] | undefined {
+  if (typeof value === "string") return value;
+  if (isStringArray(value)) return value;
+  return undefined;
+}
+
+function parseProjectIds(body: unknown): number[] | null {
+  if (!isRecord(body)) return null;
+
+  const raw = body.project_ids;
+  if (raw === undefined || raw === null) return null;
+  if (!Array.isArray(raw)) {
+    throw badRequest("project_ids must be an array of positive integers");
+  }
+  if (raw.length === 0) return null;
+
+  const projectIds: number[] = [];
+  for (const entry of raw) {
+    if (!isPositiveInteger(entry)) {
+      throw badRequest("project_ids must contain only positive integers");
+    }
+    projectIds.push(entry);
+  }
+  if (!raw.every((n) => (n as number) <= MAX_PROJECT_ID)) {
+    throw badRequest(`project_ids must not exceed maximum project id ${MAX_PROJECT_ID}`);
+  }
+  return raw as number[];
+}
+
+router.post("/update-scores", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const requested = parseProjectIds(req.body);
+
+    let projectIds: number[];
+
+    if (requested) {
+      projectIds = requested;
+    } else {
+      const total = await getTotalProjects();
+      projectIds = Array.from({ length: total }, (_, i) => i + 1);
+    }
+
+    const results: ScoreUpdateResult[] = [];
+    const errors: Array<{ project_id: number; error: { code: string; message: string } }> = [];
+    const skipped: Array<{ project_id: number; reason: string }> = [];
+
     for (const projectId of projectIds) {
       try {
         const result = await withProjectLock<ProjectUpdateOutcome>(projectId, async () => {
@@ -187,8 +284,6 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
           skipped.push({ project_id: projectId, reason: result.reason });
           logger.info(`[oracle] skipping project ${projectId}: ${result.reason}`);
         } else {
-          // Rebuilt field by field so the internal `skipped` discriminant does
-          // not leak into the response body.
           results.push({
             project_id: result.project_id,
             tx_hash: result.tx_hash,
@@ -210,41 +305,7 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
 
     res.json({ updated: results.length, results, errors, skipped });
   } catch (error) {
-    // Forward to errorHandler: ApiError → its .status (e.g. 400 for bad input),
-    // SyntaxError → 400, anything else → 500.
     next(error);
-  }
-});
-
-/**
- * GET /admin/audit
- * Query: project_id=<int>, from=<unix-ms>, to=<unix-ms>, format=json|csv
- * Returns the immutable audit log of all score updates.
- */
-router.get("/audit", (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const project_id =
-      parseOptionalInt(queryValue(req.query.project_id), "project_id", 0) || undefined;
-    const from = parseOptionalInt(queryValue(req.query.from), "from", 0) || undefined;
-    const to = parseOptionalInt(queryValue(req.query.to), "to", 0) || undefined;
-
-    if (from && to && from > to) {
-      throw badRequest("from must be earlier than to");
-    }
-
-    const entries = getAuditLog({ project_id, from, to });
-    const format = req.query.format === "csv" ? "csv" : "json";
-
-    if (format === "csv") {
-      res.set("Content-Type", "text/csv");
-      res.set("Content-Disposition", 'attachment; filename="audit-log.csv"');
-      res.send(auditToCsv(entries));
-      return;
-    }
-
-    res.json({ count: entries.length, entries });
-  } catch (err) {
-    next(err);
   }
 });
 
