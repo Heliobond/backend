@@ -33,7 +33,7 @@ import { startGrpcServer } from "./grpc/server";
 import { getSolarData } from "./lib/iot";
 import { fetchSatelliteWithFallback } from "./lib/satellite-sources";
 import { computeScores } from "./lib/scoring";
-import { updateImpactScore } from "./lib/registry";
+import { getTotalProjects, updateImpactScore } from "./lib/registry";
 import { runHourlyScoreUpdate } from "./lib/scoreUpdateCron";
 import { isErrorRateLimited } from "./lib/error-limiter";
 import { isRpcOutageExtended, isRpcAvailable, getRpcStatus } from "./lib/stellar";
@@ -74,6 +74,8 @@ import { featureFlagContext, registerFlagRoutes } from "./middleware/featureFlag
 import { loadFlags, getFlagAnalytics } from "./lib/feature-flags";
 import { compressionMiddleware, getCompressionMetrics } from "./middleware/compression";
 import { handleListenError } from "./lib/listen-errors";
+import { initBenchmarkSamples } from "./lib/benchmarking";
+import { createBenchmarkSampleInitializer } from "./lib/benchmarkStartup";
 
 const env = initEnv();
 
@@ -448,16 +450,27 @@ scheduleCron(
   { timezone: CRON_TIMEZONE },
 );
 
-const server = app.listen(PORT, () => {
-  logger.info(`Heliobond backend listening on port ${PORT}`);
+const initializeBenchmarkSamples = createBenchmarkSampleInitializer({
+  getTotalProjects,
+  seedSamples: initBenchmarkSamples,
+  warn: logger.warn,
 });
 
-// Bind failures (EADDRINUSE, EACCES, …) surface here instead of as an uncaught
-// exception with a raw stack trace. Exits 1 so supervisors treat it as a failure.
-server.on("error", (err: NodeJS.ErrnoException) => handleListenError(err, PORT));
+const serverPromise = initializeBenchmarkSamples().then((sampleSize) => {
+  logger.info("[startup] benchmark samples initialized", { sample_size: sampleSize });
 
-// Real-time score updates over WebSocket (ws://<host>/ws)
-attachWebSocketServer(server);
+  const server = app.listen(PORT, () => {
+    logger.info(`Heliobond backend listening on port ${PORT}`);
+  });
+
+  // Bind failures (EADDRINUSE, EACCES, …) surface here instead of as an uncaught
+  // exception with a raw stack trace. Exits 1 so supervisors treat it as a failure.
+  server.on("error", (err: NodeJS.ErrnoException) => handleListenError(err, PORT));
+
+  // Real-time score updates over WebSocket (ws://<host>/ws)
+  attachWebSocketServer(server);
+  return server;
+});
 
 // GraphQL endpoint and playground setup
 app.all(
@@ -527,6 +540,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
   const shutdownPromise = (async () => {
     // 1. Stop accepting new HTTP requests
     logger.info("[shutdown] closing HTTP server (draining in-flight requests)…");
+    const server = await serverPromise;
     await new Promise<void>((resolve) => server.close(() => resolve()));
     logger.info("[shutdown] HTTP server closed");
 
