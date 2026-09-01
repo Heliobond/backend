@@ -90,8 +90,14 @@ export const config = {
   DB_POOL_HEALTH_CHECK_INTERVAL_MS: numEnv("DB_POOL_HEALTH_CHECK_INTERVAL_MS", 30000),
 
   /** Circuit breaker */
-  RPC_BREAKER_FAILURE_THRESHOLD: numEnv("CIRCUIT_BREAKER_THRESHOLD", numEnv("RPC_BREAKER_FAILURE_THRESHOLD", 5)),
-  RPC_BREAKER_RECOVERY_TIMEOUT_MS: numEnv("CIRCUIT_BREAKER_COOLDOWN_MS", numEnv("RPC_BREAKER_RECOVERY_TIMEOUT_MS", 30000)),
+  RPC_BREAKER_FAILURE_THRESHOLD: numEnv(
+    "CIRCUIT_BREAKER_THRESHOLD",
+    numEnv("RPC_BREAKER_FAILURE_THRESHOLD", 5),
+  ),
+  RPC_BREAKER_RECOVERY_TIMEOUT_MS: numEnv(
+    "CIRCUIT_BREAKER_COOLDOWN_MS",
+    numEnv("RPC_BREAKER_RECOVERY_TIMEOUT_MS", 30000),
+  ),
 
   /** Transaction retries */
   TX_MAX_RETRIES: numEnv("TX_MAX_RETRIES", 4),
@@ -171,5 +177,9 @@ export function validateRequiredEnv(): void {
  */
 export function initEnv() {
   validateRequiredEnv();
-  return config;
+  return {
+    ...config,
+    ADMIN_SECRET_KEY: process.env.ADMIN_SECRET_KEY || "",
+    PROJECT_REGISTRY_CONTRACT_ID: process.env.PROJECT_REGISTRY_CONTRACT_ID || "",
+  };
 }
