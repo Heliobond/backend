@@ -51,7 +51,7 @@ router.post("/score-update", async (req: Request, res: Response) => {
   // Fire-and-forget — caller polls /status
   runJob(job, async (projectId) => {
     return withProjectLock(projectId, async () => {
-      const { allowed, key, reason } = tryBeginUpdate(projectId);
+      const { allowed, reason } = tryBeginUpdate(projectId);
       if (!allowed) {
         return { project_id: projectId, skipped: true, skip_reason: reason };
       }
