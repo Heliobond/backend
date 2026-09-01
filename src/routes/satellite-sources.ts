@@ -1,4 +1,4 @@
-import { Router, Request, Response, NextFunction } from "express";
+import { Router, Request, Response as ExpressResponse, NextFunction } from "express";
 import {
   getSources,
   configureSource,
@@ -11,7 +11,7 @@ import { parseProjectId, badRequest } from "../middleware/errors";
 const router = Router();
 
 /** GET /v1/satellite-sources — list all configured sources with health */
-router.get("/", (_req: Request, res: Response) => {
+router.get("/", (_req: Request, res: ExpressResponse) => {
   const sources = getSources();
   const health = getSourceHealth();
   const healthMap = Object.fromEntries(health.map((h) => [h.name, h]));
@@ -26,14 +26,14 @@ router.get("/", (_req: Request, res: Response) => {
 });
 
 /** GET /v1/satellite-sources/health — data source health status */
-router.get("/health", (_req: Request, res: Response) => {
+router.get("/health", (_req: Request, res: ExpressResponse) => {
   res.json(getSourceHealth());
 });
 
 /**
  * PATCH /v1/satellite-sources/:name — configure a source (enable/disable, priority)
  */
-router.patch("/:name", (req: Request, res: Response) => {
+router.patch("/:name", (req: Request, res: ExpressResponse) => {
   const { enabled, priority } = req.body as { enabled?: boolean; priority?: number };
 
   if (priority !== undefined && (!Number.isInteger(priority) || priority < 1)) {
@@ -100,7 +100,7 @@ async function fetchFromCustomUrl(
  * Body: { name, priority, fetchUrl } — fetchUrl is the external endpoint
  * queried (via `?projectId=<id>`) for live satellite readings.
  */
-router.post("/", (req: Request, res: Response) => {
+router.post("/", (req: Request, res: ExpressResponse) => {
   const { name, priority, fetchUrl } = req.body as {
     name?: string;
     priority?: number;
@@ -138,7 +138,7 @@ router.post("/", (req: Request, res: Response) => {
  * GET /v1/satellite-sources/fetch/:projectId
  * Fetch satellite data using the primary source with automatic fallback.
  */
-router.get("/fetch/:projectId", async (req: Request, res: Response, next: NextFunction) => {
+router.get("/fetch/:projectId", async (req: Request, res: ExpressResponse, next: NextFunction) => {
   try {
     const projectId = parseProjectId(req.params.projectId, "project id");
     const data = await fetchSatelliteWithFallback(projectId);
