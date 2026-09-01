@@ -6,8 +6,8 @@ import { getSolarData, getSatelliteData } from "./iot";
 import { computeScores } from "../lib/scoring";
 import { updateImpactScore, getTotalProjects, RpcDegradedError } from "../lib/registry";
 import { badRequest, MAX_PROJECT_ID } from "../middleware/errors";
-import { withProjectLock } from "../lib/request-queue";
 import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
+import { withProjectLock } from "../lib/request-queue";
 
 const router = Router();
 

@@ -1,5 +1,4 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { errorBody } from "../middleware/errors";
 import { getSolarData, getSatelliteData } from "./iot";
 import { computeScores } from "../lib/scoring";
 import { updateImpactScore, getTotalProjects } from "../lib/registry";
