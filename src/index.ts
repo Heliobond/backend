@@ -496,7 +496,11 @@ app.get("/graphql-playground", (req, res) => {
 });
 
 // Start high-performance gRPC server
-startGrpcServer(50051);
+const grpcServer = startGrpcServer(50051);
+
+// Periodically clear cached secrets so a rotated/compromised upstream
+// secret doesn't stay cached indefinitely (gated on SECRETS_ROTATION_ENABLED).
+startSecretRotation();
 
 // ── Graceful shutdown (#57) ──────────────────────────────────────────────────
 // Track all scheduled cron tasks so we can stop them cleanly.
