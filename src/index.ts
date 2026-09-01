@@ -252,32 +252,30 @@ const v1 = express.Router();
 v1.use(versionHeaders);
 v1.use(acceptVersion);
 
-v1.use("/iot", publicLimiter, apiKeyAuth, iotRouter);
-v1.use("/admin", ipWhitelist, adminLimiter, requestSigning, adminRouter);
-v1.use("/admin/batch", ipWhitelist, adminLimiter, batchRouter);
-v1.use("/projects", publicLimiter, apiKeyAuth, projectsRouter);
-v1.use("/projects/:id/history", publicLimiter, apiKeyAuth, historyRouter);
-v1.use("/projects/aggregate", publicLimiter, apiKeyAuth, aggregateRouter);
-v1.use("/portfolio", publicLimiter, apiKeyAuth, portfolioRouter);
-v1.use("/roles", ipWhitelist, adminLimiter, rolesRouter);
-v1.use("/webhooks", ipWhitelist, adminLimiter, webhooksRouter);
-v1.use("/panels", ipWhitelist, adminLimiter, panelsRouter);
-v1.use("/metadata", ipWhitelist, adminLimiter, metadataRouter);
-v1.use("/dashboard", publicLimiter, apiKeyAuth, dashboardRouter);
-v1.use("/email", ipWhitelist, adminLimiter, emailRouter);
-v1.use("/anomaly", publicLimiter, apiKeyAuth, anomalyRouter);
-v1.use("/scoring/formulas", ipWhitelist, adminLimiter, scoringFormulasRouter);
-v1.use("/chains", ipWhitelist, adminLimiter, chainsRouter);
-v1.use("/satellite-sources", ipWhitelist, adminLimiter, satelliteSourcesRouter);
-v1.use("/comparison", publicLimiter, apiKeyAuth, comparisonRouter);
-v1.use("/benchmarking", publicLimiter, apiKeyAuth, benchmarkingRouter);
-v1.use("/financial", publicLimiter, apiKeyAuth, financialRouter);
-v1.use("/forecast", publicLimiter, apiKeyAuth, forecastRouter);
-v1.use("/maintenance", publicLimiter, apiKeyAuth, maintenanceRouter);
-v1.use("/investor", publicLimiter, apiKeyAuth, investorRouter);
-v1.use("/admin/api-keys", ipWhitelist, adminLimiter, apiKeysRouter);
-
-app.use("/v1", v1);
+  v1.use('/iot', publicLimiter, apiKeyAuth, iotRouter);
+  v1.use('/admin/feature-flags/analytics', ipWhitelist, adminLimiter, requestSigning, adminRouter);
+  v1.use('/admin/batch', ipWhitelist, adminLimiter, requestSigning, batchRouter);
+  v1.use('/projects', publicLimiter, apiKeyAuth, projectsRouter);
+  v1.use('/projects/:id/history', publicLimiter, apiKeyAuth, historyRouter);
+  v1.use('/projects/aggregate', publicLimiter, apiKeyAuth, aggregateRouter);
+  v1.use('/portfolio', publicLimiter, portfolioRouter);
+  v1.use('/roles', ipWhitelist, adminLimiter, rolesRouter);
+  v1.use('/webhooks', ipWhitelist, adminLimiter, requestSigning, webhooksRouter);
+  v1.use('/panels', ipWhitelist, adminLimiter, requestSigning, panelsRouter);
+  v1.use('/metadata', ipWhitelist, adminLimiter, metadataRouter);
+  v1.use('/dashboards', publicLimiter, apiKeyAuth, dashboardRouter);
+  v1.use('/email', ipWhitelist, adminLimiter, requestSigning, emailRouter);
+  v1.use('/anomaly', publicLimiter, anomalyRouter);
+  v1.use('/scoring/formulas', ipWhitelist, adminLimiter, requestSigning, scoringFormulasRouter);
+  v1.use('/chains', publicLimiter, adminLimiter, chainsRouter);
+  v1.use('/satellite-sources', ipWhitelist, adminLimiter, requestSigning, satelliteSourcesRouter);
+  v1.use('/comparison', publicLimiter, apiKeyAuth, comparisonRouter);
+  v1.use('/benchmarking', publicLimiter, apiKeyAuth, benchmarkingRouter);
+  v1.use('/financial', publicLimiter, apiKeyAuth, financialRouter);
+  v1.use('/forecast', publicLimiter, forecastRouter);
+  v1.use('/maintenance', publicLimiter, apiKeyAuth, maintenanceRouter);
+  v1.use('/investor', publicLimiter, investorRouter);
+  v1.use('/admin/api-keys', ipWhitelist, adminLimiter, requestSigning, apiKeysRouter);
 
 // ── Legacy /api paths (deprecated) ──────────────────────────────────────────
 // Kept for backward compatibility; will be removed after 2027-01-01.
@@ -497,7 +495,11 @@ app.get("/graphql-playground", (req, res) => {
 });
 
 // Start high-performance gRPC server
-startGrpcServer(50051);
+const grpcServer = startGrpcServer(50051);
+
+// Periodically clear cached secrets so a rotated/compromised upstream
+// secret doesn't stay cached indefinitely (gated on SECRETS_ROTATION_ENABLED).
+startSecretRotation();
 
 // ── Graceful shutdown (#57) ──────────────────────────────────────────────────
 // Track all scheduled cron tasks so we can stop them cleanly.
@@ -542,6 +544,30 @@ async function gracefulShutdown(signal: string): Promise<void> {
     } catch (err: any) {
       logger.error("[shutdown] pool drain error", { error: err?.message });
     }
+
+    // 4. Stop the secret rotation timer so it doesn't keep the process alive
+    // or fire after shutdown begins.
+    stopSecretRotation();
+
+    // 5. Gracefully stop the gRPC server, letting in-flight/streaming RPCs
+    // (e.g. StreamProjectScores) drain instead of being killed mid-stream.
+    logger.info("[shutdown] draining gRPC server…");
+    await new Promise<void>((resolve) => {
+      const forceTimer = setTimeout(() => {
+        logger.warn("[shutdown] gRPC drain timed out, forcing shutdown");
+        grpcServer.forceShutdown();
+        resolve();
+      }, shutdownTimeoutMs);
+      grpcServer.tryShutdown((err) => {
+        clearTimeout(forceTimer);
+        if (err) {
+          logger.error("[shutdown] gRPC shutdown error", { error: err.message });
+        } else {
+          logger.info("[shutdown] gRPC server stopped");
+        }
+        resolve();
+      });
+    });
 
     logger.info("[shutdown] clean exit");
     process.exit(0);
