@@ -4,6 +4,7 @@ import {
   removeWebhook,
   listWebhooks,
   getWebhook,
+  validateWebhookUrl,
 } from "../lib/webhooks";
 import { badRequest } from "../middleware/errors";
 
@@ -14,7 +15,7 @@ const router = Router();
  * Body: { url, secret, max_retries?, retry_delay_ms? }
  * Registers a new webhook endpoint.
  */
-router.post("/", (req: Request, res: Response) => {
+router.post("/", async (req: Request, res: Response) => {
   const { url, secret, max_retries, retry_delay_ms } = req.body as {
     url?: unknown;
     secret?: unknown;
@@ -22,11 +23,18 @@ router.post("/", (req: Request, res: Response) => {
     retry_delay_ms?: unknown;
   };
 
-  if (typeof url !== "string" || !url.startsWith("http")) {
+  if (typeof url !== "string") {
     throw badRequest("url must be a valid http/https URL");
   }
   if (typeof secret !== "string" || secret.length < 16) {
     throw badRequest("secret must be a string of at least 16 characters");
+  }
+
+  let validatedUrl: string;
+  try {
+    validatedUrl = await validateWebhookUrl(url);
+  } catch (err) {
+    throw badRequest(err instanceof Error ? err.message : "url must be a valid http/https URL");
   }
 
   const maxRetries =
@@ -36,7 +44,7 @@ router.post("/", (req: Request, res: Response) => {
       ? Math.floor(retry_delay_ms)
       : 2000;
 
-  const wh = registerWebhook(url, secret, maxRetries, retryDelay);
+  const wh = registerWebhook(validatedUrl, secret, maxRetries, retryDelay);
   res.status(201).json({
     id: wh.id,
     url: wh.url,
