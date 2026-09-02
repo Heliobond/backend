@@ -1,10 +1,11 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { parseOptionalInt } from "../middleware/errors";
-import { loadProjectScores, computeAggregateScores, inferCategory, type Category } from "../lib/aggregation";
+import { parseOptionalInt, errorBody } from "../middleware/errors";
+import { loadProjectScores, computeAggregateScores, inferCategory, REGIONS, type Category, type Region } from "../lib/aggregation";
 
 const router = Router();
 
 const VALID_CATEGORIES = new Set<Category>(["solar", "forest", "wind"]);
+const VALID_REGIONS = new Set<Region>(REGIONS);
 
 /**
  * GET /v1/projects/aggregate
@@ -25,7 +26,12 @@ router.get("/", async (req: Request, res: Response, next: NextFunction) => {
     const regionFilter = req.query.region as string | undefined;
 
     if (categoryFilter && !VALID_CATEGORIES.has(categoryFilter as Category)) {
-      res.status(400).json({ error: "BadRequest", message: `category must be one of: ${[...VALID_CATEGORIES].join(", ")}` });
+      res.status(400).json(errorBody("bad_request", `category must be one of: ${[...VALID_CATEGORIES].join(", ")}`));
+      return;
+    }
+
+    if (regionFilter && !VALID_REGIONS.has(regionFilter as Region)) {
+      res.status(400).json(errorBody("bad_request", `region must be one of: ${[...VALID_REGIONS].join(", ")}`));
       return;
     }
 

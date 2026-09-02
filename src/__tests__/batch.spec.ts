@@ -5,6 +5,7 @@ import { errorHandler } from "../middleware/errors";
 import * as registry from "../lib/registry";
 import * as iot from "../routes/iot";
 import * as scoring from "../lib/scoring";
+import { createJob, runJob } from "../lib/batch";
 
 jest.mock("../lib/registry");
 jest.mock("../routes/iot");
@@ -85,5 +86,38 @@ describe("batch routes", () => {
 
     expect(status.body.batch_id).toBe(batchId);
     expect(status.body.progress).toHaveProperty("total", 1);
+  });
+});
+
+describe("batch lib — runJob with rejecting processor", () => {
+  it("does not hang and records the rejection as an error result", async () => {
+    const job = createJob([1, 2, 3], 2);
+    const processor = jest.fn(async (id: number) => {
+      if (id === 2) throw new Error("boom");
+      return { project_id: id };
+    });
+
+    await runJob(job, processor);
+
+    expect(job.status).toBe("completed");
+    expect(job.progress.done).toBe(3);
+    expect(job.results).toHaveLength(2);
+    expect(job.errors).toHaveLength(1);
+    expect(job.errors[0]).toMatchObject({ project_id: 2, error: "Error: boom" });
+    expect(job.errors[0].duration_ms).toBeGreaterThanOrEqual(0);
+  });
+
+  it("marks the job failed when every item rejects", async () => {
+    const job = createJob([1, 2], 2);
+    const processor = jest.fn(async () => {
+      throw new Error("always fails");
+    });
+
+    await runJob(job, processor);
+
+    expect(job.status).toBe("failed");
+    expect(job.progress.done).toBe(2);
+    expect(job.results).toHaveLength(0);
+    expect(job.errors).toHaveLength(2);
   });
 });

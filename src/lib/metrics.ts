@@ -1,5 +1,6 @@
 interface RequestMetrics {
   total_requests: number;
+
   total_errors: number;
   total_success: number;
   error_rate: number;
@@ -33,16 +34,60 @@ interface MetricsSnapshot {
   by_path: PathMetrics;
 }
 
-const startTime = Date.now();
-const requestWindow: Array<{ status: number; latency: number; timestamp: number }> = [];
-const MAX_WINDOW_SIZE = 10000;
+interface RequestEntry {
+  method: string;
+  path: string;
+  status: number;
+  latency: number;
+  timestamp: number;
+}
 
+interface MethodCounter {
+  count: number;
+  errors: number;
+  totalLatencyMs: number;
+}
+
+interface PathCounter {
+  count: number;
+  errors: number;
+  totalLatencyMs: number;
+}
+
+const startTime = Date.now(); const requestWindow: RequestEntry[] = []; const MAX_WINDOW_SIZE = 10000; const methodCounters: { [method: string]: MethodCounter } = {}; const pathCounters: { [path: string]: PathCounter } = {}; 
 export function recordRequest(method: string, path: string, status: number, latencyMs: number): void {
   const timestamp = Date.now();
-  requestWindow.push({ status, latency: latencyMs, timestamp });
+  requestWindow.push({ method, path, status, latency: latencyMs, timestamp });
+
+  const methodCounter = methodCounters[method] ||= { count: 0, errors: 0, totalLatencyMs: 0 };
+  methodCounter.count++;
+  methodCounter.totalLatencyMs += latencyMs;
+  if (status >= 400) methodCounter.errors++;
+
+  const pathCounter = pathCounters[path] ||= { count: 0, errors: 0, totalLatencyMs: 0 };
+  pathCounter.count++;
+  pathCounter.totalLatencyMs += latencyMs;
+  if (status >= 400) pathCounter.errors++;
 
   if (requestWindow.length > MAX_WINDOW_SIZE) {
-    requestWindow.shift();
+    const removed = requestWindow.shift();
+    if (removed) {
+      const mc = methodCounters[removed.method];
+      if (mc) {
+        mc.count--;
+        mc.totalLatencyMs -= removed.latency;
+        if (removed.status >= 400) mc.errors--;
+        if (mc.count <= 0) delete methodCounters[removed.method];
+      }
+
+      const pc = pathCounters[removed.path];
+      if (pc) {
+        pc.count--;
+        pc.totalLatencyMs -= removed.latency;
+        if (removed.status >= 400) pc.errors--;
+        if (pc.count <= 0) delete pathCounters[removed.path];
+      }
+    }
   }
 }
 
@@ -66,7 +111,24 @@ export function getMetrics(): MetricsSnapshot {
   const errorsPerMinute = recentRequests.filter((r) => r.status >= 400).length;
 
   const byMethod: MethodMetrics = {};
+  for (const method of Object.keys(methodCounters)) {
+    const counter = methodCounters[method];
+    byMethod[method] = {
+      count: counter.count,
+      errors: counter.errors,
+      avg_latency_ms: counter.count > 0 ? Math.round((counter.totalLatencyMs / counter.count) * 100) / 100 : 0,
+    };
+  }
+
   const byPath: PathMetrics = {};
+  for (const path of Object.keys(pathCounters)) {
+    const counter = pathCounters[path];
+    byPath[path] = {
+      count: counter.count,
+      errors: counter.errors,
+      avg_latency_ms: counter.count > 0 ? Math.round((counter.totalLatencyMs / counter.count) * 100) / 100 : 0,
+    };
+  }
 
   return {
     timestamp: new Date(now).toISOString(),

@@ -152,17 +152,7 @@ describe("registry module", () => {
       expect(typeof total).toBe("number");
     });
 
-    it("throws when the simulation succeeds but retval is missing", async () => {
-      // scValToNative is globally mocked to always return 42 regardless of
-      // input, so simulate the real SDK's behavior of throwing when handed
-      // an undefined ScVal — this is what a missing `retval` actually
-      // produces once passed through `scValToNative`.
-      (scValToNative as jest.Mock).mockImplementationOnce((val: unknown) => {
-        if (val === undefined) {
-          throw new TypeError("scValToNative: value is undefined");
-        }
-        return 42;
-      });
+    it("throws specific error message when the simulation succeeds but retval is missing", async () => {
       (withRpcConnection as jest.Mock).mockImplementationOnce((fn: (client: any) => Promise<any>) =>
         fn({
           getAccount: jest.fn().mockResolvedValue({ sequence: "0" }),
@@ -172,7 +162,22 @@ describe("registry module", () => {
         }),
       );
 
-      await expect(getTotalProjects()).rejects.toThrow();
+      await expect(getTotalProjects()).rejects.toThrow(
+        "total_projects simulation returned no result value",
+      );
+    });
+
+    it("throws specific error message when the simulation succeeds but result is undefined", async () => {
+      (withRpcConnection as jest.Mock).mockImplementationOnce((fn: (client: any) => Promise<any>) =>
+        fn({
+          getAccount: jest.fn().mockResolvedValue({ sequence: "0" }),
+          simulateTransaction: jest.fn().mockResolvedValue({}),
+        }),
+      );
+
+      await expect(getTotalProjects()).rejects.toThrow(
+        "total_projects simulation returned no result value",
+      );
     });
   });
 
