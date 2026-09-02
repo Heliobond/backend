@@ -1,31 +1,23 @@
 import { Router, Request, Response, NextFunction } from "express";
+import { errorBody } from "../middleware/errors";
 import { getSolarData, getSatelliteData } from "./iot";
 import { computeScores } from "../lib/scoring";
-import { updateImpactScore, getTotalProjects, updateScoreForProject } from "../lib/registry";
+import { updateImpactScore, getTotalProjects } from "../lib/registry";
 import { badRequest, parseOptionalInt, MAX_PROJECT_ID, errorBody } from "../middleware/errors";
 import { recordAudit, getAuditLog, auditToCsv } from "../lib/audit";
 import { broadcastScoreUpdate } from "../lib/websocket";
 import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
 import { withProjectLock } from "../lib/request-queue";
+import { updateScoreForProject } from "../lib/scoreService";
 import { config } from "../config";
 import { logger } from "../lib/logger";
-import { timingSafeCompare } from "../lib/timing-safe";
+import { extractApiKeyRole, requireApiKeyRole, requireApiKeyAuth } from "../middleware/requireApiKeyRole";
 
 const router = Router();
 
-router.use((req: Request, res: Response, next: NextFunction) => {
-  const apiKey = config.ADMIN_API_KEY;
-  if (!apiKey) {
-    return res
-      .status(500)
-      .json(errorBody("server_misconfigured", "Admin API key is not configured"));
-  }
-  const authorization = req.headers.authorization ?? "";
-  if (!timingSafeCompare(authorization, `Bearer ${apiKey}`)) {
-    return res.status(401).json(errorBody("unauthorized", "Missing or invalid bearer token"));
-  }
-  next();
-});
+// Apply role-based API key authentication to all admin routes
+router.use(extractApiKeyRole);
+router.use(requireApiKeyAuth);
 
 type ScoreUpdateResult = {
   project_id: number;
@@ -78,7 +70,15 @@ function parseProjectIds(body: unknown): number[] | null {
   return raw as number[];
 }
 
-router.post("/update-scores", async (req: Request, res: Response, next: NextFunction) => {
+// POST /api/admin/update-scores
+// Body: { project_ids?: number[] }  — defaults to all projects
+// Returns: { updated: number, results: [...], errors: [...], skipped: [...] }
+//
+// All errors — including validation (400) and unexpected failures (500) — are
+// forwarded to the central errorHandler via next() so status codes stay consistent
+// across all endpoints. The nested per-project catch is intentional: it collects
+// partial failures without aborting the entire batch.
+router.post("/update-scores", requireApiKeyRole("admin:write"), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const requested = parseProjectIds(req.body);
 
@@ -177,6 +177,38 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
     res.json({ updated: results.length, results, errors, skipped });
   } catch (error) {
     next(error);
+  }
+});
+
+/**
+ * GET /admin/audit
+ * Query: project_id=<int>, from=<unix-ms>, to=<unix-ms>, format=json|csv
+ * Returns the immutable audit log of all score updates.
+ */
+router.get("/audit", requireApiKeyRole("admin:read"), (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const project_id =
+      parseOptionalInt(queryValue(req.query.project_id), "project_id", 0) || undefined;
+    const from = parseOptionalInt(queryValue(req.query.from), "from", 0) || undefined;
+    const to = parseOptionalInt(queryValue(req.query.to), "to", 0) || undefined;
+
+    if (from && to && from > to) {
+      throw badRequest("from must be earlier than to");
+    }
+
+    const entries = getAuditLog({ project_id, from, to });
+    const format = req.query.format === "csv" ? "csv" : "json";
+
+    if (format === "csv") {
+      res.set("Content-Type", "text/csv");
+      res.set("Content-Disposition", 'attachment; filename="audit-log.csv"');
+      res.send(auditToCsv(entries));
+      return;
+    }
+
+    res.json({ count: entries.length, entries });
+  } catch (err) {
+    next(err);
   }
 });
 

@@ -92,6 +92,19 @@ if (!process.env.ADMIN_API_KEY) {
 const app = express();
 const PORT = env.PORT;
 
+// Trust proxy configuration — required for Express to parse X-Forwarded-For
+// via req.ip / req.ips.  Without this, ipWhitelist must hand-parse headers,
+// which is vulnerable to spoofing.
+//
+// TRUST_PROXY values:
+//  - "false"  (default) — no proxy; req.ip is the direct peer address
+//  - "true"            — trust all proxies (single hop)
+//  - "loopback"        — trust loopback (127.0.0.1/8, ::1) only
+//  - a CIDR or IP      — trust specific proxy IP(s)
+//  - a number N         — trust the first N hops in X-Forwarded-For
+const trustProxy = process.env.TRUST_PROXY || "false";
+app.set("trust proxy", trustProxy === "true" ? true : trustProxy);
+
 // Validate CORS origin
 function validateCorsOrigin(origin: string | undefined): string | undefined {
   if (!origin) return undefined;
@@ -415,9 +428,9 @@ scheduleCron(
       const status = getRpcStatus();
       logger.error(
         `[alert] Stellar RPC outage detected: ` +
-          `consecutiveFailures=${status.consecutiveFailures}, ` +
-          `outageDurationMs=${status.outageDurationMs}, ` +
-          `lastSuccessAgoMs=${status.lastSuccessAgoMs}`,
+        `consecutiveFailures=${status.consecutiveFailures}, ` +
+        `outageDurationMs=${status.outageDurationMs}, ` +
+        `lastSuccessAgoMs=${status.lastSuccessAgoMs}`,
       );
     }
   },
@@ -469,7 +482,16 @@ app.all(
 );
 
 app.get("/graphql-playground", (req, res) => {
+  // Generate a nonce for inline script CSP
+  const nonce = require('crypto').randomBytes(16).toString('hex');
+
   res.setHeader("Content-Type", "text/html");
+  // Override CSP to allow inline script with nonce
+  res.setHeader(
+    "Content-Security-Policy",
+    `default-src 'self'; script-src 'self' https://unpkg.com 'nonce-${nonce}'; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; connect-src 'self'`
+  );
+
   res.send(`
     <!DOCTYPE html>
     <html>
@@ -482,7 +504,7 @@ app.get("/graphql-playground", (req, res) => {
         <script crossorigin src="https://unpkg.com/react/umd/react.production.min.js"></script>
         <script crossorigin src="https://unpkg.com/react-dom/umd/react-dom.production.min.js"></script>
         <script crossorigin src="https://unpkg.com/graphiql/graphiql.min.js"></script>
-        <script>
+        <script nonce="${nonce}">
           const fetcher = GraphiQL.createFetcher({ url: '/graphql' });
           ReactDOM.render(
             React.createElement(GraphiQL, { fetcher: fetcher }),
