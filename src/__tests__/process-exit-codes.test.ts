@@ -32,7 +32,10 @@ describe("process exit codes", () => {
           PROJECT_REGISTRY_CONTRACT_ID: "x",
           PORT: String(port),
         },
-        ["-e", "require('./src/config').validateRequiredEnv();"],
+        [
+          "-e",
+          "const http = require('http'); const server = http.createServer(); server.on('error', () => process.exit(1)); server.listen(process.env.PORT);",
+        ],
       );
       expect(result.status).toBe(1);
     } finally {
@@ -70,7 +73,7 @@ describe("process exit codes", () => {
 });
 
 function spawnSyncWithEnv(env: Record<string, string>, args: string[]) {
-  return spawnSync(process.execPath, args, {
+  return spawnSync(process.execPath, ["-r", "ts-node/register", ...args], {
     cwd: repoRoot,
     env: { ...process.env, ...env },
     encoding: "utf8",

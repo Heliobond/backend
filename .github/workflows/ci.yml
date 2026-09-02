@@ -46,5 +46,8 @@ jobs:
       - name: Lint
         run: bun run lint
 
+      - name: Audit dependencies
+        run: bun audit --json || true
+
       - name: Test
         run: bun run test

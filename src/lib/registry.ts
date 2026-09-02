@@ -4,7 +4,6 @@ import {
   nativeToScVal,
   BASE_FEE,
   scValToNative,
-  rpc,
   Account,
 } from "@stellar/stellar-sdk";
 import { withRpcConnection, networkPassphrase, getAdminKeypair, signAndSubmit } from "./stellar";
@@ -58,12 +57,20 @@ export async function getTotalProjects(): Promise<number> {
 
     const end = stellarRpcDuration.startTimer({ operation: "simulateTransaction" });
     try {
-      const result = await client.simulateTransaction(tx);
-      if ("error" in result) throw new Error((result as { error: string }).error);
-      const sim = result as rpc.Api.SimulateTransactionSuccessResponse;
+      const result = (await client.simulateTransaction(tx)) as {
+        error?: unknown;
+        result?: { retval?: unknown };
+      };
+      if (result.error) {
+        throw new Error(String(result.error));
+      }
+      const retval = result.result?.retval;
+      if (retval === undefined) {
+        throw new Error("Simulation result missing retval");
+      }
       end();
       stellarRpcTotal.inc({ operation: "simulateTransaction", result: "success" });
-      return Number(scValToNative(sim.result!.retval));
+      return Number(scValToNative(retval as any));
     } catch (err) {
       end();
       stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });

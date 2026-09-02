@@ -177,16 +177,15 @@ export function validateRequiredEnv(): void {
  */
 export function initEnv() {
   validateRequiredEnv();
-
   // Initialize API key roles from environment variables
   // This must be called before any routes that use role-based auth
   const { loadApiKeysFromEnv } = require("./lib/apiKeyRoles");
   loadApiKeysFromEnv();
 
-  return config;
   return {
     ...config,
-    ADMIN_SECRET_KEY: process.env.ADMIN_SECRET_KEY || "",
-    PROJECT_REGISTRY_CONTRACT_ID: process.env.PROJECT_REGISTRY_CONTRACT_ID || "",
+    ADMIN_SECRET_KEY: process.env.ADMIN_SECRET_KEY || config.ADMIN_SECRET_KEY,
+    PROJECT_REGISTRY_CONTRACT_ID:
+      process.env.PROJECT_REGISTRY_CONTRACT_ID || config.PROJECT_REGISTRY_CONTRACT_ID,
   };
 }
