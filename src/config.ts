@@ -184,7 +184,6 @@ export function initEnv() {
   const { loadApiKeysFromEnv } = require("./lib/apiKeyRoles");
   loadApiKeysFromEnv();
 
-  return config;
   return {
     ...config,
     ADMIN_SECRET_KEY: process.env.ADMIN_SECRET_KEY || "",

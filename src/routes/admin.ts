@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { getSolarData, getSatelliteData } from "./iot";
 import { computeScores } from "../lib/scoring";
 import { updateImpactScore, getTotalProjects } from "../lib/registry";
-import { badRequest, parseOptionalInt, MAX_PROJECT_ID, errorBody } from "../middleware/errors";
+import { badRequest, parseOptionalInt, maxProjectId, errorBody } from "../middleware/errors";
 import { recordAudit, getAuditLog, auditToCsv } from "../lib/audit";
 import { broadcastScoreUpdate } from "../lib/websocket";
 import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
@@ -17,6 +17,15 @@ import {
 } from "../middleware/requireApiKeyRole";
 
 const router = Router();
+
+// Check that ADMIN_API_KEY is configured before processing any requests
+router.use((_req, res, next) => {
+  if (!config.ADMIN_API_KEY) {
+    res.status(500).json(errorBody("server_misconfigured", "Admin API key is not configured"));
+    return;
+  }
+  next();
+});
 
 // Apply role-based API key authentication to all admin routes
 router.use(extractApiKeyRole);
@@ -85,10 +94,10 @@ function parseProjectIds(body: unknown): number[] | null {
     }
     projectIds.push(entry);
   }
-  if (!raw.every((n) => (n as number) <= MAX_PROJECT_ID)) {
-    throw badRequest(`project_ids must not exceed maximum project id ${MAX_PROJECT_ID}`);
+  if (!raw.every((n) => (n as number) <= maxProjectId())) {
+    throw badRequest(`project_ids must not exceed maximum project id ${maxProjectId()}`);
   }
-  return raw as number[];
+  return projectIds;
 }
 
 // POST /api/admin/update-scores

@@ -80,10 +80,12 @@ import { fetchSatelliteWithFallback } from "../lib/satellite-sources";
 import { computeScores } from "../lib/scoring";
 import { recordCronRun } from "../lib/health";
 import { markFailed } from "../lib/duplicate-detection";
+import { resetIdempotencyState } from "../lib/scoreService";
 
 describe("runHourlyScoreUpdate (cron job execution flow)", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    resetIdempotencyState();
     (getSolarData as jest.Mock).mockReturnValue({
       efficiency_pct: 85,
       power_output_kw: 500,

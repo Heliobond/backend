@@ -4,13 +4,30 @@ import adminRouter from "../routes/admin";
 import iotRouter from "../routes/iot";
 import { errorHandler } from "../middleware/errors";
 import { getHealth } from "../lib/health";
+import * as iot from "../lib/iot";
 
 jest.mock("../lib/registry", () => ({
   updateImpactScore: jest.fn(),
   getTotalProjects: jest.fn(),
 }));
-jest.mock("../routes/iot");
+jest.mock("../lib/iot");
 jest.mock("../lib/scoring");
+jest.mock("../lib/apiKeyRoles", () => ({
+  getApiKeyRole: jest.fn((key: string) => {
+    if (key === "test-key") return "admin:write";
+    return undefined;
+  }),
+  hasRolePermission: jest.fn((userRole: any, requiredRole: any) => {
+    if (!userRole) return false;
+    if (userRole === "admin:write")
+      return requiredRole === "admin:read" || requiredRole === "admin:write";
+    return userRole === requiredRole;
+  }),
+}));
+jest.mock("../lib/scoreService", () => ({
+  updateScoreForProject: jest.fn(),
+  resetIdempotencyState: jest.fn(),
+}));
 jest.mock("../config", () => ({
   config: {
     ADMIN_API_KEY: "test-key",
