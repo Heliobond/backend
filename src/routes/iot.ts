@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { parseProjectId } from "../middleware/errors";
 import { fetchSatelliteWithFallback } from "../lib/satellite-sources";
 import { getSolarData } from "../lib/iot";
+import { extractApiKeyRole } from "../middleware/requireApiKeyRole";
 
 /**
  * The simulation itself lives in `../lib/iot`, which owns the seeded-random
@@ -12,6 +13,11 @@ import { getSolarData } from "../lib/iot";
 export { seededRandom, getSolarData, getSatelliteData, getHourSeed } from "../lib/iot";
 
 const router = Router();
+
+// Optional API key authentication for IoT endpoints
+// If a valid Bearer token is provided, req.apiKeyRole will be set
+// Otherwise, routes can proceed without authentication
+router.use(extractApiKeyRole);
 
 router.get("/solar/:id", (req: Request, res: Response, next: NextFunction) => {
   try {

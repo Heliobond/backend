@@ -1,33 +1,23 @@
 import { Router, Request, Response, NextFunction } from "express";
+import { errorBody } from "../middleware/errors";
 import { getSolarData, getSatelliteData } from "./iot";
 import { computeScores } from "../lib/scoring";
 import { updateImpactScore, getTotalProjects } from "../lib/registry";
-import { badRequest, parseOptionalInt, MAX_PROJECT_ID } from "../middleware/errors";
+import { badRequest, parseOptionalInt, MAX_PROJECT_ID, errorBody } from "../middleware/errors";
 import { recordAudit, getAuditLog, auditToCsv } from "../lib/audit";
 import { broadcastScoreUpdate } from "../lib/websocket";
 import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
 import { withProjectLock } from "../lib/request-queue";
+import { updateScoreForProject } from "../lib/scoreService";
 import { config } from "../config";
 import { logger } from "../lib/logger";
-import { timingSafeCompare } from "../lib/timing-safe";
+import { extractApiKeyRole, requireApiKeyRole, requireApiKeyAuth } from "../middleware/requireApiKeyRole";
 
 const router = Router();
 
-// Bearer token auth — enforced when ADMIN_API_KEY env var is set
-router.use((req: Request, res: Response, next: NextFunction) => {
-  const apiKey = config.ADMIN_API_KEY;
-  if (!apiKey) {
-    return res
-      .status(500)
-      .json(errorBody("server_misconfigured", "Admin API key is not configured"));
-  }
-  // Constant-time compare so response timing can't be used to guess the key.
-  const authorization = req.headers.authorization ?? "";
-  if (!timingSafeCompare(authorization, `Bearer ${apiKey}`)) {
-    return res.status(401).json(errorBody("unauthorized", "Missing or invalid bearer token"));
-  }
-  next();
-});
+// Apply role-based API key authentication to all admin routes
+router.use(extractApiKeyRole);
+router.use(requireApiKeyAuth);
 
 /** A per-project score update that made it onto the ledger (or was deferred). */
 type ScoreUpdateResult = {
@@ -106,7 +96,7 @@ function parseProjectIds(body: unknown): number[] | null {
 // forwarded to the central errorHandler via next() so status codes stay consistent
 // across all endpoints. The nested per-project catch is intentional: it collects
 // partial failures without aborting the entire batch.
-router.post("/update-scores", async (req: Request, res: Response, next: NextFunction) => {
+router.post("/update-scores", requireApiKeyRole("admin:write"), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const requested = parseProjectIds(req.body);
 
@@ -221,7 +211,7 @@ router.post("/update-scores", async (req: Request, res: Response, next: NextFunc
  * Query: project_id=<int>, from=<unix-ms>, to=<unix-ms>, format=json|csv
  * Returns the immutable audit log of all score updates.
  */
-router.get("/audit", (req: Request, res: Response, next: NextFunction) => {
+router.get("/audit", requireApiKeyRole("admin:read"), (req: Request, res: Response, next: NextFunction) => {
   try {
     const project_id =
       parseOptionalInt(queryValue(req.query.project_id), "project_id", 0) || undefined;
