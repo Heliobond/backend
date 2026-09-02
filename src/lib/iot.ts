@@ -17,9 +17,9 @@ const CRON_TIMEZONE = process.env.CRON_TIMEZONE ?? "UTC";
  * Exported because it is also the cache-key component that gives IoT cache
  * entries their hourly expiry (see `withIotCache`).
  */
-export function getHourSeed(): number {
+export function getHourSeed(now?: number): number {
   try {
-    const now = new Date();
+    const date = now !== undefined ? new Date(now) : new Date();
     const formatter = new Intl.DateTimeFormat("en-US", {
       year: "numeric",
       month: "2-digit",
@@ -28,7 +28,7 @@ export function getHourSeed(): number {
       hour12: false,
       timeZone: CRON_TIMEZONE,
     });
-    const parts = formatter.formatToParts(now);
+    const parts = formatter.formatToParts(date);
     const get = (type: string): number => {
       const val = parts.find((p) => p.type === type)?.value;
       const parsed = parseInt(val ?? "0", 10);
@@ -51,7 +51,7 @@ export function getHourSeed(): number {
  * Uses MurmurHash3 avalanche properties to avoid adjacent collision.
  */
 export function seededRandom(seed: number): number {
-  const hourSeed = getHourSeed();
+  const hourSeed = getHourSeed(Date.now());
   // Ensure the inputs aren't NaN before bitwise operations
   const safeSeed = Number.isNaN(seed) ? 0 : seed;
 

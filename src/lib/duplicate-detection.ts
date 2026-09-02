@@ -12,7 +12,7 @@ const activeLocks = new Map<any, LockEntry>();
  */
 export function tryBeginUpdate(id: any): { allowed: boolean; key: string; reason: string } {
   const existing = activeLocks.get(id);
-  
+
   if (existing) {
     const reason = `Update already in progress since ${new Date(existing.timestamp).toISOString()}`;
     logger.warn(`[duplicate-detection] Skipping update for ${id}: ${reason}`);
@@ -25,7 +25,7 @@ export function tryBeginUpdate(id: any): { allowed: boolean; key: string; reason
 
   const key = `lock-${id}-${Date.now()}`;
   activeLocks.set(id, { timestamp: Date.now() });
-  
+
   return {
     allowed: true,
     key,
@@ -47,4 +47,9 @@ export function markCompleted(id: any): void {
 export function markFailed(id: any): void {
   activeLocks.delete(id);
   logger.debug(`[duplicate-detection] Lock released for ${id} after failure`);
+}
+
+/** Clear all active locks (for testing). */
+export function clearAllLocks(): void {
+  activeLocks.clear();
 }

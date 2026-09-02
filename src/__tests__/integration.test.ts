@@ -37,6 +37,7 @@ jest.mock("../config", () => ({
     TX_MAX_RETRIES: 4,
     TX_RETRY_BASE_DELAY_MS: 200,
     TX_RETRY_MAX_DELAY_MS: 10000,
+    MAX_POWER_KW: 1000,
     CRON_TIMEZONE: "UTC",
     CRON_FAILURE_THRESHOLD: 0.5,
     SHUTDOWN_TIMEOUT_MS: 30000,
@@ -75,6 +76,16 @@ jest.mock("../lib/logger", () => ({
     debug: jest.fn(),
   },
 }));
+
+jest.mock("../lib/iot", () => {
+  const actual = jest.requireActual("../lib/iot");
+  return {
+    ...actual,
+    getSolarData: jest.fn(actual.getSolarData),
+    getSatelliteData: jest.fn(actual.getSatelliteData),
+    seededRandom: jest.fn(actual.seededRandom),
+  };
+});
 
 const mockedUpdateImpactScore = updateImpactScore as jest.Mock;
 

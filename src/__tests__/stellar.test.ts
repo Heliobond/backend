@@ -49,18 +49,31 @@ jest.mock("@stellar/stellar-sdk", () => ({
     TESTNET: "Test SDF Network ; September 2015",
     PUBLIC: "Public Global Stellar Network ; September 2015",
   },
-  TransactionBuilder: {
-    fromXDR: jest.fn().mockReturnValue({
-      operations: [{ type: "invoke" }],
-      fee: 100,
-      timeBounds: undefined,
-      tx: { timeBounds: undefined },
-      sign: jest.fn(),
-    }),
-    mockReset(tx?: unknown) {
-      (this as any).fromXDR.mockReturnValue(tx ?? mockTx);
+  TransactionBuilder: Object.assign(
+    jest.fn().mockImplementation(() => ({
+      addOperation: jest.fn().mockReturnThis(),
+      setTimeout: jest.fn().mockReturnThis(),
+      build: jest.fn().mockReturnValue({
+        operations: [{ type: "invoke" }],
+        fee: 100,
+        timeBounds: undefined,
+        sign: jest.fn(),
+        toXDR: jest.fn().mockReturnValue("fake_xdr"),
+      }),
+    })),
+    {
+      fromXDR: jest.fn().mockReturnValue({
+        operations: [{ type: "invoke" }],
+        fee: 100,
+        timeBounds: undefined,
+        tx: { timeBounds: undefined },
+        sign: jest.fn(),
+      }),
+      mockReset(tx?: unknown) {
+        (this as any).fromXDR.mockReturnValue(tx ?? mockTx);
+      },
     },
-  },
+  ),
   Account: jest.fn().mockImplementation((id: string, seq: string) => ({ id, seq })),
   xdr: {
     LedgerKey: { account: jest.fn().mockReturnValue({}) },
@@ -186,7 +199,9 @@ describe("stellar utility helpers", () => {
         getTransaction: jest.Mock;
       }> = {},
     ) => ({
-      getLedgerEntries: jest.fn().mockResolvedValue({ entries: [] }),
+      getLedgerEntries: jest.fn().mockResolvedValue({
+        entries: [{ val: { account: () => ({ seqNum: () => ({ toString: () => "0" }) }) } }],
+      }),
       sendTransaction: jest.fn().mockResolvedValue({
         status: "SUCCESS",
         hash: "tx_hash_123",

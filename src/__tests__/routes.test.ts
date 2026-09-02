@@ -12,6 +12,82 @@ jest.mock("../lib/registry", () => ({
   updateImpactScore: jest.fn(),
   getTotalProjects: jest.fn(),
 }));
+jest.mock("../lib/apiKeyRoles", () => ({
+  getApiKeyRole: jest.fn((key: string) => {
+    if (key === "test-key") return "admin:write";
+    return undefined;
+  }),
+  hasRolePermission: jest.fn((userRole: any, requiredRole: any) => {
+    if (!userRole) return false;
+    if (userRole === "admin:write")
+      return requiredRole === "admin:read" || requiredRole === "admin:write";
+    return userRole === requiredRole;
+  }),
+}));
+jest.mock("../lib/scoreService", () => ({
+  updateScoreForProject: jest.fn(),
+  resetIdempotencyState: jest.fn(),
+}));
+jest.mock("../lib/iot", () => ({
+  getSolarData: jest.fn().mockReturnValue({
+    power_output_kw: 600,
+    efficiency_pct: 60,
+    max_power_kw: 1000,
+    timestamp: Date.now(),
+  }),
+  getSatelliteData: jest.fn().mockReturnValue({
+    forest_density_pct: 50,
+    ndvi_score: 0.5,
+    timestamp: Date.now(),
+  }),
+  seededRandom: jest.fn(),
+  getHourSeed: jest.fn(),
+  withIotCache: jest.fn((_key: string, fn: () => any) => fn()),
+  clearIotCache: jest.fn(),
+  getIotCacheStats: jest.fn(),
+}));
+jest.mock("../lib/stellar", () => ({
+  rpcPool: {
+    getMetrics: jest.fn(() => ({ active: 0, idle: 1, total: 1, waitingQueue: 0 })),
+    shutdown: jest.fn(),
+  },
+  rpcBreaker: {
+    getMetrics: jest.fn(() => ({ state: "CLOSED", failures: 0, successes: 0 })),
+    getState: jest.fn(() => "CLOSED"),
+  },
+  getRpcStatus: jest.fn(() => ({
+    consecutiveFailures: 0,
+    outageDurationMs: 0,
+    lastSuccessAgoMs: 50,
+  })),
+}));
+jest.mock("../lib/satellite-sources", () => ({
+  getSourceHealth: jest.fn(() => []),
+  getOutageState: jest.fn(() => ({ consecutiveFailures: 0 })),
+  getCacheStats: jest.fn(() => ({ entries: 0, ttlMs: 7200000 })),
+  fetchSatelliteWithFallback: jest.fn().mockResolvedValue({
+    forest_density_pct: 60,
+    ndvi_score: 0.6,
+    timestamp: Date.now(),
+    source: "sentinel-2",
+    dataSource: "live",
+  }),
+}));
+jest.mock("../lib/migrations", () => ({
+  getMigrationHealth: jest.fn(async () => ({ pending: 0, applied: 3 })),
+}));
+jest.mock("../lib/feature-flags", () => ({
+  listFlags: jest.fn(() => ({})),
+}));
+jest.mock("../config", () => ({
+  config: {
+    get ADMIN_API_KEY() {
+      return process.env.ADMIN_API_KEY || "";
+    },
+  },
+}));
+
+import { updateScoreForProject } from "../lib/scoreService";
 
 const ADMIN_API_KEY = "test-key";
 const authHeader = { Authorization: `Bearer ${ADMIN_API_KEY}` };
@@ -19,7 +95,7 @@ const authHeader = { Authorization: `Bearer ${ADMIN_API_KEY}` };
 function buildApp(): Express {
   const app = express();
   app.use(express.json());
-  app.get("/health", (_req, res) => res.json(getHealth()));
+  app.get("/health", async (_req, res) => res.json(await getHealth()));
   app.use("/api/iot", iotRouter);
   app.use("/api/admin", adminRouter);
   app.use(notFoundHandler);
@@ -36,6 +112,13 @@ describe("HTTP integration", () => {
     jest.clearAllMocks();
     (registry.updateImpactScore as jest.Mock).mockResolvedValue("tx-hash");
     (registry.getTotalProjects as jest.Mock).mockResolvedValue(2);
+    (updateScoreForProject as jest.Mock).mockImplementation(async (projectId: number) => ({
+      status: "success",
+      projectId,
+      creditQuality: 85,
+      greenImpact: 70,
+      txHash: "tx-hash",
+    }));
   });
 
   afterEach(() => {

@@ -12,13 +12,31 @@ jest.mock("../lib/registry", () => ({
   updateImpactScore: jest.fn(),
   getTotalProjects: jest.fn(),
 }));
+jest.mock("../lib/apiKeyRoles", () => ({
+  getApiKeyRole: jest.fn((key: string) => {
+    if (key === "test-key") return "admin:write";
+    return undefined;
+  }),
+  hasRolePermission: jest.fn((userRole: any, requiredRole: any) => {
+    if (!userRole) return false;
+    if (userRole === "admin:write")
+      return requiredRole === "admin:read" || requiredRole === "admin:write";
+    return userRole === requiredRole;
+  }),
+}));
 jest.mock("../routes/iot");
 jest.mock("../lib/scoring");
+jest.mock("../lib/scoreService", () => ({
+  updateScoreForProject: jest.fn(),
+  resetIdempotencyState: jest.fn(),
+}));
 jest.mock("../config", () => ({
   config: {
     ADMIN_API_KEY: "test-key",
   },
 }));
+
+import { updateScoreForProject } from "../lib/scoreService";
 
 function buildApp(): Express {
   const app = express();
@@ -52,6 +70,13 @@ describe("admin /update-scores input validation", () => {
     });
     (registry.updateImpactScore as jest.Mock).mockResolvedValue("tx-hash");
     (registry.getTotalProjects as jest.Mock).mockResolvedValue(2);
+    (updateScoreForProject as jest.Mock).mockImplementation(async (projectId: number) => ({
+      status: "success",
+      projectId,
+      creditQuality: 85,
+      greenImpact: 70,
+      txHash: "tx-hash",
+    }));
   });
 
   it("returns 400 { error, message } when project_ids is not an array", async () => {

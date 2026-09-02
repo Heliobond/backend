@@ -21,10 +21,28 @@ jest.mock("../lib/registry", () => {
 });
 jest.mock("../routes/iot");
 jest.mock("../lib/scoring");
+jest.mock("../lib/apiKeyRoles", () => ({
+  getApiKeyRole: jest.fn((key: string) => {
+    if (key === "test-key") return "admin:write";
+    return undefined;
+  }),
+  hasRolePermission: jest.fn((userRole: any, requiredRole: any) => {
+    if (!userRole) return false;
+    if (userRole === "admin:write")
+      return requiredRole === "admin:read" || requiredRole === "admin:write";
+    return userRole === requiredRole;
+  }),
+}));
+import { updateScoreForProject } from "../lib/scoreService";
+
 jest.mock("../config", () => ({
   config: {
     ADMIN_API_KEY: "test-key",
   },
+}));
+jest.mock("../lib/scoreService", () => ({
+  updateScoreForProject: jest.fn(),
+  resetIdempotencyState: jest.fn(),
 }));
 
 function buildApp(): Express {
@@ -58,6 +76,13 @@ describe("admin routes", () => {
     });
     (registry.updateImpactScore as jest.Mock).mockResolvedValue("tx-hash");
     (registry.getTotalProjects as jest.Mock).mockResolvedValue(2);
+    (updateScoreForProject as jest.Mock).mockImplementation(async (projectId: number) => ({
+      status: "success",
+      projectId,
+      creditQuality: 85,
+      greenImpact: 70,
+      txHash: "tx-hash",
+    }));
   });
 
   // ── Auth middleware ──────────────────────────────────────────────────────
@@ -268,13 +293,27 @@ describe("admin routes", () => {
     });
 
     it("defers score when RPC is degraded", async () => {
-      const RpcDegradedError = (
-        registry as unknown as { RpcDegradedError: new (msg?: string) => Error }
-      ).RpcDegradedError;
-      (registry.updateImpactScore as jest.Mock)
-        .mockResolvedValueOnce("tx-1")
-        .mockRejectedValueOnce(new RpcDegradedError("RPC is degraded"))
-        .mockResolvedValueOnce("tx-3");
+      (updateScoreForProject as jest.Mock)
+        .mockResolvedValueOnce({
+          status: "success",
+          projectId: 1,
+          creditQuality: 85,
+          greenImpact: 70,
+          txHash: "tx-1",
+        })
+        .mockResolvedValueOnce({
+          status: "deferred",
+          projectId: 2,
+          creditQuality: 85,
+          greenImpact: 70,
+        })
+        .mockResolvedValueOnce({
+          status: "success",
+          projectId: 3,
+          creditQuality: 85,
+          greenImpact: 70,
+          txHash: "tx-3",
+        });
 
       const res = await request(app)
         .post("/api/admin/update-scores")
@@ -293,10 +332,22 @@ describe("admin routes", () => {
     });
 
     it("isolates per-project errors without aborting the batch", async () => {
-      (registry.updateImpactScore as jest.Mock)
-        .mockResolvedValueOnce("tx-1")
-        .mockRejectedValueOnce(new Error("RPC timeout"))
-        .mockResolvedValueOnce("tx-3");
+      (updateScoreForProject as jest.Mock)
+        .mockResolvedValueOnce({
+          status: "success",
+          projectId: 1,
+          creditQuality: 85,
+          greenImpact: 70,
+          txHash: "tx-1",
+        })
+        .mockResolvedValueOnce({ status: "error", projectId: 2, error: "RPC timeout" })
+        .mockResolvedValueOnce({
+          status: "success",
+          projectId: 3,
+          creditQuality: 85,
+          greenImpact: 70,
+          txHash: "tx-3",
+        });
 
       const res = await request(app)
         .post("/api/admin/update-scores")
@@ -314,10 +365,22 @@ describe("admin routes", () => {
     });
 
     it("isolates a single failing project: only the failing id appears in errors, the rest in results", async () => {
-      (registry.updateImpactScore as jest.Mock)
-        .mockResolvedValueOnce("tx-1")
-        .mockRejectedValueOnce(new Error("project 2 blew up"))
-        .mockResolvedValueOnce("tx-3");
+      (updateScoreForProject as jest.Mock)
+        .mockResolvedValueOnce({
+          status: "success",
+          projectId: 1,
+          creditQuality: 85,
+          greenImpact: 70,
+          txHash: "tx-1",
+        })
+        .mockResolvedValueOnce({ status: "error", projectId: 2, error: "project 2 blew up" })
+        .mockResolvedValueOnce({
+          status: "success",
+          projectId: 3,
+          creditQuality: 85,
+          greenImpact: 70,
+          txHash: "tx-3",
+        });
 
       const res = await request(app)
         .post("/api/admin/update-scores")
