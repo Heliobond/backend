@@ -154,6 +154,46 @@ describe("performSensitivityAnalysis", () => {
     expect(parameters.has("Degradation Rate")).toBe(true);
     expect(parameters.has("Energy Output")).toBe(true);
   });
+
+  it("discount rate sensitivity uses additive deltas, not multiplicative multipliers", () => {
+    const input10 = createDefaultFinancialInput(500, 80, { discount_rate: 0.1 });
+    const result = performSensitivityAnalysis(input10);
+    const drPoints = result.sensitivities.filter((s) => s.parameter === "Discount Rate");
+
+    // The "+1%" label means base (0.10) + 0.01 = 0.11, so effective multiplier ≈ 1.10
+    const plus1 = drPoints.find((s) => s.change === "+1%");
+    expect(plus1).toBeDefined();
+    expect(plus1!.multiplier).toBeCloseTo(0.11 / 0.1, 6);
+
+    // The "-2%" label means base (0.10) - 0.02 = 0.08, so effective multiplier = 0.80
+    const minus2 = drPoints.find((s) => s.change === "-2%");
+    expect(minus2).toBeDefined();
+    expect(minus2!.multiplier).toBeCloseTo(0.08 / 0.1, 6);
+
+    // The "+2%" label means base (0.10) + 0.02 = 0.12
+    const plus2 = drPoints.find((s) => s.change === "+2%");
+    expect(plus2).toBeDefined();
+    expect(plus2!.multiplier).toBeCloseTo(0.12 / 0.1, 6);
+
+    // Higher discount rate should reduce NPV
+    expect(minus2!.npv).toBeGreaterThan(plus1!.npv);
+    expect(plus1!.npv).toBeGreaterThan(plus2!.npv);
+  });
+
+  it("discount rate sensitivity is correct for the default 7% base rate too", () => {
+    const result = performSensitivityAnalysis(BASE_INPUT);
+    const drPoints = result.sensitivities.filter((s) => s.parameter === "Discount Rate");
+
+    // Base is 0.07; "+1%" means 0.07 + 0.01 = 0.08 → multiplier ≈ 0.08/0.07 ≈ 1.1429
+    const plus1 = drPoints.find((s) => s.change === "+1%");
+    expect(plus1).toBeDefined();
+    expect(plus1!.multiplier).toBeCloseTo(0.08 / 0.07, 4);
+
+    // "-2%" means 0.07 - 0.02 = 0.05 → multiplier ≈ 0.05/0.07 ≈ 0.7143
+    const minus2 = drPoints.find((s) => s.change === "-2%");
+    expect(minus2).toBeDefined();
+    expect(minus2!.multiplier).toBeCloseTo(0.05 / 0.07, 4);
+  });
 });
 
 describe("compareROI", () => {
