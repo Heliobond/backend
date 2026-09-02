@@ -9,7 +9,7 @@ import {
 } from "../lib/multichain";
 import { parseProjectId } from "../middleware/errors";
 import { getSolarData, getSatelliteData } from "./iot";
-import { computeScores } from "../lib/scoring";
+import { computeScores from "../lib/scoring";
 
 const router = Router();
 
@@ -38,7 +38,7 @@ router.patch("/:id", (req: Request, res: Response) => {
   res.json({ ok: true, chain: getChain(req.params.id as ChainId) });
 });
 
-/**
+/***
  * POST /v1/chains/broadcast/:projectId
  * Submit score update to one or more chains.
  * Body: { chains?: string[] } — defaults to all enabled chains.
@@ -48,6 +48,14 @@ router.post("/broadcast/:projectId", async (req: Request, res: Response, next: N
     const projectId = parseProjectId(req.params.projectId, "project id");
     const { chains } = req.body as { chains?: string[] };
 
+    // Only Stellar has a real cross-chain submission implemented.
+    // EVM chains are not yet supported; return a clear error instead of
+    // fabricating a fake transaction hash.
+    const targetChains = (chains ?? getEnabledChains().map((c) => c.id)) as ChainId[];
+    if (targetChains.some((id) => id !== "stellar")) {
+      return res.status(501).json({ error: "EVM chain submission not implemented; only Stellar is currently supported." });
+    }
+
     const solar = getSolarData(projectId);
     const satellite = getSatelliteData(projectId);
     const scores = computeScores({ solar, satellite });
@@ -56,7 +64,7 @@ router.post("/broadcast/:projectId", async (req: Request, res: Response, next: N
       projectId,
       scores.credit_quality,
       scores.green_impact,
-      chains as ChainId[] | undefined,
+      targetChains.length > 0 ? targetChains : undefined,
     );
 
     res.json(result);

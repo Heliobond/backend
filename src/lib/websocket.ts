@@ -46,17 +46,23 @@ export function encodeScoreUpdate(update: ScoreUpdate): Buffer {
 }
 
 /**
- * Authenticate an incoming upgrade request. The token may be supplied as a
- * `?token=` query parameter or an `Authorization: Bearer <token>` header. When
- * neither WS_AUTH_TOKEN nor ADMIN_API_KEY is set, auth is skipped (dev only).
+ * Authenticate an incoming upgrade request. The token must be supplied as an
+ * `Authorization: Bearer <token>` header. It is deliberately not accepted as a
+ * `?token=` query parameter: query strings routinely leak into access logs,
+ * reverse-proxy/CDN logs, browser history, and Referer headers.
+ *
+ * Auth requires a dedicated WS_AUTH_TOKEN and never falls back to ADMIN_API_KEY
+ * — that key gates every admin REST endpoint and must not be reachable over the
+ * WebSocket upgrade path. When WS_AUTH_TOKEN is unset the connection is refused
+ * in production and allowed elsewhere (dev/test only).
  */
-function authenticate(req: IncomingMessage): boolean {
-  const expected = process.env.WS_AUTH_TOKEN || process.env.ADMIN_API_KEY;
-  if (!expected) return true;
-  const url = new URL(req.url ?? "/", "http://localhost");
+export function authenticate(req: IncomingMessage): boolean {
+  const expected = process.env.WS_AUTH_TOKEN;
+  if (!expected) {
+    return (process.env.NODE_ENV || "development").toLowerCase() !== "production";
+  }
   const header = req.headers.authorization;
-  const bearer = header?.startsWith("Bearer ") ? header.slice(7) : undefined;
-  const token = url.searchParams.get("token") ?? bearer;
+  const token = header?.startsWith("Bearer ") ? header.slice(7) : undefined;
   return token !== undefined && timingSafeCompare(token, expected);
 }
 

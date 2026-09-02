@@ -1,5 +1,6 @@
 import { Keypair, rpc, Networks, TransactionBuilder, Account, xdr } from "@stellar/stellar-sdk";
 import { config } from "../config";
+import { logger } from "./logger";
 import { RpcConnectionPool } from "./db-pool";
 import { CircuitBreaker } from "./circuit-breaker";
 import { withRetry, isTransientError } from "./retry";
@@ -166,32 +167,38 @@ async function _attemptSubmit(
 
   const accountResponse = await client.getLedgerEntries(accountKey);
 
-  if (accountResponse.entries && accountResponse.entries.length > 0) {
-    const accountEntry = accountResponse.entries[0].val.account();
-    if (accountEntry) {
-      const onChainSequence = BigInt(accountEntry.seqNum().toString());
-
-      // Use the higher value between live ledger and local in-memory tracker
-      if (localSequenceTracker === null || onChainSequence > localSequenceTracker) {
-        localSequenceTracker = onChainSequence;
-      }
-
-      const targetSequence = (localSequenceTracker + 1n).toString();
-      const account = new Account(keypair.publicKey(), targetSequence);
-
-      const builder = new TransactionBuilder(account, {
-        fee: tx.fee,
-        networkPassphrase,
-        timebounds: tx.timeBounds || (tx.tx ? tx.tx.timeBounds : undefined),
-      });
-
-      for (const op of tx.operations) {
-        builder.addOperation(op);
-      }
-
-      tx = builder.build();
-    }
+  if (!accountResponse.entries || accountResponse.entries.length === 0) {
+    logger.warn("stellar: getLedgerEntries returned no account entry, retrying");
+    throw new Error("getLedgerEntries returned empty response for admin account");
   }
+
+  const accountEntry = accountResponse.entries[0].val.account();
+  if (!accountEntry) {
+    logger.warn("stellar: account entry is malformed, retrying");
+    throw new Error("getLedgerEntries returned malformed account entry");
+  }
+
+  const onChainSequence = BigInt(accountEntry.seqNum().toString());
+
+  // Use the higher value between live ledger and local in-memory tracker
+  if (localSequenceTracker === null || onChainSequence > localSequenceTracker) {
+    localSequenceTracker = onChainSequence;
+  }
+
+  const targetSequence = (localSequenceTracker + 1n).toString();
+  const account = new Account(keypair.publicKey(), targetSequence);
+
+  const builder = new TransactionBuilder(account, {
+    fee: tx.fee,
+    networkPassphrase,
+    timebounds: tx.timeBounds || (tx.tx ? tx.tx.timeBounds : undefined),
+  });
+
+  for (const op of tx.operations) {
+    builder.addOperation(op);
+  }
+
+  tx = builder.build();
 
   tx.sign(keypair);
   const result = await client.sendTransaction(tx);

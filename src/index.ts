@@ -31,9 +31,11 @@ import { createHandler } from "graphql-http/lib/use/express";
 import { graphqlSchema, graphqlRoot, createGraphQLContext } from "./graphql/schema";
 import { startGrpcServer } from "./grpc/server";
 import { getSolarData } from "./lib/iot";
+import { assignRole } from "./lib/roles";
 import { fetchSatelliteWithFallback } from "./lib/satellite-sources";
 import { computeScores } from "./lib/scoring";
-import { updateImpactScore } from "./lib/registry";
+import { updateImpactScore, DuplicateSubmissionError } from "./lib/registry";
+import { generateIdempotencyKey, checkIdempotency } from "./lib/idempotency";
 import { runHourlyScoreUpdate } from "./lib/scoreUpdateCron";
 import { isErrorRateLimited } from "./lib/error-limiter";
 import { isRpcOutageExtended, isRpcAvailable, getRpcStatus } from "./lib/stellar";
@@ -64,6 +66,7 @@ import { getTraces, getTraceSummary } from "./lib/tracer";
 import { tracingMiddleware } from "./middleware/tracing";
 import { checkScheduledRotations } from "./lib/apiKeys";
 import { ipWhitelist } from "./middleware/ipWhitelist";
+import { apiKeyAuth } from "./middleware/apiKeyAuth";
 import { requestSigning } from "./middleware/requestSigning";
 import { initApm } from "./lib/apm";
 import { csrfProtection, setCsrfCookie } from "./middleware/csrf";
@@ -76,6 +79,12 @@ import { compressionMiddleware, getCompressionMetrics } from "./middleware/compr
 import { handleListenError } from "./lib/listen-errors";
 
 const env = initEnv();
+
+// Seed initial admin from env var (RBAC bootstrap)
+const initialAdminUserId = process.env.INITIAL_ADMIN_USER_ID?.trim();
+if (initialAdminUserId) {
+  assignRole(initialAdminUserId, "admin");
+}
 
 // Initialize APM in background — errors are logged but don't block startup
 initApm().catch((err: Error) => {
@@ -90,6 +99,45 @@ if (!process.env.ADMIN_API_KEY) {
 
 const app = express();
 const PORT = env.PORT;
+
+function parseTimeoutMs(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+const REQUEST_TIMEOUT_MS = parseTimeoutMs(process.env.REQUEST_TIMEOUT_MS, 30000);
+const ADMIN_REQUEST_TIMEOUT_MS = parseTimeoutMs(process.env.ADMIN_REQUEST_TIMEOUT_MS, 60000);
+
+function requestTimeout(timeoutMs: number) {
+  return (req: any, res: any, next: any) => {
+    if (res.locals.timeoutTimer) {
+      clearTimeout(res.locals.timeoutTimer);
+    }
+    const timer = setTimeout(() => {
+      if (!res.headersSent) {
+        res.status(408).json({ error: "request_timeout", message: "Request timed out" });
+      }
+      req.destroy();
+    }, timeoutMs);
+    res.locals.timeoutTimer = timer;
+    const clearTimer = () => clearTimeout(timer);
+    res.once("finish", clearTimer);
+    res.once("close", clearTimer);
+    next();
+  };
+}
+// Trust proxy configuration — required for Express to parse X-Forwarded-For
+// via req.ip / req.ips.  Without this, ipWhitelist must hand-parse headers,
+// which is vulnerable to spoofing.
+//
+// TRUST_PROXY values:
+//  - "false"  (default) — no proxy; req.ip is the direct peer address
+//  - "true"            — trust all proxies (single hop)
+//  - "loopback"        — trust loopback (127.0.0.1/8, ::1) only
+//  - a CIDR or IP      — trust specific proxy IP(s)
+//  - a number N         — trust the first N hops in X-Forwarded-For
+const trustProxy = process.env.TRUST_PROXY || "false";
+app.set("trust proxy", trustProxy === "true" ? true : trustProxy);
 
 // Validate CORS origin
 function validateCorsOrigin(origin: string | undefined): string | undefined {
@@ -137,6 +185,9 @@ app.use(
     level: parseInt(process.env.COMPRESSION_LEVEL ?? "6", 10),
   }),
 );
+app.use(requestTimeout(REQUEST_TIMEOUT_MS));
+app.use("/v1/admin", requestTimeout(ADMIN_REQUEST_TIMEOUT_MS));
+app.use("/api/admin", requestTimeout(ADMIN_REQUEST_TIMEOUT_MS));
 app.use(express.json({ limit: env.BODY_SIZE_LIMIT }));
 app.use(sanitizeInputs);
 app.use(csrfProtection);
@@ -180,6 +231,11 @@ app.get("/v1/traces", adminLimiter, (req, res) => {
 });
 
 // ── Swagger UI at /docs ─────────────────────────────────────────────────────
+// Swagger UI bootstraps with an inline script, which the global CSP blocks.
+app.use("/docs", (_req, res, next) => {
+  res.removeHeader("Content-Security-Policy");
+  next();
+});
 app.use("/docs", swaggerUi.serve, swaggerUi.setup(openApiSpec));
 // Raw OpenAPI spec for tooling
 app.get("/docs.json", (_req, res) => res.json(openApiSpec));
@@ -251,55 +307,53 @@ const v1 = express.Router();
 v1.use(versionHeaders);
 v1.use(acceptVersion);
 
-v1.use("/iot", publicLimiter, iotRouter);
-v1.use("/admin", ipWhitelist, adminLimiter, requestSigning, adminRouter);
-v1.use("/admin/batch", ipWhitelist, adminLimiter, batchRouter);
-v1.use("/projects", publicLimiter, projectsRouter);
-v1.use("/projects/:id/history", publicLimiter, historyRouter);
-v1.use("/projects/aggregate", publicLimiter, aggregateRouter);
-v1.use("/portfolio", publicLimiter, portfolioRouter);
-v1.use("/roles", ipWhitelist, adminLimiter, rolesRouter);
-v1.use("/webhooks", ipWhitelist, adminLimiter, webhooksRouter);
-v1.use("/panels", ipWhitelist, adminLimiter, panelsRouter);
-v1.use("/metadata", ipWhitelist, adminLimiter, metadataRouter);
-v1.use("/dashboard", publicLimiter, dashboardRouter);
-v1.use("/email", ipWhitelist, adminLimiter, emailRouter);
-v1.use("/anomaly", publicLimiter, anomalyRouter);
-v1.use("/scoring/formulas", ipWhitelist, adminLimiter, scoringFormulasRouter);
-v1.use("/chains", ipWhitelist, adminLimiter, chainsRouter);
-v1.use("/satellite-sources", ipWhitelist, adminLimiter, satelliteSourcesRouter);
-v1.use("/comparison", publicLimiter, comparisonRouter);
-v1.use("/benchmarking", publicLimiter, benchmarkingRouter);
-v1.use("/financial", publicLimiter, financialRouter);
-v1.use("/forecast", publicLimiter, forecastRouter);
-v1.use("/maintenance", publicLimiter, maintenanceRouter);
-v1.use("/investor", publicLimiter, investorRouter);
-v1.use("/admin/api-keys", ipWhitelist, adminLimiter, apiKeysRouter);
-
-app.use("/v1", v1);
+  v1.use('/iot', publicLimiter, apiKeyAuth, iotRouter);
+  v1.use('/admin/feature-flags/analytics', ipWhitelist, adminLimiter, requestSigning, adminRouter);
+  v1.use('/admin/batch', ipWhitelist, adminLimiter, requestSigning, batchRouter);
+  v1.use('/projects', publicLimiter, apiKeyAuth, projectsRouter);
+  v1.use('/projects/:id/history', publicLimiter, apiKeyAuth, historyRouter);
+  v1.use('/projects/aggregate', publicLimiter, apiKeyAuth, aggregateRouter);
+  v1.use('/portfolio', publicLimiter, portfolioRouter);
+  v1.use('/roles', ipWhitelist, adminLimiter, rolesRouter);
+  v1.use('/webhooks', ipWhitelist, adminLimiter, requestSigning, webhooksRouter);
+  v1.use('/panels', ipWhitelist, adminLimiter, requestSigning, panelsRouter);
+  v1.use('/metadata', ipWhitelist, adminLimiter, metadataRouter);
+  v1.use('/dashboards', publicLimiter, apiKeyAuth, dashboardRouter);
+  v1.use('/email', ipWhitelist, adminLimiter, requestSigning, emailRouter);
+  v1.use('/anomaly', publicLimiter, anomalyRouter);
+  v1.use('/scoring/formulas', ipWhitelist, adminLimiter, requestSigning, scoringFormulasRouter);
+  v1.use('/chains', publicLimiter, adminLimiter, chainsRouter);
+  v1.use('/satellite-sources', ipWhitelist, adminLimiter, requestSigning, satelliteSourcesRouter);
+  v1.use('/comparison', publicLimiter, apiKeyAuth, comparisonRouter);
+  v1.use('/benchmarking', publicLimiter, apiKeyAuth, benchmarkingRouter);
+  v1.use('/financial', publicLimiter, apiKeyAuth, financialRouter);
+  v1.use('/forecast', publicLimiter, forecastRouter);
+  v1.use('/maintenance', publicLimiter, apiKeyAuth, maintenanceRouter);
+  v1.use('/investor', publicLimiter, investorRouter);
+  v1.use('/admin/api-keys', ipWhitelist, adminLimiter, requestSigning, apiKeysRouter);
 
 // ── Legacy /api paths (deprecated) ──────────────────────────────────────────
 // Kept for backward compatibility; will be removed after 2027-01-01.
 app.use("/api", deprecationHeaders, versionHeaders);
-app.use("/api/iot", publicLimiter, iotRouter);
+app.use("/api/iot", publicLimiter, apiKeyAuth, iotRouter);
 app.use("/api/admin", ipWhitelist, adminLimiter, adminRouter);
 app.use("/api/admin/batch", ipWhitelist, adminLimiter, batchRouter);
-app.use("/api/projects", publicLimiter, projectsRouter);
-app.use("/api/projects/:id/history", publicLimiter, historyRouter);
-app.use("/api/projects/aggregate", publicLimiter, aggregateRouter);
-app.use("/api/portfolio", publicLimiter, portfolioRouter);
+app.use("/api/projects", publicLimiter, apiKeyAuth, projectsRouter);
+app.use("/api/projects/:id/history", publicLimiter, apiKeyAuth, historyRouter);
+app.use("/api/projects/aggregate", publicLimiter, apiKeyAuth, aggregateRouter);
+app.use("/api/portfolio", publicLimiter, apiKeyAuth, portfolioRouter);
 app.use("/api/roles", ipWhitelist, adminLimiter, rolesRouter);
 app.use("/api/webhooks", ipWhitelist, adminLimiter, webhooksRouter);
 app.use("/api/panels", ipWhitelist, adminLimiter, panelsRouter);
 app.use("/api/metadata", ipWhitelist, adminLimiter, metadataRouter);
-app.use("/api/dashboard", publicLimiter, dashboardRouter);
+app.use("/api/dashboard", publicLimiter, apiKeyAuth, dashboardRouter);
 app.use("/api/email", ipWhitelist, adminLimiter, emailRouter);
-app.use("/api/comparison", publicLimiter, comparisonRouter);
-app.use("/api/benchmarking", publicLimiter, benchmarkingRouter);
-app.use("/api/financial", publicLimiter, financialRouter);
-app.use("/api/forecast", publicLimiter, forecastRouter);
-app.use("/api/maintenance", publicLimiter, maintenanceRouter);
-app.use("/api/investor", publicLimiter, investorRouter);
+app.use("/api/comparison", publicLimiter, apiKeyAuth, comparisonRouter);
+app.use("/api/benchmarking", publicLimiter, apiKeyAuth, benchmarkingRouter);
+app.use("/api/financial", publicLimiter, apiKeyAuth, financialRouter);
+app.use("/api/forecast", publicLimiter, apiKeyAuth, forecastRouter);
+app.use("/api/maintenance", publicLimiter, apiKeyAuth, maintenanceRouter);
+app.use("/api/investor", publicLimiter, apiKeyAuth, investorRouter);
 app.use("/api/admin/api-keys", ipWhitelist, adminLimiter, apiKeysRouter);
 
 // JSON 404 for anything unmatched, then the structured error handler.
@@ -374,28 +428,50 @@ scheduleCron(
         const satellite = await fetchSatelliteWithFallback(item.projectId);
         const fresh = computeScores({ solar, satellite });
 
-        const tx_hash = await updateImpactScore(
-          item.projectId,
-          fresh.credit_quality,
-          fresh.green_impact,
-        );
-        processed.push(item.projectId);
-        logger.info(
-          `[cron] tx-queue: project ${item.projectId} retried successfully tx=${tx_hash}`,
-        );
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        incrementRetry(item.projectId, errMsg);
-
-        if (hasExceededMaxRetries(item.projectId)) {
-          logger.error(
-            `[cron] tx-queue: project ${item.projectId} exceeded max retries (${maxRetries}), dropping`,
+        // Generate an idempotency key for this retry so a queued transaction
+        // that was already submitted on-chain is not double-submitted.
+        const idempotencyKey = generateIdempotencyKey(item.projectId);
+        const { isDuplicate } = checkIdempotency(idempotencyKey);
+        if (isDuplicate) {
+          logger.info(
+            `[cron] tx-queue: project ${item.projectId} skipped — already submitted this hour (key=${idempotencyKey})`,
           );
           remove(item.projectId);
+          processed.push(item.projectId);
         } else {
-          logger.warn(
-            `[cron] tx-queue: project ${item.projectId} retry failed (attempt ${item.retryCount + 1}), will retry`,
+          const tx_hash = await updateImpactScore(
+            item.projectId,
+            fresh.credit_quality,
+            fresh.green_impact,
+            idempotencyKey,
           );
+          processed.push(item.projectId);
+          logger.info(
+            `[cron] tx-queue: project ${item.projectId} retried successfully tx=${tx_hash}`,
+          );
+        }
+      } catch (err) {
+        if (err instanceof DuplicateSubmissionError) {
+          // Belt-and-suspenders: also catch if DuplicateSubmissionError bubbles up.
+          logger.info(
+            `[cron] tx-queue: project ${item.projectId} skipped (duplicate): ${err.message}`,
+          );
+          remove(item.projectId);
+          processed.push(item.projectId);
+        } else {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          incrementRetry(item.projectId, errMsg);
+
+          if (hasExceededMaxRetries(item.projectId)) {
+            logger.error(
+              `[cron] tx-queue: project ${item.projectId} exceeded max retries (${maxRetries}), dropping`,
+            );
+            remove(item.projectId);
+          } else {
+            logger.warn(
+              `[cron] tx-queue: project ${item.projectId} retry failed (attempt ${item.retryCount + 1}), will retry`,
+            );
+          }
         }
       }
     }
@@ -416,9 +492,9 @@ scheduleCron(
       const status = getRpcStatus();
       logger.error(
         `[alert] Stellar RPC outage detected: ` +
-          `consecutiveFailures=${status.consecutiveFailures}, ` +
-          `outageDurationMs=${status.outageDurationMs}, ` +
-          `lastSuccessAgoMs=${status.lastSuccessAgoMs}`,
+        `consecutiveFailures=${status.consecutiveFailures}, ` +
+        `outageDurationMs=${status.outageDurationMs}, ` +
+        `lastSuccessAgoMs=${status.lastSuccessAgoMs}`,
       );
     }
   },
@@ -470,7 +546,16 @@ app.all(
 );
 
 app.get("/graphql-playground", (req, res) => {
+  // Generate a nonce for inline script CSP
+  const nonce = require('crypto').randomBytes(16).toString('hex');
+
   res.setHeader("Content-Type", "text/html");
+  // Override CSP to allow inline script with nonce
+  res.setHeader(
+    "Content-Security-Policy",
+    `default-src 'self'; script-src 'self' https://unpkg.com 'nonce-${nonce}'; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; connect-src 'self'`
+  );
+
   res.send(`
     <!DOCTYPE html>
     <html>
@@ -483,7 +568,7 @@ app.get("/graphql-playground", (req, res) => {
         <script crossorigin src="https://unpkg.com/react/umd/react.production.min.js"></script>
         <script crossorigin src="https://unpkg.com/react-dom/umd/react-dom.production.min.js"></script>
         <script crossorigin src="https://unpkg.com/graphiql/graphiql.min.js"></script>
-        <script>
+        <script nonce="${nonce}">
           const fetcher = GraphiQL.createFetcher({ url: '/graphql' });
           ReactDOM.render(
             React.createElement(GraphiQL, { fetcher: fetcher }),
@@ -496,7 +581,11 @@ app.get("/graphql-playground", (req, res) => {
 });
 
 // Start high-performance gRPC server
-startGrpcServer(50051);
+const grpcServer = startGrpcServer(50051);
+
+// Periodically clear cached secrets so a rotated/compromised upstream
+// secret doesn't stay cached indefinitely (gated on SECRETS_ROTATION_ENABLED).
+startSecretRotation();
 
 // ── Graceful shutdown (#57) ──────────────────────────────────────────────────
 // Track all scheduled cron tasks so we can stop them cleanly.
@@ -541,6 +630,30 @@ async function gracefulShutdown(signal: string): Promise<void> {
     } catch (err: any) {
       logger.error("[shutdown] pool drain error", { error: err?.message });
     }
+
+    // 4. Stop the secret rotation timer so it doesn't keep the process alive
+    // or fire after shutdown begins.
+    stopSecretRotation();
+
+    // 5. Gracefully stop the gRPC server, letting in-flight/streaming RPCs
+    // (e.g. StreamProjectScores) drain instead of being killed mid-stream.
+    logger.info("[shutdown] draining gRPC server…");
+    await new Promise<void>((resolve) => {
+      const forceTimer = setTimeout(() => {
+        logger.warn("[shutdown] gRPC drain timed out, forcing shutdown");
+        grpcServer.forceShutdown();
+        resolve();
+      }, shutdownTimeoutMs);
+      grpcServer.tryShutdown((err) => {
+        clearTimeout(forceTimer);
+        if (err) {
+          logger.error("[shutdown] gRPC shutdown error", { error: err.message });
+        } else {
+          logger.info("[shutdown] gRPC server stopped");
+        }
+        resolve();
+      });
+    });
 
     logger.info("[shutdown] clean exit");
     process.exit(0);
