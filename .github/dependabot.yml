@@ -9,20 +9,17 @@ updates:
     open-pull-requests-limit: 10
     reviewers:
       - "0x860"
-    allow:
+    allow: 
       - dependency-type: "direct"
       - dependency-type: "indirect"
     groups:
-      security:
-        dependency-types:
-          - "dev"
+      minor-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
         patterns:
-          - "*security*"
-          - "*cve*"
-    auto-merge:
-      minor-and-patch: true
-      allow-conditions:
-        - check_status: "success"
+          - "*"
     pull-request-branch-name:
       separator: "/"
     rebase-strategy: "auto"

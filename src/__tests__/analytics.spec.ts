@@ -36,6 +36,45 @@ describe("dashboard analytics", () => {
     expect(bottom[0].id).toBe(2);
   });
 
+  it("rankPerformers never overlaps when n exceeds half the projects", () => {
+    // 8 projects with the default n=5 would previously share ranks 4-5 in both
+    // lists. n is capped at floor(8/2)=4 so top and bottom stay disjoint.
+    const many = Array.from({ length: 8 }, (_, i) => ({
+      id: i + 1,
+      credit_quality: 100 - i * 10,
+      green_impact: 100 - i * 10,
+      power_output_kw: 100,
+    }));
+    const { top, bottom } = rankPerformers(many, 5);
+    expect(top).toHaveLength(4);
+    expect(bottom).toHaveLength(4);
+    const topIds = new Set(top.map((p) => p.id));
+    for (const b of bottom) {
+      expect(topIds.has(b.id)).toBe(false);
+    }
+    // Together the two lists cover every distinct project exactly once.
+    expect(new Set([...top, ...bottom].map((p) => p.id)).size).toBe(8);
+  });
+
+  it("rankPerformers returns disjoint lists for a small portfolio", () => {
+    // 3 projects with n=2 -> capped to floor(3/2)=1; the middle project is
+    // excluded from both lists.
+    const { top, bottom } = rankPerformers(scores, 2);
+    expect(top).toHaveLength(1);
+    expect(bottom).toHaveLength(1);
+    expect(top[0].id).not.toBe(bottom[0].id);
+  });
+
+  it("rankPerformers handles one or zero projects without overlap", () => {
+    const one = [scores[0]];
+    const empty = rankPerformers([], 5);
+    expect(empty.top).toHaveLength(0);
+    expect(empty.bottom).toHaveLength(0);
+    const single = rankPerformers(one, 5);
+    expect(single.top).toHaveLength(0);
+    expect(single.bottom).toHaveLength(0);
+  });
+
   it("scoreDistribution buckets a field across 0-100", () => {
     const buckets = scoreDistribution(scores, "credit_quality", 10);
     expect(buckets).toHaveLength(10);

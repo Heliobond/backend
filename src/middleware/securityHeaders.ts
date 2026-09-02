@@ -36,6 +36,19 @@ export const securityHeaders: RequestHandler = (req, res, next) => {
       maxAge: 31_536_000,
       includeDomains: true,
       preload: true,
+export const securityHeaders: RequestHandler = helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "https://unpkg.com"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://unpkg.com"],
+      imgSrc: ["'self'", "data:"],
+      connectSrc: ["'self'"],
+      fontSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      frameAncestors: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
     },
     xsSSFilter: true,
     referrerPolicy: { policy: "strict-origin-when-cross-origin" },
