@@ -1,5 +1,5 @@
 # ── Build stage ──────────────────────────────────────────────────────────────
-FROM node:20-alpine AS builder
+FROM node:26-alpine AS builder
 
 WORKDIR /app
 
@@ -12,7 +12,7 @@ COPY src ./src
 RUN npm run build
 
 # ── Production stage ──────────────────────────────────────────────────────────
-FROM node:20-alpine AS production
+FROM node:26-alpine AS production
 
 ENV NODE_ENV=production
 
