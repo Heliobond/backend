@@ -9,20 +9,24 @@ updates:
     open-pull-requests-limit: 10
     reviewers:
       - "0x860"
-    allow:
+    allow: 
       - dependency-type: "direct"
       - dependency-type: "indirect"
     groups:
       security:
-        dependency-types:
-          - "dev"
         patterns:
           - "*security*"
           - "*cve*"
-    auto-merge:
-      minor-and-patch: true
-      allow-conditions:
-        - check_status: "success"
+        # No dependency-types restriction: a security patch of a production
+        # dependency (stellar-sdk, express, grpc-js, …) is usually higher
+        # priority than a dev-only one and must be grouped here too.
+      minor-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
+        patterns:
+          - "*"
     pull-request-branch-name:
       separator: "/"
     rebase-strategy: "auto"
@@ -30,3 +34,11 @@ updates:
       prefix: "chore(deps)"
       prefix-development: "chore(deps-dev)"
       include: "scope"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"

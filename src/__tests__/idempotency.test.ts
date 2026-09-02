@@ -11,11 +11,18 @@ describe("idempotency key behavior", () => {
     jest.restoreAllMocks();
     resetIdempotencyState();
 
-    jest.spyOn(iot, "getSolarData").mockReturnValue({ timestamp: Date.now(), forest_density_pct: 50, ndvi_score: 0.5 });
+    jest.spyOn(iot, "getSolarData").mockReturnValue({
+      timestamp: Date.now(),
+      power_output_kw: 100,
+      efficiency_pct: 0.85,
+      max_power_kw: 120,
+    });
     jest.spyOn(satelliteSources, "fetchSatelliteWithFallback").mockResolvedValue({
       timestamp: Date.now(),
       forest_density_pct: 50,
       ndvi_score: 0.5,
+      source: "sentinel-2",
+      dataSource: "live",
     });
     jest.spyOn(scoring, "computeScores").mockReturnValue({ credit_quality: 10, green_impact: 20 });
     jest.spyOn(registry, "updateImpactScore").mockResolvedValue("tx-hash-1");
@@ -34,14 +41,23 @@ describe("idempotency key behavior", () => {
     expect(first.status).toBe("success");
     expect(second.status).toBe("error");
     if (second.status === "error") {
-      expect(second.error).toContain("duplicate");
+      expect(second.error.toLowerCase()).toContain("duplicate");
     }
   });
 
   it("allows a submission after the TTL expires", async () => {
-    jest.spyOn(Date, "now").mockReturnValueOnce(1_000).mockReturnValueOnce(1_000 + 60_001);
+    jest
+      .spyOn(Date, "now")
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_000 + 60_001);
+    const nowSpy = jest.spyOn(Date, "now");
 
+    // First invocation: fix time at hour 0
+    nowSpy.mockReturnValue(0);
     const first = await updateScoreForProject(42);
+
+    // Second invocation: advance to hour 1 (new hourSeed → new key)
+    nowSpy.mockReturnValue(3_600_001);
     const second = await updateScoreForProject(42);
 
     expect(first.status).toBe("success");

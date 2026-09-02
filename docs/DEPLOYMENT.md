@@ -3,6 +3,10 @@
 How the backend gets built, what it is allowed to consume at runtime, and how it
 reaches staging and production.
 
+Database connections to staging and production use TLS with certificate
+validation. The CA certificate is supplied via the `DATABASE_CA` environment
+variable; `rejectUnauthorized` is never disabled.
+
 ## Resource requirements
 
 The service is a single Node process: an Express API plus a `node-cron` polling
@@ -120,6 +124,7 @@ Environments view, with a link back to the workflow run.
 | ----------------- | -------- | ------------------------------------ |
 | `GITHUB_TOKEN`    | built-in | GHCR push and deployment status      |
 | `DEPLOY_HOOK_URL` | yes      | Endpoint told to pull the new digest |
+| `DATABASE_CA`     | yes      | CA certificate for Postgres TLS; required in staging and production |
 
 `DEPLOY_HOOK_URL` is whatever the hosting platform exposes — a Render or Railway
 deploy hook, a Fly webhook, or a self-hosted endpoint. It receives:

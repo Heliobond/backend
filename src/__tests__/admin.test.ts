@@ -5,6 +5,7 @@ import { errorHandler } from "../middleware/errors";
 import * as registry from "../lib/registry";
 import * as iot from "../routes/iot";
 import * as scoring from "../lib/scoring";
+import { resetIdempotencyState } from "../lib/scoreService";
 
 jest.mock("../lib/registry", () => {
   class RpcDegradedError extends Error {
@@ -41,6 +42,7 @@ describe("admin routes", () => {
   let app: Express;
 
   beforeEach(() => {
+    resetIdempotencyState();
     app = buildApp();
     jest.clearAllMocks();
     (iot.getSolarData as jest.Mock).mockReturnValue({
