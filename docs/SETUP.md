@@ -56,6 +56,8 @@ All other variables have sensible defaults for local development.
 | `FRONTEND_URL` | No | `http://localhost:3000` | CORS origin |
 | `ADMIN_API_KEY` | No | -- | Bearer token for admin endpoints (dev mode if unset) |
 | `WS_AUTH_TOKEN` | No | -- | WebSocket auth token (falls back to ADMIN_API_KEY) |
+| `ADMIN_API_KEY` | No | — | Bearer token for admin endpoints (dev mode if unset) |
+| `WS_AUTH_TOKEN` | Prod | — | `/ws` bearer token (`Authorization: Bearer`); required in production, no `?token=`, no ADMIN_API_KEY fallback |
 
 ## Running Locally
 
