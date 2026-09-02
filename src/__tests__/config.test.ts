@@ -60,6 +60,7 @@ describe("Environment Config Module (Issue #272)", () => {
       delete process.env.FRONTEND_URL;
 
       jest.resetModules();
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const freshConfig = require("../config").config as typeof config;
 
       expect(freshConfig.STELLAR_NETWORK).toBe("testnet");

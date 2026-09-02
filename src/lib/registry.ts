@@ -87,6 +87,15 @@ export async function getTotalProjects(): Promise<number> {
       stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });
       throw err;
     }
+    const sim = (await client.simulateTransaction(
+      tx,
+    )) as rpc.Api.SimulateTransactionSuccessResponse;
+
+    const retval = sim.result!.retval;
+    if (retval === undefined) {
+      throw new Error("total_projects simulation returned no result value");
+    }
+    return Number(scValToNative(retval));
   });
 }
 
