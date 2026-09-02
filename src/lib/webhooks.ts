@@ -1,4 +1,6 @@
 import { createHmac } from "crypto";
+import { withRetry } from "./retry";
+import { logger } from "./logger";
 
 export interface WebhookConfig {
   id: string;
@@ -59,25 +61,24 @@ async function deliverOnce(url: string, body: string, signature: string): Promis
   }
 }
 
-async function deliverWithRetry(wh: WebhookConfig, payload: unknown): Promise<void> {
+async function deliverConfig(wh: WebhookConfig, payload: unknown): Promise<void> {
   const body = JSON.stringify(payload);
   const signature = sign(body, wh.secret);
-  for (let attempt = 0; attempt <= wh.max_retries; attempt++) {
-    try {
-      await deliverOnce(wh.url, body, signature);
-      return;
-    } catch (err) {
-      if (attempt === wh.max_retries) {
-        console.error(`[webhook] ${wh.id} failed after ${attempt + 1} attempt(s):`, err);
-        return;
-      }
-      await new Promise((r) => setTimeout(r, wh.retry_delay_ms));
-    }
+  try {
+    await withRetry(
+      () => deliverOnce(wh.url, body, signature),
+      {
+        maxRetries: wh.max_retries,
+        baseDelayMs: wh.retry_delay_ms,
+      },
+    );
+  } catch (err) {
+    logger.error(`[webhook] ${wh.id} failed after ${wh.max_retries + 1} attempt(s):`, err);
   }
 }
 
 export function triggerWebhooks(payload: unknown): void {
   for (const wh of webhooks.values()) {
-    deliverWithRetry(wh, payload).catch(() => {});
+    deliverConfig(wh, payload).catch(() => {});
   }
 }

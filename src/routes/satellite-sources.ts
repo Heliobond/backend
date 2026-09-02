@@ -16,6 +16,7 @@ async function fetchFromCustomUrl(
   const timeout = setTimeout(() => controller.abort(), CUSTOM_SOURCE_FETCH_TIMEOUT_MS);
 
   let httpResponse: any;
+  let response: globalThis.Response;
   try {
     httpResponse = await fetch(`${fetchUrl}?projectId=${encodeURIComponent(String(projectId))}`, {
       method: "GET",
@@ -50,6 +51,11 @@ async function fetchFromCustomUrl(
   }
   if (isNaN(ndvi) || ndvi < 0 || ndvi > 100) {
     throw new Error(`Custom source ${sourceName} returned invalid ndvi_score: ${body.ndvi_score}`);
+  try {
+     
+    new URL(fetchUrl);
+  } catch {
+    return res.status(400).json({ error: "fetchUrl must be a valid URL" });
   }
 
   return {

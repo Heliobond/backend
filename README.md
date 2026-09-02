@@ -244,6 +244,7 @@ Create a `.env` file (see `.env.example`):
 | `IOT_CACHE_DISABLED`           | No       | —                                     | `true` bypasses the in-memory IoT reading cache                       |
 | `IOT_CACHE_MAX_SIZE`           | No       | `1000`                                | Max cached IoT readings; oldest are evicted first                     |
 | `MAX_PROJECT_ID`               | No       | `1000000`                             | Inclusive upper bound accepted for a `:id` project param              |
+| `BODY_SIZE_LIMIT`              | No       | `100kb`                               | Max request body size accepted by `express.json()` (e.g. `100kb`, `1mb`). Requests exceeding it return `413 Payload Too Large` |
 
 ---
 
@@ -405,3 +406,9 @@ For security concerns, please review [SECURITY.md](./SECURITY.md) and report vul
 ## License
 
 This project is licensed under the terms in the [LICENSE](./LICENSE) file.
+
+
+
+
+
+
