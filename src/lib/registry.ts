@@ -7,9 +7,20 @@ import {
   rpc,
   Account,
 } from "@stellar/stellar-sdk";
-import { withRpcConnection, networkPassphrase, getAdminKeypair, signAndSubmit } from "./stellar";
+import {
+  withRpcConnection,
+  networkPassphrase,
+  getAdminKeypair,
+  signAndSubmit,
+  RpcDegradedError,
+} from "./stellar";
 import { config } from "../config";
 import { stellarRpcDuration, stellarRpcTotal } from "./prometheus";
+
+// Re-export so callers (scoreService, routes/batch) can `instanceof`-check the
+// exact error class the RPC layer throws, instead of comparing against a
+// sibling class that `instanceof` can never match.
+export { RpcDegradedError };
 
 if (!config.PROJECT_REGISTRY_CONTRACT_ID) {
   throw new Error("PROJECT_REGISTRY_CONTRACT_ID env var is required");
@@ -43,17 +54,6 @@ export async function updateImpactScore(
   });
 }
 
-/**
- * Narrowing guard for a failed simulation. Defined locally rather than using
- * the SDK's `rpc.Api.isSimulationError` so the check stays a plain shape test
- * and does not depend on that helper being present at runtime.
- */
-function isSimulationError(
-  sim: rpc.Api.SimulateTransactionResponse,
-): sim is rpc.Api.SimulateTransactionErrorResponse {
-  return "error" in sim && typeof sim.error === "string";
-}
-
 export async function getTotalProjects(): Promise<number> {
   return withRpcConnection(async (client) => {
     const contract = new Contract(REGISTRY_CONTRACT_ID);
@@ -68,32 +68,34 @@ export async function getTotalProjects(): Promise<number> {
       .build();
 
     const end = stellarRpcDuration.startTimer({ operation: "simulateTransaction" });
+
+    let sim: rpc.Api.SimulateTransactionResponse;
     try {
-      const result = await client.simulateTransaction(tx);
-      if ("error" in result) throw new Error((result as { error: string }).error);
-      const sim = result as rpc.Api.SimulateTransactionSuccessResponse;
-      end();
-      stellarRpcTotal.inc({ operation: "simulateTransaction", result: "success" });
-      return Number(scValToNative(sim.result!.retval));
+      sim = await client.simulateTransaction(tx);
     } catch (err) {
       end();
       stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });
       throw err;
     }
-    const sim = await client.simulateTransaction(tx);
-    if (isSimulationError(sim)) throw new Error(sim.error);
+
+    // A failed simulation carries a string `error` field; the success variants
+    // do not. The `in` check narrows the union instead of relying on an `as`
+    // cast or a non-null assertion (see #228).
+    if ("error" in sim) {
+      end();
+      stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });
+      throw new Error(sim.error);
+    }
 
     const retval = sim.result?.retval;
     if (retval === undefined) {
+      end();
+      stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });
       throw new Error("total_projects simulation returned no result value");
     }
+
+    end();
+    stellarRpcTotal.inc({ operation: "simulateTransaction", result: "success" });
     return Number(scValToNative(retval));
   });
-}
-
-export class RpcDegradedError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "RpcDegradedError";
-  }
 }

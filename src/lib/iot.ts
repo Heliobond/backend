@@ -19,7 +19,7 @@ const CRON_TIMEZONE = process.env.CRON_TIMEZONE ?? "UTC";
  */
 export function getHourSeed(): number {
   try {
-    const now = new Date();
+    const now = new Date(Date.now());
     const formatter = new Intl.DateTimeFormat("en-US", {
       year: "numeric",
       month: "2-digit",

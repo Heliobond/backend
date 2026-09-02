@@ -9,7 +9,9 @@ jest.mock("../lib/registry", () => ({
   updateImpactScore: jest.fn(),
   getTotalProjects: jest.fn(),
 }));
-jest.mock("../routes/iot");
+// Note: the IoT router is deliberately NOT mocked — this suite verifies the
+// real validation path returns structured errors, which an auto-mock router
+// would bypass (requests would fall through to the error handler).
 jest.mock("../lib/scoring");
 jest.mock("../config", () => ({
   config: {

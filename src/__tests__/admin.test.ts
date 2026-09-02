@@ -2,6 +2,7 @@ import request from "supertest";
 import express, { Express } from "express";
 import adminRouter from "../routes/admin";
 import { errorHandler } from "../middleware/errors";
+import { resetIdempotencyState } from "../lib/scoreService";
 import * as registry from "../lib/registry";
 import * as iot from "../routes/iot";
 import * as scoring from "../lib/scoring";
@@ -43,6 +44,10 @@ describe("admin routes", () => {
   beforeEach(() => {
     app = buildApp();
     jest.clearAllMocks();
+    // The route goes through the real scoreService, whose module-level
+    // idempotency map must be cleared between tests — earlier tests in this
+    // file submit the same project ids.
+    resetIdempotencyState();
     (iot.getSolarData as jest.Mock).mockReturnValue({
       efficiency_pct: 85,
       power_output_kw: 500,

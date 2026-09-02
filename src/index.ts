@@ -307,6 +307,20 @@ app.use(notFoundHandler);
 app.use(errorHandler);
 
 // ── Cron: index contract events every 5 minutes ──────────────────────────────
+// `cronTasks` and `scheduleCron` are declared here (not at the bottom of the
+// file) because the first scheduleCron call below pushes into the array — a
+// const declared later would still be in its temporal dead zone here.
+const cronTasks: ScheduledTask[] = [];
+
+function scheduleCron(
+  expression: string,
+  fn: () => void | Promise<void>,
+  opts?: { timezone?: string },
+): void {
+  const task = cron.schedule(expression, fn, opts);
+  cronTasks.push(task);
+}
+
 scheduleCron(
   "*/5 * * * *",
   async () => {
@@ -499,18 +513,6 @@ app.get("/graphql-playground", (req, res) => {
 startGrpcServer(50051);
 
 // ── Graceful shutdown (#57) ──────────────────────────────────────────────────
-// Track all scheduled cron tasks so we can stop them cleanly.
-const cronTasks: ScheduledTask[] = [];
-
-function scheduleCron(
-  expression: string,
-  fn: () => void | Promise<void>,
-  opts?: { timezone?: string },
-): void {
-  const task = cron.schedule(expression, fn, opts);
-  cronTasks.push(task);
-}
-
 let isShuttingDown = false;
 
 async function gracefulShutdown(signal: string): Promise<void> {

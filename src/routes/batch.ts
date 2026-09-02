@@ -4,8 +4,10 @@ import { recordScoreHistory } from "../lib/history";
 import { triggerWebhooks } from "../lib/webhooks";
 import { getSolarData, getSatelliteData } from "./iot";
 import { computeScores } from "../lib/scoring";
-import { updateImpactScore, getTotalProjects } from "../lib/registry";
-import { badRequest, MAX_PROJECT_ID } from "../middleware/errors";
+import { updateImpactScore, getTotalProjects, RpcDegradedError } from "../lib/registry";
+import { withProjectLock } from "../lib/request-queue";
+import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
+import { badRequest, maxProjectId } from "../middleware/errors";
 
 const router = Router();
 
@@ -26,22 +28,28 @@ router.post("/score-update", async (req: Request, res: Response) => {
     if (!Array.isArray(body.project_ids)) {
       throw badRequest("project_ids must be an array of positive integers");
     }
-    if (!body.project_ids.every((n) => Number.isInteger(n) && (n as number) >= 1)) {
-      throw badRequest("project_ids must contain only positive integers");
+    const parsed: number[] = [];
+    for (const raw of body.project_ids) {
+      if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1) {
+        throw badRequest("project_ids must contain only positive integers");
+      }
+      parsed.push(raw);
     }
-    if (!body.project_ids.every((n) => (n as number) <= MAX_PROJECT_ID)) {
-      throw badRequest(`project_ids must not exceed maximum project id ${MAX_PROJECT_ID}`);
+    const max = maxProjectId();
+    if (!parsed.every((n) => n <= max)) {
+      throw badRequest(`project_ids must not exceed maximum project id ${max}`);
     }
-    projectIds = body.project_ids as number[];
+    projectIds = parsed;
   } else {
     const total = await getTotalProjects();
     projectIds = Array.from({ length: total }, (_, i) => i + 1);
   }
 
-  const rawConcurrency = body.concurrency as number | undefined;
-  const concurrency = rawConcurrency !== undefined
-    ? Math.min(MAX_CONCURRENCY, Math.max(1, Math.floor(rawConcurrency)))
-    : DEFAULT_CONCURRENCY;
+  const rawConcurrency = typeof body.concurrency === "number" ? body.concurrency : undefined;
+  const concurrency =
+    rawConcurrency !== undefined
+      ? Math.min(MAX_CONCURRENCY, Math.max(1, Math.floor(rawConcurrency)))
+      : DEFAULT_CONCURRENCY;
 
   const job = createJob(projectIds, concurrency);
 
@@ -62,7 +70,12 @@ router.post("/score-update", async (req: Request, res: Response) => {
         } catch (updateErr) {
           if (updateErr instanceof RpcDegradedError) {
             recordScoreHistory(projectId, scores.credit_quality, scores.green_impact);
-            triggerWebhooks({ project_id: projectId, ...scores, tx_hash: "deferred", timestamp: Date.now() });
+            triggerWebhooks({
+              project_id: projectId,
+              ...scores,
+              tx_hash: "deferred",
+              timestamp: Date.now(),
+            });
             markCompleted(projectId);
             return { project_id: projectId, tx_hash: "deferred", ...scores };
           }

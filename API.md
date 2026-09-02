@@ -170,7 +170,11 @@ Detail for a single project.
 
 ## `GET /v1/portfolio/:address`
 
-Indexed deposit/withdraw history and current position for an address.
+Indexed deposit/withdraw history and current position for an address. The
+simulated share price is seeded from the address, so `current_value` is
+deterministic per `(address, clock hour)` — the same address returns the same
+value within a clock hour, and `current_value` stays between `1.5x` and `2.0x`
+of `current_shares`.
 
 | Param     | In   | Type   | Rules |
 |-----------|------|--------|-------|

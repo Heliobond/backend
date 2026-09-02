@@ -45,6 +45,12 @@ jest.mock("../lib/stellar", () => ({
     publicKey: () => "GPUBKEY",
   }),
   signAndSubmit: jest.fn().mockResolvedValue("tx_hash_abc123"),
+  RpcDegradedError: class RpcDegradedError extends Error {
+    constructor(message?: string) {
+      super(message ?? "RPC is degraded");
+      this.name = "RpcDegradedError";
+    }
+  },
 }));
 
 jest.mock("../config", () => ({

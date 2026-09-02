@@ -2,6 +2,7 @@ import request from "supertest";
 import express, { Express } from "express";
 import adminRouter from "../routes/admin";
 import { errorHandler } from "../middleware/errors";
+import { resetIdempotencyState } from "../lib/scoreService";
 import * as registry from "../lib/registry";
 import * as iot from "../routes/iot";
 import * as scoring from "../lib/scoring";
@@ -12,6 +13,11 @@ jest.mock("../lib/registry", () => ({
 }));
 jest.mock("../routes/iot");
 jest.mock("../lib/scoring");
+jest.mock("../config", () => ({
+  config: {
+    ADMIN_API_KEY: "test-key",
+  },
+}));
 
 function buildApp(): Express {
   const app = express();
@@ -21,12 +27,15 @@ function buildApp(): Express {
   return app;
 }
 
+const authHeader = { Authorization: "Bearer test-key" };
+
 describe("admin /update-scores response shape", () => {
   let app: Express;
 
   beforeEach(() => {
     app = buildApp();
     jest.clearAllMocks();
+    resetIdempotencyState();
     (iot.getSolarData as jest.Mock).mockReturnValue({
       efficiency_pct: 85,
       power_output_kw: 500,
@@ -49,30 +58,50 @@ describe("admin /update-scores response shape", () => {
   });
 
   it("response has updated field (number)", async () => {
-    const res = await request(app).post("/api/admin/update-scores").send({}).expect(200);
+    const res = await request(app)
+      .post("/api/admin/update-scores")
+      .set(authHeader)
+      .send({})
+      .expect(200);
     expect(res.body).toHaveProperty("updated");
     expect(typeof res.body.updated).toBe("number");
   });
 
   it("response has results field (array)", async () => {
-    const res = await request(app).post("/api/admin/update-scores").send({}).expect(200);
+    const res = await request(app)
+      .post("/api/admin/update-scores")
+      .set(authHeader)
+      .send({})
+      .expect(200);
     expect(res.body).toHaveProperty("results");
     expect(Array.isArray(res.body.results)).toBe(true);
   });
 
   it("response has errors field (array)", async () => {
-    const res = await request(app).post("/api/admin/update-scores").send({}).expect(200);
+    const res = await request(app)
+      .post("/api/admin/update-scores")
+      .set(authHeader)
+      .send({})
+      .expect(200);
     expect(res.body).toHaveProperty("errors");
     expect(Array.isArray(res.body.errors)).toBe(true);
   });
 
-  it("response shape matches { updated, results, errors }", async () => {
-    const res = await request(app).post("/api/admin/update-scores").send({}).expect(200);
-    expect(Object.keys(res.body).sort()).toEqual(["errors", "results", "updated"]);
+  it("response shape matches { updated, results, errors, skipped }", async () => {
+    const res = await request(app)
+      .post("/api/admin/update-scores")
+      .set(authHeader)
+      .send({})
+      .expect(200);
+    expect(Object.keys(res.body).sort()).toEqual(["errors", "results", "skipped", "updated"]);
   });
 
   it("results entries have correct shape", async () => {
-    const res = await request(app).post("/api/admin/update-scores").send({}).expect(200);
+    const res = await request(app)
+      .post("/api/admin/update-scores")
+      .set(authHeader)
+      .send({})
+      .expect(200);
     for (const entry of res.body.results) {
       expect(entry).toHaveProperty("project_id");
       expect(entry).toHaveProperty("tx_hash");
@@ -91,6 +120,7 @@ describe("admin /update-scores response shape", () => {
       .mockRejectedValueOnce(new Error("RPC error"));
     const res = await request(app)
       .post("/api/admin/update-scores")
+      .set(authHeader)
       .send({ project_ids: [1, 2] })
       .expect(200);
     expect(res.body.errors).toHaveLength(1);
@@ -98,6 +128,10 @@ describe("admin /update-scores response shape", () => {
     expect(entry).toHaveProperty("project_id");
     expect(entry).toHaveProperty("error");
     expect(typeof entry.project_id).toBe("number");
-    expect(typeof entry.error).toBe("string");
+    // Matches the documented error contract: { error: { code, message } }.
+    expect(entry.error).toMatchObject({
+      code: "update_failed",
+      message: expect.any(String),
+    });
   });
 });

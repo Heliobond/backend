@@ -1,5 +1,10 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { detectAnomalies, configureAnomalyDetection, getAnomalyConfig, clearHistory } from "../lib/anomaly";
+import {
+  detectAnomalies,
+  configureAnomalyDetection,
+  getAnomalyConfig,
+  clearHistory,
+} from "../lib/anomaly";
 import { getSolarData, getSatelliteData } from "./iot";
 import { parseProjectId } from "../middleware/errors";
 
@@ -53,16 +58,21 @@ router.get("/", (_req: Request, res: Response) => {
  * Body: { sensitivityZScore?, trendWindowSize?, trendDeviationPct?, minBaseline? }
  */
 router.put("/config", (req: Request, res: Response) => {
-  const { sensitivityZScore, trendWindowSize, trendDeviationPct, minBaseline } = req.body as Record<string, number>;
+  const { sensitivityZScore, trendWindowSize, trendDeviationPct, minBaseline } = req.body as Record<
+    string,
+    number
+  >;
   configureAnomalyDetection({ sensitivityZScore, trendWindowSize, trendDeviationPct, minBaseline });
   res.json({ ok: true, config: getAnomalyConfig() });
 });
 
 /**
- * DELETE /v1/anomaly/history/:id?
+ * DELETE /v1/anomaly/history and DELETE /v1/anomaly/history/:id
  * Clear the baseline history for a specific project (or all projects).
+ * Two explicit routes because path-to-regexp v8 (Express 5) dropped the `?`
+ * suffix that older Express accepted for optional params.
  */
-router.delete("/history/:id?", (req: Request, res: Response, next: NextFunction) => {
+const clearAnomalyHistory = (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = req.params.id ? parseProjectId(req.params.id, "project id") : undefined;
     clearHistory(id);
@@ -70,6 +80,9 @@ router.delete("/history/:id?", (req: Request, res: Response, next: NextFunction)
   } catch (err) {
     next(err);
   }
-});
+};
+
+router.delete("/history", clearAnomalyHistory);
+router.delete("/history/:id", clearAnomalyHistory);
 
 export default router;

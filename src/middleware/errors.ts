@@ -36,10 +36,13 @@ export function badRequest(message: string): ApiError {
   return new ApiError(400, "bad_request", message);
 }
 
-export const MAX_PROJECT_ID = 100_000;
+export const DEFAULT_MAX_PROJECT_ID = 1_000_000;
 
 export function maxProjectId(): number {
-  return MAX_PROJECT_ID;
+  const raw = process.env.MAX_PROJECT_ID;
+  if (raw === undefined) return DEFAULT_MAX_PROJECT_ID;
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : DEFAULT_MAX_PROJECT_ID;
 }
 
 /**
@@ -55,8 +58,9 @@ export function parseProjectId(raw: string | string[] | undefined, field = "id")
   if (!Number.isInteger(id) || id < 1) {
     throw badRequest(`${field} must be a positive integer`);
   }
-  if (id > MAX_PROJECT_ID) {
-    throw badRequest(`${field} must be a positive integer not exceeding ${MAX_PROJECT_ID}`);
+  const max = maxProjectId();
+  if (id > max) {
+    throw badRequest(`${field} must be between 1 and ${max}`);
   }
   return id;
 }
