@@ -1,4 +1,19 @@
+jest.mock("../lib/logger", () => ({
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    formatError: jest.fn((err: unknown) =>
+      err instanceof Error
+        ? { error_name: err.name, error_message: err.message }
+        : { error: String(err) },
+    ),
+  },
+}));
+
+import { logger } from "../lib/logger";
 import { backoffDelay, isTransientError, withRetry } from "../lib/retry";
+
+const mockedLogger = logger as jest.Mocked<typeof logger>;
 
 // ── isTransientError ──────────────────────────────────────────────────────────
 
@@ -118,7 +133,10 @@ describe("backoffDelay", () => {
 // ── withRetry ─────────────────────────────────────────────────────────────────
 
 describe("withRetry", () => {
-  beforeEach(() => jest.useFakeTimers());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+  });
   afterEach(() => jest.useRealTimers());
 
   it("resolves immediately when fn succeeds on the first attempt", async () => {
@@ -127,6 +145,8 @@ describe("withRetry", () => {
     await jest.runAllTimersAsync();
     await expect(p).resolves.toBe("ok");
     expect(fn).toHaveBeenCalledTimes(1);
+    expect(mockedLogger.info).not.toHaveBeenCalled();
+    expect(mockedLogger.warn).not.toHaveBeenCalled();
   });
 
   it("retries on transient errors and resolves when fn eventually succeeds", async () => {
@@ -140,6 +160,22 @@ describe("withRetry", () => {
     await jest.runAllTimersAsync();
     await expect(p).resolves.toBe("recovered");
     expect(fn).toHaveBeenCalledTimes(3);
+    expect(mockedLogger.warn).toHaveBeenCalledTimes(2);
+    expect(mockedLogger.warn).toHaveBeenNthCalledWith(
+      1,
+      "[retry] attempt 1/4 failed; retrying",
+      expect.objectContaining({
+        attempt: 1,
+        delayMs: 10,
+        error_message: "timeout",
+        label: "retry",
+        maxAttempts: 4,
+      }),
+    );
+    expect(mockedLogger.info).toHaveBeenCalledWith(
+      "[retry] succeeded on attempt 3",
+      expect.objectContaining({ attempt: 3, label: "retry", maxAttempts: 4 }),
+    );
   });
 
   it("throws immediately on a permanent error without retrying", async () => {
@@ -147,6 +183,15 @@ describe("withRetry", () => {
     const p = withRetry(fn, { maxAttempts: 4, baseDelayMs: 10, jitter: 0 });
     await Promise.all([expect(p).rejects.toThrow("tx_bad_auth"), jest.runAllTimersAsync()]);
     expect(fn).toHaveBeenCalledTimes(1);
+    expect(mockedLogger.warn).toHaveBeenCalledWith(
+      "[retry] permanent error, not retrying",
+      expect.objectContaining({
+        attempt: 1,
+        error_message: "tx_bad_auth",
+        label: "retry",
+        maxAttempts: 4,
+      }),
+    );
   });
 
   it("exhausts all attempts and re-throws when fn always fails transiently", async () => {
