@@ -164,7 +164,7 @@ function calculateIRR(cashFlows: number[], guess = 0.1): number {
     let dnpv = 0;
     for (let t = 0; t < cashFlows.length; t++) {
       npv += cashFlows[t] / Math.pow(1 + rate, t);
-      dnpv += -t * cashFlows[t] / Math.pow(1 + rate, t + 1);
+      dnpv += (-t * cashFlows[t]) / Math.pow(1 + rate, t + 1);
     }
     if (Math.abs(npv) < tolerance) {
       return round(rate, 4);
@@ -180,7 +180,7 @@ export function createDefaultFinancialInput(
   _efficiencyPct: number,
   partial?: Partial<FinancialInput>,
 ): FinancialInput {
-  const capacityFactor = 0.20;
+  const capacityFactor = 0.2;
   const annualEnergy = capacityKw * 8760 * capacityFactor;
   const installationCostPerKw = 1000;
   const maintenancePerKwPerYear = 15;
@@ -190,13 +190,13 @@ export function createDefaultFinancialInput(
     installation_cost: capacityKw * installationCostPerKw,
     annual_maintenance_cost: capacityKw * maintenancePerKwPerYear,
     annual_energy_output_kwh: annualEnergy,
-    electricity_price_per_kwh: 0.10,
+    electricity_price_per_kwh: 0.1,
     degradation_rate: 0.005,
     discount_rate: 0.07,
     inflation_rate: 0.02,
     project_lifetime_years: 25,
-    tax_incentives: capacityKw * installationCostPerKw * 0.30,
-    salvage_value: capacityKw * installationCostPerKw * 0.10,
+    tax_incentives: capacityKw * installationCostPerKw * 0.3,
+    salvage_value: capacityKw * installationCostPerKw * 0.1,
     capacity_factor: capacityFactor,
   };
 
@@ -204,10 +204,10 @@ export function createDefaultFinancialInput(
 
   const finalInstallCost = merged.installation_cost;
   if (partial?.tax_incentives === undefined) {
-    merged.tax_incentives = finalInstallCost * 0.30;
+    merged.tax_incentives = finalInstallCost * 0.3;
   }
   if (partial?.salvage_value === undefined) {
-    merged.salvage_value = finalInstallCost * 0.10;
+    merged.salvage_value = finalInstallCost * 0.1;
   }
 
   return merged;
@@ -218,7 +218,9 @@ export function calculateCostBenefit(input: FinancialInput): CostBenefitResult {
   const operatingCashFlows = cashFlows.filter((cf) => cf.year > 0);
 
   const totalRevenue = round(operatingCashFlows.reduce((sum, cf) => sum + cf.revenue, 0));
-  const totalMaintenance = round(operatingCashFlows.reduce((sum, cf) => sum + cf.maintenance_cost, 0));
+  const totalMaintenance = round(
+    operatingCashFlows.reduce((sum, cf) => sum + cf.maintenance_cost, 0),
+  );
   const totalInstallation = input.installation_cost;
   const totalOperating = totalMaintenance;
   const totalCost = round(totalInstallation + totalOperating);
@@ -261,7 +263,7 @@ export function calculatePaybackPeriod(input: FinancialInput): PaybackPeriodResu
     if (cum >= 0) {
       const prevCum = cum - netCashFlows[i];
       if (netCashFlows[i] !== 0) {
-        simplePaybackYears = (i - 1) + Math.abs(prevCum) / netCashFlows[i];
+        simplePaybackYears = i - 1 + Math.abs(prevCum) / netCashFlows[i];
       } else {
         simplePaybackYears = i;
       }
@@ -276,7 +278,7 @@ export function calculatePaybackPeriod(input: FinancialInput): PaybackPeriodResu
     if (discCum >= 0) {
       const prevDiscCum = discCum - discountedCashFlows[i];
       if (discountedCashFlows[i] !== 0) {
-        discountedPaybackYears = (i - 1) + Math.abs(prevDiscCum) / discountedCashFlows[i];
+        discountedPaybackYears = i - 1 + Math.abs(prevDiscCum) / discountedCashFlows[i];
       } else {
         discountedPaybackYears = i;
       }
@@ -319,10 +321,14 @@ export function calculateNPV(input: FinancialInput): NPVResult {
   };
 }
 
+type SensitivityVariation =
+  | { label: string; kind: "multiplier"; value: number }
+  | { label: string; kind: "delta"; value: number };
+
 type SensitivityParam = {
   key: keyof FinancialInput;
   label: string;
-  variations: { label: string; multiplier: number }[];
+  variations: SensitivityVariation[];
 };
 
 const SENSITIVITY_PARAMS: SensitivityParam[] = [
@@ -330,49 +336,49 @@ const SENSITIVITY_PARAMS: SensitivityParam[] = [
     key: "installation_cost",
     label: "Installation Cost",
     variations: [
-      { label: "-20%", multiplier: 0.80 },
-      { label: "-10%", multiplier: 0.90 },
-      { label: "+10%", multiplier: 1.10 },
-      { label: "+20%", multiplier: 1.20 },
+      { label: "-20%", kind: "multiplier", value: 0.8 },
+      { label: "-10%", kind: "multiplier", value: 0.9 },
+      { label: "+10%", kind: "multiplier", value: 1.1 },
+      { label: "+20%", kind: "multiplier", value: 1.2 },
     ],
   },
   {
     key: "electricity_price_per_kwh",
     label: "Electricity Price",
     variations: [
-      { label: "-20%", multiplier: 0.80 },
-      { label: "-10%", multiplier: 0.90 },
-      { label: "+10%", multiplier: 1.10 },
-      { label: "+20%", multiplier: 1.20 },
+      { label: "-20%", kind: "multiplier", value: 0.8 },
+      { label: "-10%", kind: "multiplier", value: 0.9 },
+      { label: "+10%", kind: "multiplier", value: 1.1 },
+      { label: "+20%", kind: "multiplier", value: 1.2 },
     ],
   },
   {
     key: "discount_rate",
     label: "Discount Rate",
     variations: [
-      { label: "-2%", multiplier: (1 / 0.07) * 0.05 },
-      { label: "-1%", multiplier: (1 / 0.07) * 0.06 },
-      { label: "+1%", multiplier: (1 / 0.07) * 0.08 },
-      { label: "+2%", multiplier: (1 / 0.07) * 0.09 },
+      { label: "-2%", kind: "delta", value: -0.02 },
+      { label: "-1%", kind: "delta", value: -0.01 },
+      { label: "+1%", kind: "delta", value: 0.01 },
+      { label: "+2%", kind: "delta", value: 0.02 },
     ],
   },
   {
     key: "degradation_rate",
     label: "Degradation Rate",
     variations: [
-      { label: "-0.25%", multiplier: 0.5 },
-      { label: "+0.25%", multiplier: 1.5 },
-      { label: "+0.50%", multiplier: 2.0 },
+      { label: "-0.25%", kind: "multiplier", value: 0.5 },
+      { label: "+0.25%", kind: "multiplier", value: 1.5 },
+      { label: "+0.50%", kind: "multiplier", value: 2.0 },
     ],
   },
   {
     key: "annual_energy_output_kwh",
     label: "Energy Output",
     variations: [
-      { label: "-20%", multiplier: 0.80 },
-      { label: "-10%", multiplier: 0.90 },
-      { label: "+10%", multiplier: 1.10 },
-      { label: "+20%", multiplier: 1.20 },
+      { label: "-20%", kind: "multiplier", value: 0.8 },
+      { label: "-10%", kind: "multiplier", value: 0.9 },
+      { label: "+10%", kind: "multiplier", value: 1.1 },
+      { label: "+20%", kind: "multiplier", value: 1.2 },
     ],
   },
 ];
@@ -392,10 +398,14 @@ export function performSensitivityAnalysis(input: FinancialInput): SensitivityRe
   for (const param of SENSITIVITY_PARAMS) {
     for (const variation of param.variations) {
       let variedInput: FinancialInput;
-      if (param.key === "discount_rate") {
-        variedInput = { ...input, [param.key]: input[param.key] * variation.multiplier };
+      let effectiveMultiplier: number;
+      if (variation.kind === "delta") {
+        const variedValue = (input[param.key] as number) + variation.value;
+        variedInput = { ...input, [param.key]: variedValue };
+        effectiveMultiplier = variedValue / (input[param.key] as number);
       } else {
-        variedInput = { ...input, [param.key]: (input[param.key] as number) * variation.multiplier };
+        variedInput = { ...input, [param.key]: (input[param.key] as number) * variation.value };
+        effectiveMultiplier = variation.value;
       }
       const npvResult = calculateNPV(variedInput);
       const paybackResult = calculatePaybackPeriod(variedInput);
@@ -404,7 +414,7 @@ export function performSensitivityAnalysis(input: FinancialInput): SensitivityRe
         label: `${param.label} ${variation.label}`,
         parameter: param.label,
         change: variation.label,
-        multiplier: variation.multiplier,
+        multiplier: effectiveMultiplier,
         npv: npvResult.npv,
         payback_years: paybackResult.payback_years,
         irr: npvResult.irr,
@@ -434,7 +444,9 @@ function calculateProjectROI(projectId: number, input: FinancialInput): ProjectR
   };
 }
 
-export function compareROI(projects: { project_id: number; input: FinancialInput }[]): ROIComparisonResult {
+export function compareROI(
+  projects: { project_id: number; input: FinancialInput }[],
+): ROIComparisonResult {
   const all = projects.map((p) => calculateProjectROI(p.project_id, p.input));
 
   const byROI = [...all].sort((a, b) => b.roi_pct - a.roi_pct);
