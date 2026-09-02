@@ -33,7 +33,8 @@ import { startGrpcServer } from "./grpc/server";
 import { getSolarData } from "./lib/iot";
 import { fetchSatelliteWithFallback } from "./lib/satellite-sources";
 import { computeScores } from "./lib/scoring";
-import { updateImpactScore } from "./lib/registry";
+import { updateImpactScore, DuplicateSubmissionError } from "./lib/registry";
+import { generateIdempotencyKey, checkIdempotency } from "./lib/idempotency";
 import { runHourlyScoreUpdate } from "./lib/scoreUpdateCron";
 import { isErrorRateLimited } from "./lib/error-limiter";
 import { isRpcOutageExtended, isRpcAvailable, getRpcStatus } from "./lib/stellar";
@@ -387,28 +388,50 @@ scheduleCron(
         const satellite = await fetchSatelliteWithFallback(item.projectId);
         const fresh = computeScores({ solar, satellite });
 
-        const tx_hash = await updateImpactScore(
-          item.projectId,
-          fresh.credit_quality,
-          fresh.green_impact,
-        );
-        processed.push(item.projectId);
-        logger.info(
-          `[cron] tx-queue: project ${item.projectId} retried successfully tx=${tx_hash}`,
-        );
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        incrementRetry(item.projectId, errMsg);
-
-        if (hasExceededMaxRetries(item.projectId)) {
-          logger.error(
-            `[cron] tx-queue: project ${item.projectId} exceeded max retries (${maxRetries}), dropping`,
+        // Generate an idempotency key for this retry so a queued transaction
+        // that was already submitted on-chain is not double-submitted.
+        const idempotencyKey = generateIdempotencyKey(item.projectId);
+        const { isDuplicate } = checkIdempotency(idempotencyKey);
+        if (isDuplicate) {
+          logger.info(
+            `[cron] tx-queue: project ${item.projectId} skipped — already submitted this hour (key=${idempotencyKey})`,
           );
           remove(item.projectId);
+          processed.push(item.projectId);
         } else {
-          logger.warn(
-            `[cron] tx-queue: project ${item.projectId} retry failed (attempt ${item.retryCount + 1}), will retry`,
+          const tx_hash = await updateImpactScore(
+            item.projectId,
+            fresh.credit_quality,
+            fresh.green_impact,
+            idempotencyKey,
           );
+          processed.push(item.projectId);
+          logger.info(
+            `[cron] tx-queue: project ${item.projectId} retried successfully tx=${tx_hash}`,
+          );
+        }
+      } catch (err) {
+        if (err instanceof DuplicateSubmissionError) {
+          // Belt-and-suspenders: also catch if DuplicateSubmissionError bubbles up.
+          logger.info(
+            `[cron] tx-queue: project ${item.projectId} skipped (duplicate): ${err.message}`,
+          );
+          remove(item.projectId);
+          processed.push(item.projectId);
+        } else {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          incrementRetry(item.projectId, errMsg);
+
+          if (hasExceededMaxRetries(item.projectId)) {
+            logger.error(
+              `[cron] tx-queue: project ${item.projectId} exceeded max retries (${maxRetries}), dropping`,
+            );
+            remove(item.projectId);
+          } else {
+            logger.warn(
+              `[cron] tx-queue: project ${item.projectId} retry failed (attempt ${item.retryCount + 1}), will retry`,
+            );
+          }
         }
       }
     }

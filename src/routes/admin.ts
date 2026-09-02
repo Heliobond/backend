@@ -179,17 +179,58 @@ router.post(
             }
           });
 
-          if (result.skipped) {
-            skipped.push({ project_id: projectId, reason: result.reason });
-            logger.info(`[oracle] skipping project ${projectId}: ${result.reason}`);
-          } else {
-            // Rebuilt field by field so the internal `skipped` discriminant does
-            // not leak into the response body.
-            results.push({
-              project_id: result.project_id,
-              tx_hash: result.tx_hash,
-              credit_quality: result.credit_quality,
-              green_impact: result.green_impact,
+if (scoreResult.status === "error") {
+              // Duplicate submissions are a normal condition, not a failure.
+              if (scoreResult.error.includes("duplicate submission rejected")) {
+                markCompleted(projectId);
+                return { skipped: true, reason: scoreResult.error };
+              }
+              throw new Error(scoreResult.error);
+            }
+
+            markCompleted(projectId);
+            recordAudit({
+              project_id: projectId,
+              credit_quality: scoreResult.creditQuality,
+              green_impact: scoreResult.greenImpact,
+              tx_hash: scoreResult.txHash,
+              triggered_by: "api",
+            });
+            broadcastScoreUpdate({
+              project_id: projectId,
+              credit_quality: scoreResult.creditQuality,
+              green_impact: scoreResult.greenImpact,
+              timestamp: Date.now(),
+            });
+            logger.info(
+              `[oracle] project ${projectId}: cq=${scoreResult.creditQuality} gi=${scoreResult.greenImpact} tx=${scoreResult.txHash}`,
+            );
+            return {
+              skipped: false,
+              project_id: projectId,
+              tx_hash: scoreResult.txHash,
+              credit_quality: scoreResult.creditQuality,
+              green_impact: scoreResult.greenImpact,
+            };
+          } catch (err) {
+            markFailed(projectId);
+            throw err;
+          }
+        });
+
+        if (result.skipped) {
+          skipped.push({ project_id: projectId, reason: result.reason });
+          logger.info(`[oracle] skipping project ${projectId}: ${result.reason}`);
+        } else {
+          // Rebuilt field by field so the internal `skipped` discriminant does
+          // not leak into the response body.
+          results.push({
+            project_id: result.project_id,
+            tx_hash: result.tx_hash,
+            credit_quality: result.credit_quality,
+            green_impact: result.green_impact,
+          });
+        }
             });
           }
         } catch (err) {

@@ -114,6 +114,9 @@ export const config = {
   /** IoT max power output (kW) */
   MAX_POWER_KW: numEnv("MAX_POWER_KW", 1000),
 
+  /** Idempotency */
+  IDEMPOTENCY_TTL_MS: numEnv("IDEMPOTENCY_TTL_MS", 3_600_000),
+
   /** Cron */
   CRON_TIMEZONE: optionalEnv("CRON_TIMEZONE", "UTC"),
   CRON_FAILURE_THRESHOLD: floatEnv("CRON_FAILURE_THRESHOLD", 0.5),
