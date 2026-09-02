@@ -51,11 +51,12 @@ function emit(level: LogLevel, message: string, meta?: Record<string, unknown>):
 }
 
 function formatError(err: unknown): Record<string, unknown> {
-  if (err instanceof Error) {
+  if (err && typeof err === "object") {
+    const e = err as Record<string, unknown>;
     return {
-      error_name: err.name,
-      error_message: err.message,
-      error_stack: err.stack,
+      error_name: String(e.name || "Error"),
+      error_message: String(e.message || e),
+      error_stack: e.stack ? String(e.stack) : undefined,
     };
   }
   return { error: String(err) };
@@ -71,7 +72,9 @@ export const logger = {
 
 export function setLogLevel(level: LogLevel): void {
   if (!(level in LEVEL_RANK)) {
-    throw new Error(`Invalid log level: ${level}. Valid levels: ${Object.keys(LEVEL_RANK).join(", ")}`);
+    throw new Error(
+      `Invalid log level: ${level}. Valid levels: ${Object.keys(LEVEL_RANK).join(", ")}`,
+    );
   }
   currentLevel = level;
 }

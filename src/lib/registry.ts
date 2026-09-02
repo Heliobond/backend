@@ -4,7 +4,6 @@ import {
   nativeToScVal,
   BASE_FEE,
   scValToNative,
-  rpc,
   Account,
 } from "@stellar/stellar-sdk";
 import { withRpcConnection, networkPassphrase, getAdminKeypair, signAndSubmit } from "./stellar";
@@ -16,10 +15,34 @@ if (!config.PROJECT_REGISTRY_CONTRACT_ID) {
 }
 const REGISTRY_CONTRACT_ID = config.PROJECT_REGISTRY_CONTRACT_ID;
 
+/**
+ * Thrown when an idempotency key collision is detected — i.e. the same
+ * project score update has already been submitted within IDEMPOTENCY_TTL_MS.
+ * Callers can catch this specific error to distinguish "already done" from a
+ * real RPC failure.
+ */
+export class DuplicateSubmissionError extends Error {
+  public readonly idempotencyKey: string;
+  public readonly recordedAt: number;
+
+  constructor(key: string, recordedAt: number) {
+    super(
+      `Duplicate submission rejected — idempotency key "${key}" was already seen ` +
+        `at ${new Date(recordedAt).toISOString()}`,
+    );
+    this.name = "DuplicateSubmissionError";
+    this.idempotencyKey = key;
+    this.recordedAt = recordedAt;
+  }
+}
+
 export async function updateImpactScore(
   projectId: number,
   creditQuality: number,
   greenImpact: number,
+  /** Pre-generated idempotency key (for tracing/logging). Callers are
+   *  responsible for running the idempotency check before this call. */
+  idempotencyKey?: string,
 ): Promise<string> {
   return withRpcConnection(async (client) => {
     const keypair = getAdminKeypair();
@@ -43,17 +66,6 @@ export async function updateImpactScore(
   });
 }
 
-/**
- * Narrowing guard for a failed simulation. Defined locally rather than using
- * the SDK's `rpc.Api.isSimulationError` so the check stays a plain shape test
- * and does not depend on that helper being present at runtime.
- */
-function isSimulationError(
-  sim: rpc.Api.SimulateTransactionResponse,
-): sim is rpc.Api.SimulateTransactionErrorResponse {
-  return "error" in sim && typeof sim.error === "string";
-}
-
 export async function getTotalProjects(): Promise<number> {
   return withRpcConnection(async (client) => {
     const contract = new Contract(REGISTRY_CONTRACT_ID);
@@ -69,25 +81,38 @@ export async function getTotalProjects(): Promise<number> {
 
     const end = stellarRpcDuration.startTimer({ operation: "simulateTransaction" });
     try {
-      const result = await client.simulateTransaction(tx);
-      if ("error" in result) throw new Error((result as { error: string }).error);
-      const sim = result as rpc.Api.SimulateTransactionSuccessResponse;
+      const result = (await client.simulateTransaction(tx)) as {
+        error?: unknown;
+        result?: { retval?: unknown };
+      };
+      if (result.error) {
+        throw new Error(String(result.error));
+      }
+      const retval = result.result?.retval;
+      if (retval === undefined) {
+        throw new Error("Simulation result missing retval");
+      }
       end();
       stellarRpcTotal.inc({ operation: "simulateTransaction", result: "success" });
-      return Number(scValToNative(sim.result!.retval));
+      return Number(scValToNative(retval as any));
+      const sim = await client.simulateTransaction(tx);
+      if (isSimulationError(sim)) {
+        throw new Error(sim.error);
+      }
+
+      const retval = sim.result?.retval;
+      if (retval === undefined) {
+        throw new Error("total_projects simulation returned no result value");
+      }
+
+      end();
+      stellarRpcTotal.inc({ operation: "simulateTransaction", result: "success" });
+      return Number(scValToNative(retval));
     } catch (err) {
       end();
       stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });
       throw err;
     }
-    const sim = await client.simulateTransaction(tx);
-    if (isSimulationError(sim)) throw new Error(sim.error);
-
-    const retval = sim.result?.retval;
-    if (retval === undefined) {
-      throw new Error("total_projects simulation returned no result value");
-    }
-    return Number(scValToNative(retval));
   });
 }
 

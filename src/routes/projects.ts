@@ -1,6 +1,6 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { getTotalProjects } from "../lib/registry";
-import { getSolarData, getSatelliteData } from "./iot";
+import { getSolarData, getSatelliteData, seededRandom } from "./iot";
 import { computeScores } from "../lib/scoring";
 import { badRequest, parseProjectId, parseOptionalInt } from "../middleware/errors";
 
@@ -145,7 +145,7 @@ router.get("/:id", async (req: Request, res: Response, next: NextFunction) => {
       forest_density_pct: satellite.forest_density_pct,
       ndvi_score: satellite.ndvi_score,
       timestamp: Math.max(solar.timestamp, satellite.timestamp),
-      funding: Math.random() * 1000000,
+      funding: seededRandom(id * 13 + 7) * 1000000,
     };
 
     res.json(response);
