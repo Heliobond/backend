@@ -37,11 +37,7 @@ function sanitizeString(key: string, value: string): string {
   }
 
   if (PATH_TRAVERSAL_RE.test(value)) {
-    throw new ApiError(
-      400,
-      "invalid_input",
-      `Field "${key}" contains a path traversal sequence`,
-    );
+    throw new ApiError(400, "invalid_input", `Field "${key}" contains a path traversal sequence`);
   }
 
   // Strip HTML/script tags for XSS prevention
@@ -85,15 +81,28 @@ export function sanitizeInputs(req: Request, _res: Response, next: NextFunction)
       req.body = sanitizeValue("body", req.body);
     }
 
+    // Express 5 exposes `req.query` as a getter-only prototype property that
+    // re-parses the URL on every access, so per-key writes to the returned
+    // object are silently lost and `req.query = ...` throws in strict mode.
+    // Build the sanitized copy and define it as the request's own `query`
+    // value, which shadows the getter for the rest of the request lifecycle.
+    const sanitizedQuery: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(req.query)) {
-      if (typeof value === "string") {
-        sanitizeString(key, value);
-      }
+      sanitizedQuery[key] = typeof value === "string" ? sanitizeString(key, value) : value;
     }
+    Object.defineProperty(req, "query", {
+      value: sanitizedQuery,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
 
+    // `req.params` is a plain own property; when params are already populated
+    // (e.g. when this middleware is attached on a parameterised route), the
+    // sanitized value persists for downstream handlers.
     for (const [key, value] of Object.entries(req.params)) {
       if (typeof value === "string") {
-        sanitizeString(key, value);
+        req.params[key] = sanitizeString(key, value);
       }
     }
 
