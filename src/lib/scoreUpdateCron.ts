@@ -74,19 +74,6 @@ export async function runHourlyScoreUpdate(): Promise<void> {
             });
           }
           const timestamp = Date.now();
-          recordScoreHistory(
-            projectId,
-            scoreResult.creditQuality,
-            scoreResult.greenImpact,
-            timestamp,
-          );
-          triggerWebhooks({
-            project_id: projectId,
-            credit_quality: scoreResult.creditQuality,
-            green_impact: scoreResult.greenImpact,
-            tx_hash: scoreResult.txHash,
-            timestamp,
-          });
           broadcastScoreUpdate({
             project_id: projectId,
             credit_quality: scoreResult.creditQuality,
