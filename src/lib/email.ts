@@ -93,6 +93,11 @@ export function listSubscribers(frequency?: Frequency): Subscriber[] {
   return frequency ? all.filter((s) => s.frequency === frequency) : all;
 }
 
+/** Remove all subscribers. Intended for test isolation only. */
+export function clearSubscribers(): void {
+  subscribers.clear();
+}
+
 // ── Thresholds ────────────────────────────────────────────────────────────────
 export function getThresholds(): AlertThresholds {
   return { ...thresholds };
@@ -196,8 +201,14 @@ export async function sendAlertIfSignificant(change: ScoreChange): Promise<numbe
   });
   let sent = 0;
   for (const sub of subscribers.values()) {
-    await sendEmail({ to: sub.email, subject, body });
-    sent++;
+    try {
+      await sendEmail({ to: sub.email, subject, body });
+      sent++;
+    } catch (err) {
+      // One bad recipient must never abort the rest of the batch — mirror the
+      // per-project isolation pattern used in runHourlyScoreUpdate.
+      console.error(`[email] alert send failed for ${sub.email}:`, err);
+    }
   }
   return sent;
 }
@@ -219,8 +230,14 @@ export async function sendDigest(frequency: Frequency, changes: ScoreChange[]): 
   let sent = 0;
   for (const sub of recipients) {
     const footer = `\n\nUnsubscribe: /v1/email/unsubscribe?token=${sub.unsubscribe_token}`;
-    await sendEmail({ to: sub.email, subject, body: body + footer });
-    sent++;
+    try {
+      await sendEmail({ to: sub.email, subject, body: body + footer });
+      sent++;
+    } catch (err) {
+      // One bad recipient must never abort the rest of the batch — mirror the
+      // per-project isolation pattern used in runHourlyScoreUpdate.
+      console.error(`[email] digest send failed for ${sub.email}:`, err);
+    }
   }
   return sent;
 }
