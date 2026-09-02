@@ -31,7 +31,7 @@ Use Express 5 as the HTTP framework.
 - **Proven reliability**: Express is the most battle-tested Node.js HTTP framework
 - **Middleware ecosystem**: Largest collection of middleware (cors, rate-limit, swagger-ui-express)
 - **Team familiarity**: Most Node.js developers have Express experience
-- **Async error handling**: Express 5 natively supports async route handlers without wrappers
+- **Async error handling**: Express 5 natively supports async route handlers, automatically forwarding rejected promises to `next()` — though the codebase conventionally retains explicit `try/catch` for per-handler error isolation and consistent status-code forwarding
 - **WebSocket compatibility**: Works seamlessly with the `ws` library for real-time features
 - **Low learning curve**: Minimal onboarding overhead for new contributors
 
@@ -41,7 +41,7 @@ Use Express 5 as the HTTP framework.
 
 - Mature, stable framework with extensive documentation
 - Rich middleware ecosystem covers all our needs
-- Express 5's native async support eliminates try/catch wrappers in routes
+- Express 5's native async support means rejected promises are forwarded to `next()` automatically, though the codebase conventionally retains explicit `try/catch` in route handlers for per-handler error isolation, logging, and consistent status-code forwarding via the central `errorHandler`
 - Easy integration with existing tooling (Swagger UI, CORS, rate limiting)
 
 ### Negative

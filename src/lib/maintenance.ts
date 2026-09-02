@@ -87,13 +87,6 @@ const CRITICAL_EFFICIENCY: Record<string, number> = {
   bifacial: 72,
 };
 
-const PANEL_LIFESPAN: Record<string, number> = {
-  monocrystalline: 87600,
-  polycrystalline: 78840,
-  "thin-film": 52560,
-  bifacial: 96360,
-};
-
 function round(n: number, d = 2): number {
   const f = Math.pow(10, d);
   return Math.round(n * f) / f;

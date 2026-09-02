@@ -4,9 +4,19 @@ import { recordRequest, getMetrics } from "../lib/metrics";
 import { recordCronRun } from "../lib/health";
 
 jest.mock("../lib/stellar", () => ({
-  rpcPool: { getMetrics: jest.fn(() => ({ active: 0, idle: 1, total: 1, waitingQueue: 0 })), shutdown: jest.fn() },
-  rpcBreaker: { getMetrics: jest.fn(() => ({ state: "CLOSED", failures: 0, successes: 0 })), getState: jest.fn(() => "CLOSED") },
-  getRpcStatus: jest.fn(() => ({ consecutiveFailures: 0, outageDurationMs: 0, lastSuccessAgoMs: 50 })),
+  rpcPool: {
+    getMetrics: jest.fn(() => ({ active: 0, idle: 1, total: 1, waitingQueue: 0 })),
+    shutdown: jest.fn(),
+  },
+  rpcBreaker: {
+    getMetrics: jest.fn(() => ({ state: "CLOSED", failures: 0, successes: 0 })),
+    getState: jest.fn(() => "CLOSED"),
+  },
+  getRpcStatus: jest.fn(() => ({
+    consecutiveFailures: 0,
+    outageDurationMs: 0,
+    lastSuccessAgoMs: 50,
+  })),
 }));
 
 jest.mock("../lib/satellite-sources", () => ({
@@ -25,11 +35,6 @@ jest.mock("../lib/feature-flags", () => ({
 
 describe("metrics collection (#283)", () => {
   describe("recordRequest / getMetrics", () => {
-    beforeEach(() => {
-      // Reset internal state by re-importing wouldn't work; instead record a known baseline.
-      jest.resetModules();
-    });
-
     it("getMetrics returns a snapshot object", () => {
       const snapshot = getMetrics();
       expect(snapshot).toHaveProperty("timestamp");

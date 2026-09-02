@@ -15,6 +15,8 @@ import {
   type EvaluationContext,
 } from "../lib/feature-flags";
 import { featureFlagContext, registerFlagRoutes } from "../middleware/featureFlags";
+import { errorHandler } from "../middleware/errors";
+import * as featureFlagsModule from "../lib/feature-flags";
 
 const baseCtx: EvaluationContext = {
   user_id: "wallet_alice",
@@ -267,9 +269,7 @@ describe("feature flags", () => {
     });
 
     it("passes user context from x-user-id header", async () => {
-      const res = await request(app)
-        .get("/test-variant")
-        .set("x-user-id", "wallet_bob");
+      const res = await request(app).get("/test-variant").set("x-user-id", "wallet_bob");
       expect(res.body.enabled).toBe(true);
       expect(res.body.variant).toBeDefined();
     });
@@ -282,6 +282,7 @@ describe("feature flags", () => {
       app = express();
       app.use(express.json());
       registerFlagRoutes(app);
+      app.use(errorHandler);
     });
 
     it("GET /flags returns all flags with evaluations", async () => {
@@ -315,6 +316,27 @@ describe("feature flags", () => {
       expect(getFlag("new-dashboard")).toBeUndefined();
     });
 
+    it("POST /flags/load delegates internal error to errorHandler", async () => {
+      const loadSpy = jest.spyOn(featureFlagsModule, "loadFlags").mockImplementationOnce(() => {
+        throw new Error("Internal failure: secret_key_leaked_db_error");
+      });
+
+      const res = await request(app)
+        .post("/flags/load")
+        .send({ "loaded-flag": { enabled: true, rollout_percentage: 100 } });
+
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({
+        error: {
+          code: "INTERNAL_ERROR",
+          message: "An unexpected error occurred",
+        },
+      });
+      expect(JSON.stringify(res.body)).not.toContain("secret_key_leaked_db_error");
+
+      loadSpy.mockRestore();
+    });
+
     it("POST /flags/merge adds to existing flags", async () => {
       const res = await request(app)
         .post("/flags/merge")
@@ -323,6 +345,27 @@ describe("feature flags", () => {
       expect(getFlag("merged-flag")).toBeDefined();
       // Original flags should still exist
       expect(getFlag("new-dashboard")).toBeDefined();
+    });
+
+    it("POST /flags/merge delegates internal error to errorHandler", async () => {
+      const mergeSpy = jest.spyOn(featureFlagsModule, "mergeFlags").mockImplementationOnce(() => {
+        throw new Error("Internal failure: secret_key_leaked_db_error");
+      });
+
+      const res = await request(app)
+        .post("/flags/merge")
+        .send({ "merged-flag": { enabled: true, rollout_percentage: 100 } });
+
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({
+        error: {
+          code: "INTERNAL_ERROR",
+          message: "An unexpected error occurred",
+        },
+      });
+      expect(JSON.stringify(res.body)).not.toContain("secret_key_leaked_db_error");
+
+      mergeSpy.mockRestore();
     });
 
     it("GET /flags/analytics returns analytics summary", async () => {

@@ -49,6 +49,7 @@ export interface EvaluationResult {
     | "user_override_enabled"
     | "user_override_disabled"
     | "dependency_not_met"
+    | "dependency_cycle"
     | "variant_resolved";
   variant?: FlagValue;
   metadata?: Record<string, unknown>;
@@ -192,6 +193,19 @@ export function listFlags(): FlagSet {
  * Evaluate a single flag for a given context.
  */
 export function evaluateFlag(flagName: string, ctx: EvaluationContext): EvaluationResult {
+  return evaluateFlagInternal(flagName, ctx, new Set());
+}
+
+/**
+ * Internal recursive evaluator. Tracks the chain of flags currently being
+ * resolved (via `visiting`) so a circular depends_on graph is reported as a
+ * dependency_cycle instead of recursing until the call stack overflows.
+ */
+function evaluateFlagInternal(
+  flagName: string,
+  ctx: EvaluationContext,
+  visiting: Set<string>,
+): EvaluationResult {
   const flag = flags[flagName];
 
   if (!flag) {
@@ -272,21 +286,34 @@ export function evaluateFlag(flagName: string, ctx: EvaluationContext): Evaluati
       return result;
     }
     // If cached result is true, dependencies are satisfied, continue to next checks
+  } else if (visiting.has(flagName)) {
+    // This flag is already being resolved further up the call chain —
+    // depends_on forms a cycle. Fail closed instead of recursing forever.
+    const result: EvaluationResult = {
+      flag: flagName,
+      value: false,
+      reason: "dependency_cycle",
+      metadata: flag.metadata,
+    };
+    recordEvaluation(result, ctx);
+    return result;
   } else {
     // Not in cache, evaluate dependencies if any exist
     let allDependenciesMet = true;
     if (flag.depends_on && flag.depends_on.length > 0) {
+      visiting.add(flagName);
       for (const dep of flag.depends_on) {
-        if (!evaluateFlag(dep, ctx).value) {
+        if (!evaluateFlagInternal(dep, ctx, visiting).value) {
           allDependenciesMet = false;
           break;
         }
       }
+      visiting.delete(flagName);
     }
-    
+
     // Cache the result (true for no dependencies or all satisfied, false otherwise)
     dependencyCache.set(cacheKey, allDependenciesMet);
-    
+
     if (!allDependenciesMet) {
       const result: EvaluationResult = {
         flag: flagName,

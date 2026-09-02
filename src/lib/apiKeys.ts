@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { timingSafeCompare } from "./timing-safe";
 
 export interface ApiKey {
   id: string;
@@ -128,14 +129,14 @@ export function validateApiKey(key: string): ApiKey | null {
   for (const apiKey of keysStore.values()) {
     if (apiKey.status !== "active") continue;
 
-    // Check current key
-    if (apiKey.key === key) {
+    // Check current key (constant-time comparison to prevent timing attacks)
+    if (timingSafeCompare(apiKey.key, key)) {
       return apiKey;
     }
 
-    // Check old key during grace period
+    // Check old key during grace period (constant-time comparison to prevent timing attacks)
     if (apiKey.old_key && apiKey.new_key_expires_at && now < apiKey.new_key_expires_at) {
-      if (apiKey.old_key === key) {
+      if (timingSafeCompare(apiKey.old_key, key)) {
         return apiKey;
       }
     }
