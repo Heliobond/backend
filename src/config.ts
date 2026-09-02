@@ -180,6 +180,7 @@ export function initEnv() {
 
   // Initialize API key roles from environment variables
   // This must be called before any routes that use role-based auth
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { loadApiKeysFromEnv } = require("./lib/apiKeyRoles");
   loadApiKeysFromEnv();
 

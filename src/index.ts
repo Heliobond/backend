@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import cron, { ScheduledTask } from "node-cron";
+import crypto from "crypto";
 import { config, initEnv } from "./config";
 import swaggerUi from "swagger-ui-express";
 import iotRouter from "./routes/iot";
@@ -429,9 +430,9 @@ scheduleCron(
       const status = getRpcStatus();
       logger.error(
         `[alert] Stellar RPC outage detected: ` +
-        `consecutiveFailures=${status.consecutiveFailures}, ` +
-        `outageDurationMs=${status.outageDurationMs}, ` +
-        `lastSuccessAgoMs=${status.lastSuccessAgoMs}`,
+          `consecutiveFailures=${status.consecutiveFailures}, ` +
+          `outageDurationMs=${status.outageDurationMs}, ` +
+          `lastSuccessAgoMs=${status.lastSuccessAgoMs}`,
       );
     }
   },
@@ -484,13 +485,13 @@ app.all(
 
 app.get("/graphql-playground", (req, res) => {
   // Generate a nonce for inline script CSP
-  const nonce = require('crypto').randomBytes(16).toString('hex');
+  const nonce = crypto.randomBytes(16).toString("hex");
 
   res.setHeader("Content-Type", "text/html");
   // Override CSP to allow inline script with nonce
   res.setHeader(
     "Content-Security-Policy",
-    `default-src 'self'; script-src 'self' https://unpkg.com 'nonce-${nonce}'; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; connect-src 'self'`
+    `default-src 'self'; script-src 'self' https://unpkg.com 'nonce-${nonce}'; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; connect-src 'self'`,
   );
 
   res.send(`
