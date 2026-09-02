@@ -46,9 +46,59 @@ router.patch("/:name", (req: Request, res: Response) => {
   res.json({ ok: true, sources: getSources() });
 });
 
+/** Timeout for outbound requests to custom satellite source endpoints. */
+const CUSTOM_SOURCE_FETCH_TIMEOUT_MS = 10_000;
+
+/**
+ * Call a custom source's fetchUrl for a project and validate the response
+ * shape. Expects JSON with numeric forest_density_pct and ndvi_score fields.
+ */
+async function fetchFromCustomUrl(
+  fetchUrl: string,
+  projectId: number,
+  sourceName: string,
+): Promise<{ forest_density_pct: number; ndvi_score: number; timestamp: number; source: string }> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CUSTOM_SOURCE_FETCH_TIMEOUT_MS);
+
+  let response: Response;
+  try {
+    response = await fetch(`${fetchUrl}?projectId=${encodeURIComponent(String(projectId))}`, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!response.ok) {
+    throw new Error(`Custom source ${sourceName} returned HTTP ${response.status}`);
+  }
+
+  const body = (await response.json()) as {
+    forest_density_pct?: unknown;
+    ndvi_score?: unknown;
+  };
+
+  if (typeof body.forest_density_pct !== "number" || typeof body.ndvi_score !== "number") {
+    throw new Error(
+      `Custom source ${sourceName} returned an invalid response shape (expected numeric forest_density_pct and ndvi_score)`,
+    );
+  }
+
+  return {
+    forest_density_pct: body.forest_density_pct,
+    ndvi_score: body.ndvi_score,
+    timestamp: Date.now(),
+    source: sourceName,
+  };
+}
+
 /**
  * POST /v1/satellite-sources — register a custom data source adapter.
- * Body: { name, priority, fetchUrl } — fetchUrl is a placeholder for an external endpoint.
+ * Body: { name, priority, fetchUrl } — fetchUrl is the external endpoint
+ * queried (via `?projectId=<id>`) for live satellite readings.
  */
 router.post("/", (req: Request, res: Response) => {
   const { name, priority, fetchUrl } = req.body as {
@@ -61,24 +111,24 @@ router.post("/", (req: Request, res: Response) => {
     return res.status(400).json({ error: "name is required" });
   }
 
+  if (!fetchUrl || typeof fetchUrl !== "string") {
+    return res.status(400).json({ error: "fetchUrl is required" });
+  }
+
+  try {
+    // eslint-disable-next-line no-new
+    new URL(fetchUrl);
+  } catch {
+    return res.status(400).json({ error: "fetchUrl must be a valid URL" });
+  }
+
   const sourcePriority = typeof priority === "number" ? priority : 99;
 
   registerSource({
     name,
     priority: sourcePriority,
     enabled: true,
-    async fetch(projectId: number) {
-      if (fetchUrl) {
-        // Real adapter would call fetchUrl; for now return a placeholder
-        return {
-          forest_density_pct: 50,
-          ndvi_score: 0.5,
-          timestamp: Date.now(),
-          source: name,
-        };
-      }
-      throw new Error(`Custom source ${name} has no fetchUrl configured`);
-    },
+    fetch: (projectId: number) => fetchFromCustomUrl(fetchUrl, projectId, name),
   });
 
   res.status(201).json({ ok: true, name, priority: sourcePriority });

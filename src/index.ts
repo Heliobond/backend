@@ -91,6 +91,19 @@ if (!process.env.ADMIN_API_KEY) {
 const app = express();
 const PORT = env.PORT;
 
+// Trust proxy configuration — required for Express to parse X-Forwarded-For
+// via req.ip / req.ips.  Without this, ipWhitelist must hand-parse headers,
+// which is vulnerable to spoofing.
+//
+// TRUST_PROXY values:
+//  - "false"  (default) — no proxy; req.ip is the direct peer address
+//  - "true"            — trust all proxies (single hop)
+//  - "loopback"        — trust loopback (127.0.0.1/8, ::1) only
+//  - a CIDR or IP      — trust specific proxy IP(s)
+//  - a number N         — trust the first N hops in X-Forwarded-For
+const trustProxy = process.env.TRUST_PROXY || "false";
+app.set("trust proxy", trustProxy === "true" ? true : trustProxy);
+
 // Validate CORS origin
 function validateCorsOrigin(origin: string | undefined): string | undefined {
   if (!origin) return undefined;
@@ -253,28 +266,28 @@ v1.use(acceptVersion);
 
 v1.use("/iot", publicLimiter, iotRouter);
 v1.use("/admin", ipWhitelist, adminLimiter, requestSigning, adminRouter);
-v1.use("/admin/batch", ipWhitelist, adminLimiter, batchRouter);
+v1.use("/admin/batch", ipWhitelist, adminLimiter, requestSigning, batchRouter);
 v1.use("/projects", publicLimiter, projectsRouter);
 v1.use("/projects/:id/history", publicLimiter, historyRouter);
 v1.use("/projects/aggregate", publicLimiter, aggregateRouter);
 v1.use("/portfolio", publicLimiter, portfolioRouter);
-v1.use("/roles", ipWhitelist, adminLimiter, rolesRouter);
-v1.use("/webhooks", ipWhitelist, adminLimiter, webhooksRouter);
-v1.use("/panels", ipWhitelist, adminLimiter, panelsRouter);
-v1.use("/metadata", ipWhitelist, adminLimiter, metadataRouter);
+v1.use("/roles", ipWhitelist, adminLimiter, requestSigning, rolesRouter);
+v1.use("/webhooks", ipWhitelist, adminLimiter, requestSigning, webhooksRouter);
+v1.use("/panels", ipWhitelist, adminLimiter, requestSigning, panelsRouter);
+v1.use("/metadata", ipWhitelist, adminLimiter, requestSigning, metadataRouter);
 v1.use("/dashboard", publicLimiter, dashboardRouter);
-v1.use("/email", ipWhitelist, adminLimiter, emailRouter);
+v1.use("/email", ipWhitelist, adminLimiter, requestSigning, emailRouter);
 v1.use("/anomaly", publicLimiter, anomalyRouter);
-v1.use("/scoring/formulas", ipWhitelist, adminLimiter, scoringFormulasRouter);
-v1.use("/chains", ipWhitelist, adminLimiter, chainsRouter);
-v1.use("/satellite-sources", ipWhitelist, adminLimiter, satelliteSourcesRouter);
+v1.use("/scoring/formulas", ipWhitelist, adminLimiter, requestSigning, scoringFormulasRouter);
+v1.use("/chains", ipWhitelist, adminLimiter, requestSigning, chainsRouter);
+v1.use("/satellite-sources", ipWhitelist, adminLimiter, requestSigning, satelliteSourcesRouter);
 v1.use("/comparison", publicLimiter, comparisonRouter);
 v1.use("/benchmarking", publicLimiter, benchmarkingRouter);
 v1.use("/financial", publicLimiter, financialRouter);
 v1.use("/forecast", publicLimiter, forecastRouter);
 v1.use("/maintenance", publicLimiter, maintenanceRouter);
 v1.use("/investor", publicLimiter, investorRouter);
-v1.use("/admin/api-keys", ipWhitelist, adminLimiter, apiKeysRouter);
+v1.use("/admin/api-keys", ipWhitelist, adminLimiter, requestSigning, apiKeysRouter);
 
 app.use("/v1", v1);
 
@@ -496,7 +509,11 @@ app.get("/graphql-playground", (req, res) => {
 });
 
 // Start high-performance gRPC server
-startGrpcServer(50051);
+const grpcServer = startGrpcServer(50051);
+
+// Periodically clear cached secrets so a rotated/compromised upstream
+// secret doesn't stay cached indefinitely (gated on SECRETS_ROTATION_ENABLED).
+startSecretRotation();
 
 // ── Graceful shutdown (#57) ──────────────────────────────────────────────────
 // Track all scheduled cron tasks so we can stop them cleanly.
@@ -541,6 +558,30 @@ async function gracefulShutdown(signal: string): Promise<void> {
     } catch (err: any) {
       logger.error("[shutdown] pool drain error", { error: err?.message });
     }
+
+    // 4. Stop the secret rotation timer so it doesn't keep the process alive
+    // or fire after shutdown begins.
+    stopSecretRotation();
+
+    // 5. Gracefully stop the gRPC server, letting in-flight/streaming RPCs
+    // (e.g. StreamProjectScores) drain instead of being killed mid-stream.
+    logger.info("[shutdown] draining gRPC server…");
+    await new Promise<void>((resolve) => {
+      const forceTimer = setTimeout(() => {
+        logger.warn("[shutdown] gRPC drain timed out, forcing shutdown");
+        grpcServer.forceShutdown();
+        resolve();
+      }, shutdownTimeoutMs);
+      grpcServer.tryShutdown((err) => {
+        clearTimeout(forceTimer);
+        if (err) {
+          logger.error("[shutdown] gRPC shutdown error", { error: err.message });
+        } else {
+          logger.info("[shutdown] gRPC server stopped");
+        }
+        resolve();
+      });
+    });
 
     logger.info("[shutdown] clean exit");
     process.exit(0);
