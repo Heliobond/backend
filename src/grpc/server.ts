@@ -128,6 +128,12 @@ function streamProjectScores(call: grpc.ServerWritableStream<any, any>) {
   call.on("cancelled", () => {
     scoreEvents.off(SCORE_UPDATE_EVENT, listener);
   });
+  call.on("close", () => {
+    scoreEvents.off(SCORE_UPDATE_EVENT, listener);
+  });
+  call.on("error", () => {
+    scoreEvents.off(SCORE_UPDATE_EVENT, listener);
+  });
 }
 
 // Bidirectional streaming handler
@@ -139,6 +145,8 @@ function chatProjectScores(call: grpc.ServerDuplexStream<any, any>) {
     call.destroy(err);
     return;
   }
+
+  call.on("error", () => {});
 
   call.on("data", async (request) => {
     try {

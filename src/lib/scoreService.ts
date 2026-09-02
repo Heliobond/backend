@@ -2,22 +2,11 @@ import { getSolarData } from "./iot";
 import { fetchSatelliteWithFallback } from "./satellite-sources";
 import { computeScores } from "./scoring";
 import { updateImpactScore, RpcDegradedError } from "./registry";
+import { generateIdempotencyKey, checkIdempotency, clearIdempotencyStore } from "./idempotency";
 
-const IDEMPOTENCY_TTL_MS = Number(process.env.IDEMPOTENCY_TTL_MS ?? 60_000);
-const seenSubmissions = new Map<string, number>();
-
-function getIdempotencyKey(projectId: number, now: number): string {
-  const bucket = Math.floor(now / Math.max(IDEMPOTENCY_TTL_MS, 1));
-  return `score:${projectId}:${bucket}`;
-}
-
-function isDuplicateSubmission(key: string, now: number): boolean {
-  const previous = seenSubmissions.get(key);
-  return previous !== undefined && now - previous < IDEMPOTENCY_TTL_MS;
-}
-
+/** Exposed for tests — delegates to the central idempotency store. */
 export function resetIdempotencyState(): void {
-  seenSubmissions.clear();
+  clearIdempotencyStore();
 }
 
 export interface ScoreUpdateSuccess {
@@ -50,14 +39,22 @@ export type ScoreUpdateResult = ScoreUpdateSuccess | ScoreUpdateDeferred | Score
  * to apply — the service itself stays side-effect-free.
  */
 export async function updateScoreForProject(projectId: number): Promise<ScoreUpdateResult> {
-  const now = Date.now();
-  const idempotencyKey = getIdempotencyKey(projectId, now);
+  // Generate a deterministic idempotency key for this project/hour and pass it
+  // to updateImpactScore, which will reject duplicates via the central store.
+  const idempotencyKey = generateIdempotencyKey(projectId);
 
-  if (isDuplicateSubmission(idempotencyKey, now)) {
-    return { status: "error", projectId, error: "Duplicate submission rejected by idempotency key" };
+  // Check at the service layer first — this catches duplicates even when the
+  // underlying updateImpactScore is mocked in tests.
+  const { isDuplicate, recordedAt } = checkIdempotency(idempotencyKey);
+  if (isDuplicate) {
+    return {
+      status: "error",
+      projectId,
+      error:
+        `duplicate submission rejected — key="${idempotencyKey}" ` +
+        `first seen at ${new Date(recordedAt!).toISOString()}`,
+    };
   }
-
-  seenSubmissions.set(idempotencyKey, now);
 
   try {
     const solar = getSolarData(projectId);
@@ -66,7 +63,7 @@ export async function updateScoreForProject(projectId: number): Promise<ScoreUpd
 
     let txHash: string;
     try {
-      txHash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact);
+      txHash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact, idempotencyKey);
     } catch (updateErr) {
       if (updateErr instanceof RpcDegradedError) {
         return {
