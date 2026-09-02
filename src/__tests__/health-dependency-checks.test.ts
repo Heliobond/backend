@@ -3,7 +3,7 @@ import express from "express";
 
 jest.mock("../lib/stellar", () => ({
   rpcPool: {
-    getMetrics: jest.fn(() => ({ active: 1, idle: 2, total: 3, waitingQueue: 0 })),
+    getMetrics: jest.fn(() => ({ active: 1, idle: 2, total: 3, healthy: 3, waitingQueue: 0 })),
     shutdown: jest.fn(),
   },
   rpcBreaker: {
@@ -42,6 +42,7 @@ describe("health endpoint dependency checks (#277)", () => {
       active: 1,
       idle: 2,
       total: 3,
+      healthy: 3,
       waitingQueue: 0,
     });
     (stellar.rpcBreaker.getMetrics as jest.Mock).mockReturnValue({
@@ -124,6 +125,19 @@ describe("health endpoint dependency checks (#277)", () => {
       const readiness = getReadiness();
       expect(readiness.status).toBe("not_ready");
       expect(readiness.checks.rpc_circuit).toBe(false);
+    });
+
+    it("returns not_ready when the RPC connection pool has no healthy connections", () => {
+      (stellar.rpcPool.getMetrics as jest.Mock).mockReturnValue({
+        active: 0,
+        idle: 0,
+        total: 2,
+        healthy: 0,
+        waitingQueue: 0,
+      });
+      const readiness = getReadiness();
+      expect(readiness.status).toBe("not_ready");
+      expect(readiness.checks.database).toBe(false);
     });
 
     it("returns not_ready when satellite has consecutive failures", () => {

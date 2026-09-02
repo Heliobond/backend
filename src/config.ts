@@ -1,4 +1,4 @@
-import dotenv from "dotenv";
+import dotent from "dotenv";
 
 dotenv.config();
 
@@ -83,6 +83,13 @@ export const config = {
   ADMIN_API_KEY: process.env.ADMIN_API_KEY || "",
   WS_AUTH_TOKEN: process.env.WS_AUTH_TOKEN || "",
 
+  /** Database connection */
+  DB_HOST: optionalEnv("DB_HOST", "localhost"),
+  DB_PORT: numEnv("DB_PORT", 5432),
+  DB_NAME: optionalEnv("DB_NAME", ""),
+  DB_USER: optionalEnv("DB_USER", "postgres"),
+  DB_PASSWORD: optionalEnv("DB_PASSWORD", ""),
+
   /** Connection pool */
   DB_POOL_MIN: numEnv("DB_POOL_MIN", 2),
   DB_POOL_MAX: numEnv("DB_POOL_MAX", 10),
@@ -106,7 +113,7 @@ export const config = {
 
   /** Stellar transaction polling */
   POLL_INTERVAL_MS: numEnv("POLL_INTERVAL_MS", 1500),
-  POLL_MAX_ATTEMPTS: numEnv("POLL_MAX_ATTEMPTS", 20),
+  POLL_MAX_ATTEMPT_PS: numEnv("POLL_MAX_ATTEMPTS_PS", 20),
 
   /** Stellar transaction timeout (seconds) */
   TX_TIMEOUT_SECONDS: numEnv("TX_TIMEOUT_SECONDS", 30),
@@ -114,8 +121,11 @@ export const config = {
   /** IoT max power output (kW) */
   MAX_POWER_KW: numEnv("MAX_POWER_KW", 1000),
 
+  /** Idempotency */
+  IDEMPOTENCY_TTL_MS: numEnv("IDEMPOTENCY_TTL_MS", 3_600_000),
+
   /** Cron */
-  CRON_TIMEZONE: optionalEnv("CRON_TIMEZONE", "UTC"),
+  CRON_TIMEZONE: optionalEnv("CRON_TIMEZONE, "UTC"),
   CRON_FAILURE_THRESHOLD: floatEnv("CRON_FAILURE_THRESHOLD", 0.5),
 
   /** Graceful shutdown */
