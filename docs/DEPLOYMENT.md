@@ -82,6 +82,8 @@ Three workflows, each with a distinct job:
 | `ci.yml`      | push to `main`, PRs to `main`     | build, test, dependency audit |
 | `release.yml` | push to `main`, manual dispatch   | version, changelog, git tag   |
 | `deploy.yml`  | push to `main`, release, tag `v*` | build image, push, deploy     |
+| `load-test.yml` | schedule (`0 2 * * *`) & manual dispatch | k6 load testing scenarios |
+| `security-audit.yml` | schedule (`0 6 * * 1`) & manual dispatch | dependency audit, code scan, secret detection, license compliance |
 
 ### What triggers which environment
 
