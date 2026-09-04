@@ -63,6 +63,29 @@ router.use((req: Request, res: Response, next: NextFunction) => {
   }
   next();
 });
+
+// Timestamp expiration validation (Issue #545)
+router.use((req: Request, res: Response, next: NextFunction) => {
+  const timestampHeader = req.header("x-request-timestamp");
+  if (!timestampHeader) {
+    logger.warn("[admin] Missing X-Request-Timestamp header");
+    return res.status(401).json(errorBody("unauthorized", "Missing X-Request-Timestamp header"));
+  }
+
+  const clientTime = parseInt(timestampHeader, 10);
+  if (isNaN(clientTime)) {
+    logger.warn("[admin] Invalid X-Request-Timestamp header format");
+    return res.status(401).json(errorBody("unauthorized", "Invalid timestamp format"));
+  }
+
+  const ageMs = Math.abs(Date.now() - clientTime);
+  if (ageMs > config.ADMIN_REQUEST_MAX_AGE_MS) {
+    logger.warn(`[admin] Request expired. Age: ${ageMs}ms, Max allowed: ${config.ADMIN_REQUEST_MAX_AGE_MS}ms`);
+    return res.status(401).json(errorBody("unauthorized", "Request expired"));
+  }
+
+  next();
+});
 // Apply role-based API key authentication to all admin routes
 router.use(extractApiKeyRole);
 router.use(requireApiKeyAuth);
