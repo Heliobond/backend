@@ -84,6 +84,7 @@ export const config = {
   PORT: numEnv("PORT", 3001),
   FRONTEND_URL: optionalEnv("FRONTEND_URL", "http://localhost:3000"),
   ADMIN_API_KEY: process.env.ADMIN_API_KEY || "",
+  ADMIN_REQUEST_MAX_AGE_MS: numEnv("ADMIN_REQUEST_MAX_AGE_MS", 300000),
   INITIAL_ADMIN_USER_ID: process.env.INITIAL_ADMIN_USER_ID || "",
   WS_AUTH_TOKEN: process.env.WS_AUTH_TOKEN || "",
 
