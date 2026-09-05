@@ -125,7 +125,7 @@ function parseProjectIds(body: unknown): number[] | null {
     }
     projectIds.push(entry);
   }
-  if (!raw.every((n) => (n as number) <= MAX_PROJECT_ID)) {
+  if (!projectIds.every((n) => n <= MAX_PROJECT_ID)) {
     throw badRequest(`project_ids must not exceed maximum project id ${MAX_PROJECT_ID}`);
   }
   return projectIds;

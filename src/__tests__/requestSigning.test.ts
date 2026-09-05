@@ -212,4 +212,22 @@ describe("requestSigning middleware", () => {
 
     expect(next).toHaveBeenCalled();
   });
+
+  describe("startup check", () => {
+    it("warns when REQUEST_SIGNING_SECRET is not configured", () => {
+      const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+      delete process.env.REQUEST_SIGNING_SECRET;
+
+      if (!process.env.REQUEST_SIGNING_SECRET) {
+        console.warn(
+          "[startup] WARNING: REQUEST_SIGNING_SECRET is not set. Admin request signing verification will be skipped.",
+        );
+      }
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("[startup] WARNING: REQUEST_SIGNING_SECRET is not set"),
+      );
+      warnSpy.mockRestore();
+    });
+  });
 });

@@ -13,7 +13,6 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v5
 
@@ -23,7 +22,28 @@ jobs:
           bun-version: "1.x"
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: |
+          if [ -f bun.lock ]; then
+            bun install --frozen-lockfile
+          else
+            bun install
+          fi
+
+      - name: Check lockfiles are in sync
+        run: |
+          echo "Checking that package-lock.json is in sync with package.json (bun.lock is canonical)..."
+          if [ -f package-lock.json ]; then
+            cp package-lock.json package-lock.json.orig
+            npm install --package-lock-only --ignore-scripts
+            if ! diff -q package-lock.json package-lock.json.orig >/dev/null 2>&1; then
+              echo "::error::package-lock.json is out of sync with package.json. Run 'npm install' locally after any 'bun add / bun update' and commit the updated lockfile."
+              diff -u package-lock.json.orig package-lock.json | head -n 200 || true
+              mv package-lock.json.orig package-lock.json
+              exit 1
+            fi
+            echo "package-lock.json is in sync."
+            rm package-lock.json.orig
+          fi
 
       - name: Check for insecure TLS configuration
         run: |
@@ -58,7 +78,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Initialize CodeQL
+      - name: Initialize CodeQL 
         uses: github/codeql-action/init@v3
         with:
           languages: javascript
