@@ -97,7 +97,10 @@ export function portfolioSummary(scores: ProjectScore[]): PortfolioSummary {
 }
 
 /** Top and bottom `n` performers by combined credit + green score. */
-export function rankPerformers(scores: ProjectScore[], n = 5): { top: Performer[]; bottom: Performer[] } {
+export function rankPerformers(
+  scores: ProjectScore[],
+  n = 5,
+): { top: Performer[]; bottom: Performer[] } {
   const mapped: Performer[] = scores.map((s) => ({
     id: s.id,
     credit_quality: s.credit_quality,
@@ -105,8 +108,14 @@ export function rankPerformers(scores: ProjectScore[], n = 5): { top: Performer[
     combined_score: combined(s),
   }));
   const sorted = [...mapped].sort((a, b) => b.combined_score - a.combined_score);
-  const top = sorted.slice(0, n);
-  const bottom = sorted.slice(-n).reverse();
+  // Cap n so the top and bottom slices can never overlap: with fewer than 2*n
+  // distinct projects the two slices would share entries. The middle project of
+  // an odd-length list is excluded from both. When there are fewer than 2
+  // projects, both lists are empty.
+  const safeN = Math.max(0, Math.min(n, Math.floor(sorted.length / 2)));
+  const top = sorted.slice(0, safeN);
+  // Note: slice(-0) is slice(0) in JS, so guard the empty case explicitly.
+  const bottom = safeN === 0 ? [] : sorted.slice(-safeN).reverse();
   return { top, bottom };
 }
 
@@ -132,16 +141,26 @@ export function scoreDistribution(
 }
 
 /** Time-series of a single project's scores, oldest first. */
-export function projectTimeSeries(projectId: number, from?: number, to?: number): TimeSeriesPoint[] {
+export function projectTimeSeries(
+  projectId: number,
+  from?: number,
+  to?: number,
+): TimeSeriesPoint[] {
   const entries: ScoreEntry[] = getHistory(projectId, from, to);
   return entries
     .sort((a, b) => a.timestamp - b.timestamp)
-    .map((e) => ({ timestamp: e.timestamp, credit_quality: e.credit_quality, green_impact: e.green_impact }));
+    .map((e) => ({
+      timestamp: e.timestamp,
+      credit_quality: e.credit_quality,
+      green_impact: e.green_impact,
+    }));
 }
 
 /** Flatten a portfolio summary + performers into CSV for export. */
 export function summaryToCsv(scores: ProjectScore[]): string {
   const header = "project_id,credit_quality,green_impact,power_output_kw,combined_score";
-  const rows = scores.map((s) => `${s.id},${s.credit_quality},${s.green_impact},${s.power_output_kw},${combined(s)}`);
+  const rows = scores.map(
+    (s) => `${s.id},${s.credit_quality},${s.green_impact},${s.power_output_kw},${combined(s)}`,
+  );
   return [header, ...rows].join("\n") + "\n";
 }

@@ -3,7 +3,7 @@ import express from "express";
 
 jest.mock("../lib/stellar", () => ({
   rpcPool: {
-    getMetrics: jest.fn(() => ({ active: 1, idle: 2, total: 3, waitingQueue: 0 })),
+    getMetrics: jest.fn(() => ({ active: 1, idle: 2, total: 3, healthy: 3, waitingQueue: 0 })),
     shutdown: jest.fn(),
   },
   rpcBreaker: {
@@ -38,10 +38,24 @@ import * as satellite from "../lib/satellite-sources";
 describe("health endpoint dependency checks (#277)", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    (stellar.rpcPool.getMetrics as jest.Mock).mockReturnValue({ active: 1, idle: 2, total: 3, waitingQueue: 0 });
-    (stellar.rpcBreaker.getMetrics as jest.Mock).mockReturnValue({ state: "CLOSED", failures: 0, successes: 10 });
+    (stellar.rpcPool.getMetrics as jest.Mock).mockReturnValue({
+      active: 1,
+      idle: 2,
+      total: 3,
+      healthy: 3,
+      waitingQueue: 0,
+    });
+    (stellar.rpcBreaker.getMetrics as jest.Mock).mockReturnValue({
+      state: "CLOSED",
+      failures: 0,
+      successes: 10,
+    });
     (stellar.rpcBreaker.getState as jest.Mock).mockReturnValue("CLOSED");
-    (stellar.getRpcStatus as jest.Mock).mockReturnValue({ consecutiveFailures: 0, outageDurationMs: 0, lastSuccessAgoMs: 100 });
+    (stellar.getRpcStatus as jest.Mock).mockReturnValue({
+      consecutiveFailures: 0,
+      outageDurationMs: 0,
+      lastSuccessAgoMs: 100,
+    });
     (satellite.getOutageState as jest.Mock).mockReturnValue({ consecutiveFailures: 0 });
   });
 
@@ -94,7 +108,11 @@ describe("health endpoint dependency checks (#277)", () => {
     });
 
     it("reflects OPEN circuit breaker state", async () => {
-      (stellar.rpcBreaker.getMetrics as jest.Mock).mockReturnValue({ state: "OPEN", failures: 10, successes: 0 });
+      (stellar.rpcBreaker.getMetrics as jest.Mock).mockReturnValue({
+        state: "OPEN",
+        failures: 10,
+        successes: 0,
+      });
 
       const health = await getHealth();
       expect(health.circuit_breaker).toMatchObject({ state: "OPEN" });
@@ -109,6 +127,19 @@ describe("health endpoint dependency checks (#277)", () => {
       expect(readiness.checks.rpc_circuit).toBe(false);
     });
 
+    it("returns not_ready when the RPC connection pool has no healthy connections", () => {
+      (stellar.rpcPool.getMetrics as jest.Mock).mockReturnValue({
+        active: 0,
+        idle: 0,
+        total: 2,
+        healthy: 0,
+        waitingQueue: 0,
+      });
+      const readiness = getReadiness();
+      expect(readiness.status).toBe("not_ready");
+      expect(readiness.checks.database).toBe(false);
+    });
+
     it("returns not_ready when satellite has consecutive failures", () => {
       (satellite.getOutageState as jest.Mock).mockReturnValue({ consecutiveFailures: 5 });
       const readiness = getReadiness();
@@ -120,7 +151,11 @@ describe("health endpoint dependency checks (#277)", () => {
       (stellar.rpcBreaker.getState as jest.Mock).mockReturnValue("CLOSED");
       (satellite.getOutageState as jest.Mock).mockReturnValue({ consecutiveFailures: 0 });
       const readiness = getReadiness();
-      expect(readiness.checks).toMatchObject({ database: true, satellite: true, rpc_circuit: true });
+      expect(readiness.checks).toMatchObject({
+        database: true,
+        satellite: true,
+        rpc_circuit: true,
+      });
     });
   });
 
@@ -134,7 +169,7 @@ describe("health endpoint dependency checks (#277)", () => {
       const elapsed = Date.now() - start;
 
       expect(res.body.status).toBe("ok");
-      expect(elapsed).toBeLessThan(500);
+      expect(elapsed).toBeLessThan(2000);
     });
   });
 

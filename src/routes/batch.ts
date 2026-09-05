@@ -4,10 +4,10 @@ import { recordScoreHistory } from "../lib/history";
 import { triggerWebhooks } from "../lib/webhooks";
 import { getSolarData, getSatelliteData } from "./iot";
 import { computeScores } from "../lib/scoring";
-import { updateImpactScore, RpcDegradedError, getTotalProjects } from "../lib/registry";
-import { withProjectLock } from "../lib/request-queue";
-import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
+import { updateImpactScore, getTotalProjects, RpcDegradedError } from "../lib/registry";
 import { badRequest, MAX_PROJECT_ID } from "../middleware/errors";
+import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
+import { withProjectLock } from "../lib/request-queue";
 
 const router = Router();
 
@@ -51,7 +51,7 @@ router.post("/score-update", async (req: Request, res: Response) => {
   // Fire-and-forget — caller polls /status
   runJob(job, async (projectId) => {
     return withProjectLock(projectId, async () => {
-      const { allowed, key, reason } = tryBeginUpdate(projectId);
+      const { allowed, reason } = tryBeginUpdate(projectId);
       if (!allowed) {
         return { project_id: projectId, skipped: true, skip_reason: reason };
       }
