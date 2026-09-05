@@ -19,7 +19,7 @@ const authHeader = { Authorization: `Bearer ${ADMIN_API_KEY}` };
 function buildApp(): Express {
   const app = express();
   app.use(express.json());
-  app.get("/health", (_req, res) => res.json(getHealth()));
+  app.get("/health", async (_req, res) => res.json(await getHealth()));
   app.use("/api/iot", iotRouter);
   app.use("/api/admin", adminRouter);
   app.use(notFoundHandler);
@@ -31,15 +31,11 @@ describe("HTTP integration", () => {
   let app: Express;
 
   beforeEach(() => {
-    app = buildApp();
     process.env.ADMIN_API_KEY = ADMIN_API_KEY;
+    app = buildApp();
     jest.clearAllMocks();
     (registry.updateImpactScore as jest.Mock).mockResolvedValue("tx-hash");
     (registry.getTotalProjects as jest.Mock).mockResolvedValue(2);
-  });
-
-  afterEach(() => {
-    delete process.env.ADMIN_API_KEY;
   });
 
   describe("GET /health", () => {

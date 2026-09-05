@@ -1,0 +1,1 @@
+import * as tracer from'../lib/tracer';test('tracer functions work',()=>{expect(Array.isArray(tracer.getTraces())).toBe(true);expect(tracer.getTraceSummary('missing')).toBeUndefined();});

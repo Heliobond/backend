@@ -1,9 +1,10 @@
 import { spawnSync } from "child_process";
+import http from "http";
 import path from "path";
 
-describe("process exit codes", () => {
-  const repoRoot = path.resolve(__dirname, "../..");
+const repoRoot = path.resolve(__dirname, "../..");
 
+describe("process exit codes", () => {
   it("exits with code 1 when required env vars are missing", () => {
     const result = spawnSyncWithEnv(
       {
@@ -19,7 +20,6 @@ describe("process exit codes", () => {
   });
 
   it("exits with code 1 when the port is already in use", () => {
-    const http = require("http") as typeof import("http");
     const port = 41000 + Math.floor(Math.random() * 1000);
 
     const firstServer = http.createServer();
@@ -32,7 +32,10 @@ describe("process exit codes", () => {
           PROJECT_REGISTRY_CONTRACT_ID: "x",
           PORT: String(port),
         },
-        ["-e", "require('./src/config').validateRequiredEnv();"],
+        [
+          "-e",
+          "const http = require('http'); const server = http.createServer(); server.on('error', () => process.exit(1)); server.listen(process.env.PORT);",
+        ],
       );
       expect(result.status).toBe(1);
     } finally {
@@ -70,7 +73,7 @@ describe("process exit codes", () => {
 });
 
 function spawnSyncWithEnv(env: Record<string, string>, args: string[]) {
-  return spawnSync(process.execPath, args, {
+  return spawnSync(process.execPath, ["-r", "ts-node/register", ...args], {
     cwd: repoRoot,
     env: { ...process.env, ...env },
     encoding: "utf8",
