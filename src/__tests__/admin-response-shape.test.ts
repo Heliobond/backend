@@ -5,7 +5,9 @@ import { errorHandler } from "../middleware/errors";
 import * as registry from "../lib/registry";
 import * as iot from "../routes/iot";
 import * as scoring from "../lib/scoring";
-import { resetIdempotencyState } from "../lib/scoreService";
+import { resetIdempotencyState } from "../lib/idempotency";
+import { extractApiKeyRole } from "../middleware/requireApiKeyRole";
+import { loadApiKeysFromEnv } from "../lib/apiKeyRoles";
 
 jest.mock("../lib/registry", () => ({
   updateImpactScore: jest.fn(),
@@ -17,6 +19,7 @@ jest.mock("../lib/scoring");
 function buildApp(): Express {
   const app = express();
   app.use(express.json());
+  app.use(extractApiKeyRole);
   app.use("/api/admin", adminRouter);
   app.use(errorHandler);
   return app;
@@ -29,6 +32,7 @@ describe("admin /update-scores response shape", () => {
 
   beforeEach(() => {
     process.env.ADMIN_API_KEY = "test-key";
+    loadApiKeysFromEnv();
     resetIdempotencyState();
     app = buildApp();
     jest.clearAllMocks();
