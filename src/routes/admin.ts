@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { getTotalProjects } from "../lib/registry";
 import { badRequest, parseOptionalInt, MAX_PROJECT_ID, errorBody } from "../middleware/errors";
-import { getTotalProjects } from "../lib/registry";
+import { timingSafeCompare } from "../lib/timing-safe";
 import { recordAudit, getAuditLog, auditToCsv } from "../lib/audit";
 import { broadcastScoreUpdate } from "../lib/websocket";
 import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
@@ -145,19 +145,6 @@ router.post(
         projectIds = Array.from({ length: total }, (_, i) => i + 1);
       }
 
-    const results: ScoreUpdateResult[] = [];
-    const errors: Array<{ project_id: number; error: { code: string; message: string } }> = [];
-    const skipped: Array<{ project_id: number; reason: string }> = [];
-
-    for (const projectId of projectIds) {
-      try {
-        const result = await withProjectLock<ProjectUpdateOutcome>(projectId, async () => {
-          const { allowed, reason } = tryBeginUpdate(projectId);
-          if (!allowed) {
-            return { skipped: true, reason };
-          }
-          try {
-            const scoreResult = await updateScoreForProject(projectId);
       const results: ScoreUpdateResult[] = [];
       const errors: Array<{ project_id: number; error: { code: string; message: string } }> = [];
       const skipped: Array<{ project_id: number; reason: string }> = [];
@@ -231,8 +218,6 @@ router.post(
             skipped.push({ project_id: projectId, reason: result.reason });
             logger.info(`[oracle] skipping project ${projectId}: ${result.reason}`);
           } else {
-            // Rebuilt field by field so the internal `skipped` discriminant does
-            // not leak into the response body.
             results.push({
               project_id: result.project_id,
               tx_hash: result.tx_hash,
@@ -240,17 +225,6 @@ router.post(
               green_impact: result.green_impact,
             });
           }
-        });
-
-        if (result.skipped) {
-          skipped.push({ project_id: projectId, reason: result.reason });
-          logger.info(`[oracle] skipping project ${projectId}: ${result.reason}`);
-        } else {
-          results.push({
-            project_id: result.project_id,
-            tx_hash: result.tx_hash,
-            credit_quality: result.credit_quality,
-            green_impact: result.green_impact,
         } catch (err) {
           logger.error(`[oracle] project ${projectId} failed`, logger.formatError(err));
           errors.push({
@@ -263,11 +237,6 @@ router.post(
         }
       }
 
-    res.json({ updated: results.length, results, errors, skipped });
-  } catch (error) {
-    next(error);
-  }
-});
       res.json({ updated: results.length, results, errors, skipped });
     } catch (error) {
       // Forward to errorHandler: ApiError → its .status (e.g. 400 for bad input),

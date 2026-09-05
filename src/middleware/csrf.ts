@@ -3,7 +3,6 @@ import { Request, Response, NextFunction } from "express";
 
 const CSRF_TOKEN_LENGTH = 32;
 const CSRF_TOKEN_EXPIRY_MS = 60 * 60 * 1000;
-const SYSSESION_COOKIE_NAME = "CSRF-SESSION";
 
 interface CsrfTokenEntry {
   token: string;
@@ -16,17 +15,6 @@ function generateToken(): string {
   return crypto.randomBytes(CSRF_TOKEN_LENGTH).toString("hex");
 }
 
-function generateSessionId(): string {
-  return crypto.randomBytes(16).toString("hex");
-}
-
-function timingSafeCompare(a: string, b: string): boolean {
-  const aBuf = Buffer.from(a);
-  const bBuf = Buffer.from(b);
-  if (aBuf.length !== bBuf.length) return false;
-  return crypto.timingSafeEqual(aBuf, bBuf);
-}
-
 function cleanExpiredTokens(): void {
   const now = Date.now();
   for (const [key, entry] of tokenStore) {
@@ -36,48 +24,31 @@ function cleanExpiredTokens(): void {
   }
 }
 
-function getCookieOptions() {
-  const isProduction = process.env.NODE_ENV === "production";
-  return {
-    secure: isProduction,
-    sameSite: isProduction ? "strict" : "lax",
-  };
-}
-
-function getSessionId(req: Request): string | undefined {
-  return req.cookies?[SESSION_COOKIE_NAME] as string | undefined;
+function getClientIdentifier(req: Request): string {
+  const ip = req.ip || req.socket.remoteAddress || "unknown";
+  const userAgent = req.headers["user-agent"] || "unknown";
+  return `${ip}:${userAgent}`;
 }
 
 export function generateCsrfToken(req: Request, res: Response): string {
   cleanExpiredTokens();
-
-  let sessionId = getSessionId(req);
-  if (!sessionId) {
-    sessionId = generateSessionId();
-    const opts = getCookieOptions();
-    res.cookie(SESSION_COOKIE_NAME, sessionId, {
-      ...opts,
-      httpOnly: true,
-      path: "/",
-    });
-  }
-
-  const existing = tokenStore.get(sessionId);
+  const identifier = getClientIdentifier(req);
+  const existing = tokenStore.get(identifier);
   if (existing && Date.now() - existing.createdAt < CSRF_TOKEN_EXPIRY_MS) {
     return existing.token;
   }
-
   const token = generateToken();
-  tokenStore.set(sessionId, { token, createdAt: Date.now() });
+  tokenStore.set(identifier, { token, createdAt: Date.now() });
   return token;
 }
 
 export function setCsrfCookie(req: Request, res: Response): void {
   const token = generateCsrfToken(req, res);
-  const opts = getCookieOptions();
+  const isProduction = process.env.NODE_ENV === "production";
   res.cookie("XSRF-TOKEN", token, {
-    ...opts,
     httpOnly: false,
+    secure: isProduction,
+    sameSite: isProduction ? "strict" : "lax",
     path: "/",
   });
 }
@@ -92,37 +63,21 @@ export function csrfProtection(req: Request, res: Response, next: NextFunction):
   const headerToken =
     req.headers["x-csrf-token"] as string | undefined ||
     req.headers["x-xsrf-token"] as string | undefined;
-  const cookieToken = req.cookies?["XSRF-TOKEN"] as string | undefined;
+  const cookieToken = req.cookies?.["XSRF-TOKEN"];
   const bodyToken = (req.body as Record<string, unknown>)?._csrf as string | undefined;
 
   const token = headerToken || bodyToken;
   if (!token) {
     res.status(403).json({
       error: "csrf_token_missing",
-      message: "CSRF Token is required for this request",
+      message: "CSRF token is required for this request",
     });
     return;
   }
 
-  if (!cookieToken || !timingSafeCompare(token, cookieToken)) {
-    res.status(403).json({
-      error: "csrf_token_invalid",
-      message: "CSRF token does not match the cookie token",
-    });
-    return;
-  }
-
-  const sessionId = getSessionId(req);
-  if (!sessionId) {
-    res.status(403).json({
-      error: "csrf_token_invalid",
-      message: "CSRF session is missing",
-    });
-    return;
-  }
-
-  const stored = tokenStore.get(sessionId);
-  if (!stored || !timingSafeCompare(stored.token, token)) {
+  const identifier = getClientIdentifier(req);
+  const stored = tokenStore.get(identifier);
+  if (!stored || stored.token !== token) {
     res.status(403).json({
       error: "csrf_token_invalid",
       message: "CSRF token is invalid or expired",
@@ -131,7 +86,7 @@ export function csrfProtection(req: Request, res: Response, next: NextFunction):
   }
 
   if (Date.now() - stored.createdAt > CSRF_TOKEN_EXPIRY_MS) {
-    tokenStore.delete(sessionId);
+    tokenStore.delete(identifier);
     res.status(403).json({
       error: "csrf_token_expired",
       message: "CSRF token has expired",
