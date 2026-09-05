@@ -118,8 +118,8 @@ async function main(): Promise<void> {
         console.error("Usage: migrate <up|down|down:all|status|make|validate> [name]");
         process.exit(1);
     }
-  } catch (err: any) {
-    console.error(`Error: ${err.message}`);
+  } catch (err) {
+    console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
 }

@@ -4,17 +4,17 @@ interface LockEntry {
   timestamp: number;
 }
 
-const activeLocks = new Map<any, LockEntry>();
-
-export function resetDuplicateDetectionLocks(): void {
-  activeLocks.clear();
-}
+const activeLocks = new Map<number | string, LockEntry>();
 
 /**
  * Attempts to acquire a lock for updating the given ID.
  * Returns allowed: true if the lock was acquired, false if already locked.
  */
-export function tryBeginUpdate(id: any): { allowed: boolean; key: string; reason: string } {
+export function tryBeginUpdate(id: number | string): {
+  allowed: boolean;
+  key: string;
+  reason: string;
+} {
   const existing = activeLocks.get(id);
 
   if (existing) {
@@ -40,7 +40,7 @@ export function tryBeginUpdate(id: any): { allowed: boolean; key: string; reason
 /**
  * Releases the lock for the given ID after successful completion.
  */
-export function markCompleted(id: any): void {
+export function markCompleted(id: number | string): void {
   activeLocks.delete(id);
   logger.debug(`[duplicate-detection] Lock released for ${id} after successful completion`);
 }
@@ -48,7 +48,12 @@ export function markCompleted(id: any): void {
 /**
  * Releases the lock for the given ID after failure.
  */
-export function markFailed(id: any): void {
+export function markFailed(id: number | string): void {
   activeLocks.delete(id);
   logger.debug(`[duplicate-detection] Lock released for ${id} after failure`);
+}
+
+/** Clears all held locks. Intended for tests only. */
+export function resetLocks(): void {
+  activeLocks.clear();
 }

@@ -74,11 +74,7 @@ describe("request validation + structured errors", () => {
 describe("project id bounds", () => {
   const app = buildApp();
 
-  afterEach(() => {
-    delete process.env.MAX_PROJECT_ID;
-  });
-
-  it("defaults the upper bound to 1000000", () => {
+  it("defaults the upper bound to 100000", () => {
     expect(maxProjectId()).toBe(MAX_PROJECT_ID);
     expect(MAX_PROJECT_ID).toBe(100_000);
   });
@@ -88,12 +84,10 @@ describe("project id bounds", () => {
   });
 
   it("rejects an id one past the upper bound", () => {
-    expect(() => parseProjectId("100001", "project id")).toThrow(
-      /project id must be a positive integer not exceeding 100000/,
-    );
+    expect(() => parseProjectId("100001", "project id")).toThrow(/not exceeding 100000/);
   });
 
-  it.each(["1.5", "0.9", "-5", "+5", "1e6", " 7", "7 ", "0x10", "Infinity", "NaN"])(
+  it.each(["1.5", "0.9", "-5", "+5", "1e6", " 7", "7 ", "0x10", "Infinity", "NaN", "abc"])(
     "rejects %p as a project id",
     (raw) => {
       expect(() => parseProjectId(raw, "project id")).toThrow(/positive integer/);
@@ -102,7 +96,9 @@ describe("project id bounds", () => {
 
   it("returns 400 over HTTP for a very large id", async () => {
     const res = await request(app).get("/api/iot/solar/999999999999").expect(400);
-    expect(res.body.error.code).toBe("bad_request");
+    expect(res.body).toEqual({
+      error: { code: "bad_request", message: expect.stringContaining("not exceeding") },
+    });
   });
 
   it("returns 400 over HTTP for a float id", async () => {

@@ -75,8 +75,11 @@ async function fetchFromAws(key: string): Promise<string | undefined> {
       return undefined;
     }
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { SecretsManagerClient, GetSecretValueCommand } = require("@aws-sdk/client-secrets-manager");
+      const {
+        SecretsManagerClient,
+        GetSecretValueCommand,
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+      } = require("@aws-sdk/client-secrets-manager");
       const client = new SecretsManagerClient({ region: config.region });
       const command = new GetSecretValueCommand({
         SecretId: config.secretId,
@@ -88,12 +91,16 @@ async function fetchFromAws(key: string): Promise<string | undefined> {
         return secrets[key];
       }
       return undefined;
-    } catch (importErr: any) {
-      logger.warn("[secrets] AWS SDK not available, falling back to env", { error: importErr.message });
+    } catch (importErr) {
+      logger.warn("[secrets] AWS SDK not available, falling back to env", {
+        error: importErr instanceof Error ? importErr.message : String(importErr),
+      });
       return process.env[key];
     }
-  } catch (err: any) {
-    logger.error("[secrets] AWS Secrets Manager fetch failed", { error: err.message });
+  } catch (err) {
+    logger.error("[secrets] AWS Secrets Manager fetch failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return undefined;
   }
 }
@@ -114,10 +121,15 @@ async function fetchFromVault(key: string): Promise<string | undefined> {
       logger.error("[secrets] Vault fetch failed", { status: response.status });
       return undefined;
     }
-    const data: any = await response.json();
-    return data.data?.data?.[key] || data.data?.[key];
-  } catch (err: any) {
-    logger.error("[secrets] Vault fetch failed", { error: err.message });
+    const data = (await response.json()) as {
+      data?: { data?: Record<string, unknown> } & Record<string, unknown>;
+    };
+    const value = data.data?.data?.[key] || data.data?.[key];
+    return typeof value === "string" ? value : undefined;
+  } catch (err) {
+    logger.error("[secrets] Vault fetch failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return undefined;
   }
 }
@@ -146,21 +158,20 @@ async function fetchFromAzure(key: string): Promise<string | undefined> {
       logger.error("[secrets] Azure token fetch failed", { status: tokenResponse.status });
       return undefined;
     }
-    const tokenData: any = await tokenResponse.json();
-    const secretResponse = await fetch(
-      `${config.vaultUrl}/secrets/${key}?api-version=7.4`,
-      {
-        headers: { Authorization: `Bearer ${tokenData.access_token}` },
-      },
-    );
+    const tokenData = (await tokenResponse.json()) as { access_token?: string };
+    const secretResponse = await fetch(`${config.vaultUrl}/secrets/${key}?api-version=7.4`, {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+    });
     if (!secretResponse.ok) {
       logger.error("[secrets] Azure secret fetch failed", { status: secretResponse.status });
       return undefined;
     }
-    const secretData: any = await secretResponse.json();
+    const secretData = (await secretResponse.json()) as { value?: string };
     return secretData.value;
-  } catch (err: any) {
-    logger.error("[secrets] Azure Key Vault fetch failed", { error: err.message });
+  } catch (err) {
+    logger.error("[secrets] Azure Key Vault fetch failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return undefined;
   }
 }
@@ -229,8 +240,10 @@ export function startSecretRotation(): void {
   rotationTimer = setInterval(async () => {
     try {
       await rotateSecrets();
-    } catch (err: any) {
-      logger.error("[secrets] rotation failed", { error: err.message });
+    } catch (err) {
+      logger.error("[secrets] rotation failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }, config.rotation.intervalMs);
 

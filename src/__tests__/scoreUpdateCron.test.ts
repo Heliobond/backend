@@ -88,7 +88,6 @@ describe("runHourlyScoreUpdate (cron job execution flow)", () => {
   beforeEach(() => {
     resetIdempotencyState();
     jest.clearAllMocks();
-    resetIdempotencyState();
     clearIdempotencyStore(); // prevent key bleed between tests
     (getSolarData as jest.Mock).mockReturnValue({
       efficiency_pct: 85,

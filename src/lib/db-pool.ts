@@ -58,9 +58,7 @@ export class RpcConnectionPool {
     for (let i = 0; i < config.minConnections; i++) {
       this.add();
     }
-    if (process.env.NODE_ENV !== "test") {
-      this.scheduleHealthChecks();
-    }
+    this.scheduleHealthChecks();
   }
 
   private add(): PooledConnection {

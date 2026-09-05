@@ -15,12 +15,6 @@ if (!config.PROJECT_REGISTRY_CONTRACT_ID) {
 }
 const REGISTRY_CONTRACT_ID = config.PROJECT_REGISTRY_CONTRACT_ID;
 
-function isSimulationErrorResponse(
-  sim: rpc.Api.SimulateTransactionResponse,
-): sim is rpc.Api.SimulateTransactionErrorResponse {
-  return "error" in sim;
-}
-
 /**
  * Thrown when an idempotency key collision is detected — i.e. the same
  * project score update has already been submitted within IDEMPOTENCY_TTL_MS.
@@ -87,15 +81,20 @@ export async function getTotalProjects(): Promise<number> {
 
     const end = stellarRpcDuration.startTimer({ operation: "simulateTransaction" });
     try {
-      const sim = await client.simulateTransaction(tx);
-      if (isSimulationErrorResponse(sim)) throw new Error(sim.error);
-      const retval = sim.result?.retval;
+      const result = (await client.simulateTransaction(tx)) as {
+        error?: unknown;
+        result?: { retval?: unknown };
+      };
+      if (result.error) {
+        throw new Error(String(result.error));
+      }
+      const retval = result.result?.retval;
       if (retval === undefined) {
         throw new Error("total_projects simulation returned no result value");
       }
       end();
       stellarRpcTotal.inc({ operation: "simulateTransaction", result: "success" });
-      return Number(scValToNative(retval));
+      return Number(scValToNative(retval as any));
     } catch (err) {
       end();
       stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });

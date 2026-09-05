@@ -3,7 +3,11 @@
  * Prevents log spam when the same error fires repeatedly.
  */
 
-const WINDOW_MS = parseInt(process.env.ERROR_RATE_LIMIT_WINDOW_MS ?? "60000", 10);
+export const ERROR_RATE_LIMIT_WINDOW_MS = parseInt(
+  process.env.ERROR_RATE_LIMIT_WINDOW_MS ?? "60000",
+  10,
+);
+const WINDOW_MS = ERROR_RATE_LIMIT_WINDOW_MS;
 
 const seen = new Map<string, number>();
 

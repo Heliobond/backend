@@ -9,7 +9,7 @@ import {
 } from "../lib/multichain";
 import { parseProjectId } from "../middleware/errors";
 import { getSolarData, getSatelliteData } from "./iot";
-import { computeScores from "../lib/scoring";
+import { computeScores } from "../lib/scoring";
 
 const router = Router();
 
@@ -53,7 +53,9 @@ router.post("/broadcast/:projectId", async (req: Request, res: Response, next: N
     // fabricating a fake transaction hash.
     const targetChains = (chains ?? getEnabledChains().map((c) => c.id)) as ChainId[];
     if (targetChains.some((id) => id !== "stellar")) {
-      return res.status(501).json({ error: "EVM chain submission not implemented; only Stellar is currently supported." });
+      return res.status(501).json({
+        error: "EVM chain submission not implemented; only Stellar is currently supported.",
+      });
     }
 
     const solar = getSolarData(projectId);

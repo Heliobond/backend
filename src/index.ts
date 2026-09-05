@@ -34,8 +34,7 @@ import { getSolarData } from "./lib/iot";
 import { assignRole } from "./lib/roles";
 import { fetchSatelliteWithFallback } from "./lib/satellite-sources";
 import { computeScores } from "./lib/scoring";
-import { getTotalProjects, updateImpactScore } from "./lib/registry";
-import { updateImpactScore, DuplicateSubmissionError } from "./lib/registry";
+import { getTotalProjects, updateImpactScore, DuplicateSubmissionError } from "./lib/registry";
 import { generateIdempotencyKey, checkIdempotency } from "./lib/idempotency";
 import { runHourlyScoreUpdate } from "./lib/scoreUpdateCron";
 import { isErrorRateLimited } from "./lib/error-limiter";
@@ -290,8 +289,10 @@ app.put("/v1/admin/logging/level", ipWhitelist, adminLimiter, (req, res) => {
   try {
     setLogLevel(level as any);
     res.json({ level: getLogLevel(), message: "Log level updated successfully" });
-  } catch (err: any) {
-    res.status(400).json({ error: "invalid_level", message: err.message });
+  } catch (err) {
+    res
+      .status(400)
+      .json({ error: "invalid_level", message: err instanceof Error ? err.message : String(err) });
   }
 });
 
@@ -310,30 +311,30 @@ const v1 = express.Router();
 v1.use(versionHeaders);
 v1.use(acceptVersion);
 
-  v1.use('/iot', publicLimiter, apiKeyAuth, iotRouter);
-  v1.use('/admin/feature-flags/analytics', ipWhitelist, adminLimiter, requestSigning, adminRouter);
-  v1.use('/admin/batch', ipWhitelist, adminLimiter, requestSigning, batchRouter);
-  v1.use('/projects', publicLimiter, apiKeyAuth, projectsRouter);
-  v1.use('/projects/:id/history', publicLimiter, apiKeyAuth, historyRouter);
-  v1.use('/projects/aggregate', publicLimiter, apiKeyAuth, aggregateRouter);
-  v1.use('/portfolio', publicLimiter, portfolioRouter);
-  v1.use('/roles', ipWhitelist, adminLimiter, rolesRouter);
-  v1.use('/webhooks', ipWhitelist, adminLimiter, requestSigning, webhooksRouter);
-  v1.use('/panels', ipWhitelist, adminLimiter, requestSigning, panelsRouter);
-  v1.use('/metadata', ipWhitelist, adminLimiter, metadataRouter);
-  v1.use('/dashboards', publicLimiter, apiKeyAuth, dashboardRouter);
-  v1.use('/email', ipWhitelist, adminLimiter, requestSigning, emailRouter);
-  v1.use('/anomaly', publicLimiter, anomalyRouter);
-  v1.use('/scoring/formulas', ipWhitelist, adminLimiter, requestSigning, scoringFormulasRouter);
-  v1.use('/chains', publicLimiter, adminLimiter, chainsRouter);
-  v1.use('/satellite-sources', ipWhitelist, adminLimiter, requestSigning, satelliteSourcesRouter);
-  v1.use('/comparison', publicLimiter, apiKeyAuth, comparisonRouter);
-  v1.use('/benchmarking', publicLimiter, apiKeyAuth, benchmarkingRouter);
-  v1.use('/financial', publicLimiter, apiKeyAuth, financialRouter);
-  v1.use('/forecast', publicLimiter, forecastRouter);
-  v1.use('/maintenance', publicLimiter, apiKeyAuth, maintenanceRouter);
-  v1.use('/investor', publicLimiter, investorRouter);
-  v1.use('/admin/api-keys', ipWhitelist, adminLimiter, requestSigning, apiKeysRouter);
+v1.use("/iot", publicLimiter, apiKeyAuth, iotRouter);
+v1.use("/admin/feature-flags/analytics", ipWhitelist, adminLimiter, requestSigning, adminRouter);
+v1.use("/admin/batch", ipWhitelist, adminLimiter, requestSigning, batchRouter);
+v1.use("/projects", publicLimiter, apiKeyAuth, projectsRouter);
+v1.use("/projects/:id/history", publicLimiter, apiKeyAuth, historyRouter);
+v1.use("/projects/aggregate", publicLimiter, apiKeyAuth, aggregateRouter);
+v1.use("/portfolio", publicLimiter, portfolioRouter);
+v1.use("/roles", ipWhitelist, adminLimiter, rolesRouter);
+v1.use("/webhooks", ipWhitelist, adminLimiter, requestSigning, webhooksRouter);
+v1.use("/panels", ipWhitelist, adminLimiter, requestSigning, panelsRouter);
+v1.use("/metadata", ipWhitelist, adminLimiter, metadataRouter);
+v1.use("/dashboards", publicLimiter, apiKeyAuth, dashboardRouter);
+v1.use("/email", ipWhitelist, adminLimiter, requestSigning, emailRouter);
+v1.use("/anomaly", publicLimiter, anomalyRouter);
+v1.use("/scoring/formulas", ipWhitelist, adminLimiter, requestSigning, scoringFormulasRouter);
+v1.use("/chains", publicLimiter, adminLimiter, chainsRouter);
+v1.use("/satellite-sources", ipWhitelist, adminLimiter, requestSigning, satelliteSourcesRouter);
+v1.use("/comparison", publicLimiter, apiKeyAuth, comparisonRouter);
+v1.use("/benchmarking", publicLimiter, apiKeyAuth, benchmarkingRouter);
+v1.use("/financial", publicLimiter, apiKeyAuth, financialRouter);
+v1.use("/forecast", publicLimiter, forecastRouter);
+v1.use("/maintenance", publicLimiter, apiKeyAuth, maintenanceRouter);
+v1.use("/investor", publicLimiter, investorRouter);
+v1.use("/admin/api-keys", ipWhitelist, adminLimiter, requestSigning, apiKeysRouter);
 
 // ── Legacy /api paths (deprecated) ──────────────────────────────────────────
 // Kept for backward compatibility; will be removed after 2027-01-01.
@@ -495,9 +496,9 @@ scheduleCron(
       const status = getRpcStatus();
       logger.error(
         `[alert] Stellar RPC outage detected: ` +
-        `consecutiveFailures=${status.consecutiveFailures}, ` +
-        `outageDurationMs=${status.outageDurationMs}, ` +
-        `lastSuccessAgoMs=${status.lastSuccessAgoMs}`,
+          `consecutiveFailures=${status.consecutiveFailures}, ` +
+          `outageDurationMs=${status.outageDurationMs}, ` +
+          `lastSuccessAgoMs=${status.lastSuccessAgoMs}`,
       );
     }
   },
@@ -517,9 +518,11 @@ scheduleCron(
           key_ids: rotated.map((k) => k.id),
         });
       }
-    } catch (err: any) {
+    } catch (err) {
       if (!isErrorRateLimited("cron:api-key-rotation")) {
-        logger.error("[cron] API key rotation check failed", { error: err?.message });
+        logger.error("[cron] API key rotation check failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
       recordCronRun("api-key-rotation", "error");
     }
@@ -561,13 +564,14 @@ app.all(
 
 app.get("/graphql-playground", (req, res) => {
   // Generate a nonce for inline script CSP
-  const nonce = require('crypto').randomBytes(16).toString('hex');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const nonce = require("crypto").randomBytes(16).toString("hex");
 
   res.setHeader("Content-Type", "text/html");
   // Override CSP to allow inline script with nonce
   res.setHeader(
     "Content-Security-Policy",
-    `default-src 'self'; script-src 'self' https://unpkg.com 'nonce-${nonce}'; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; connect-src 'self'`
+    `default-src 'self'; script-src 'self' https://unpkg.com 'nonce-${nonce}'; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; connect-src 'self'`,
   );
 
   res.send(`
@@ -642,8 +646,10 @@ async function gracefulShutdown(signal: string): Promise<void> {
     try {
       await rpcPool.shutdown();
       logger.info("[shutdown] connection pool drained");
-    } catch (err: any) {
-      logger.error("[shutdown] pool drain error", { error: err?.message });
+    } catch (err) {
+      logger.error("[shutdown] pool drain error", {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
 
     // 4. Stop the secret rotation timer so it doesn't keep the process alive
@@ -683,8 +689,10 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
   try {
     await Promise.race([shutdownPromise, timeoutPromise]);
-  } catch (err: any) {
-    logger.error("[shutdown] forced exit", { error: err?.message });
+  } catch (err) {
+    logger.error("[shutdown] forced exit", {
+      error: err instanceof Error ? err.message : String(err),
+    });
     process.exit(1);
   }
 }

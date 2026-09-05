@@ -5,30 +5,21 @@ import adminRouter from "../routes/admin";
 import { getHealth } from "../lib/health";
 import { errorHandler, notFoundHandler } from "../middleware/errors";
 import * as registry from "../lib/registry";
-import { resetIdempotencyState } from "../lib/scoreService";
 
 // Factory mock avoids loading the real registry module, which throws at import
 // time when PROJECT_REGISTRY_CONTRACT_ID is unset (e.g. in CI).
-jest.mock("../lib/registry", () => {
-  class RpcDegradedError extends Error {
-    constructor(message?: string) {
-      super(message ?? "RPC is degraded");
-      this.name = "RpcDegradedError";
-    }
-  }
-  return {
-    updateImpactScore: jest.fn(),
-    getTotalProjects: jest.fn(),
-    RpcDegradedError,
-  };
-});
-
-jest.mock("../config", () => ({
-  config: {
-    ADMIN_API_KEY: "test-key",
-    MAX_POWER_KW: 1000,
-  },
+jest.mock("../lib/registry", () => ({
+  updateImpactScore: jest.fn(),
+  getTotalProjects: jest.fn(),
 }));
+
+// config snapshots env vars at import time, so setting process.env later has no
+// effect on the middleware; keep the real config (iot needs MAX_POWER_KW etc.)
+// and only override the admin key.
+jest.mock("../config", () => {
+  const actual = jest.requireActual("../config");
+  return { config: { ...actual.config, ADMIN_API_KEY: "test-key" } };
+});
 
 const ADMIN_API_KEY = "test-key";
 const authHeader = { Authorization: `Bearer ${ADMIN_API_KEY}` };
@@ -50,7 +41,6 @@ describe("HTTP integration", () => {
   beforeEach(() => {
     process.env.ADMIN_API_KEY = ADMIN_API_KEY;
     app = buildApp();
-    resetIdempotencyState();
     jest.clearAllMocks();
     (registry.updateImpactScore as jest.Mock).mockResolvedValue("tx-hash");
     (registry.getTotalProjects as jest.Mock).mockResolvedValue(2);
@@ -116,13 +106,13 @@ describe("HTTP integration", () => {
 
     it("returns 500 when ADMIN_API_KEY is not configured", async () => {
       const configModule = jest.requireMock("../config") as { config: { ADMIN_API_KEY: string } };
-      const originalApiKey = configModule.config.ADMIN_API_KEY;
+      const orig = configModule.config.ADMIN_API_KEY;
       configModule.config.ADMIN_API_KEY = "";
       try {
         const res = await request(app).post("/api/admin/update-scores").send({}).expect(500);
         expect(res.body.error.code).toBe("server_misconfigured");
       } finally {
-        configModule.config.ADMIN_API_KEY = originalApiKey;
+        configModule.config.ADMIN_API_KEY = orig;
       }
     });
   });

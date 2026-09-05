@@ -3,11 +3,12 @@ import { RequestHandler } from "express";
 
 /**
  * Composed helmet middleware that sets the following security headers:
- *   Content-Security-Policy  — restricts resource origins
- *   X-Frame-Options          — blocks clickjqcking (DENY; this is an API, never framed)
+ *   Content-Security-Policy  — restricts resource origins (disabled for /docs
+ *                              so the Swagger UI can load its assets)
+ *   X-Frame-Options          — blocks clickjacking (DENY; this is an API, never framed)
  *   X-Content-Type-Options   — prevents MIME sniffing
  *   Strict-Transport-Security — enforces HTTPS for 1 year
- *   X-XSS-Protection        — legacy browser XSS filter
+ *   X-XSS-Protection         — legacy browser XSS filter
  *   Referrer-Policy          — controls referrer information leakage
  *   Permissions-Policy       — restricts browser feature access
  */
@@ -18,9 +19,9 @@ export const securityHeaders: RequestHandler = (req, res, next) => {
       ? false
       : {
           directives: {
-            defaultSrc: ["'self"'],
-            scriptSrc: ["'self'],
-            styleSrc: ["'self'", "'unsafe-inline'],
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "https://unpkg.com"],
+            styleSrc: ["'self'", "'unsafe-inline'", "https://unpkg.com"],
             imgSrc: ["'self'", "data:"],
             connectSrc: ["'self'"],
             fontSrc: ["'self'"],
@@ -34,23 +35,10 @@ export const securityHeaders: RequestHandler = (req, res, next) => {
     noSniff: true,
     hsts: {
       maxAge: 31_536_000,
-      includeDomains: true,
+      includeSubDomains: true,
       preload: true,
-export const securityHeaders: RequestHandler = helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "https://unpkg.com"],
-      styleSrc: ["'self'", "'unsafe-inline'", "https://unpkg.com"],
-      imgSrc: ["'self'", "data:"],
-      connectSrc: ["'self'"],
-      fontSrc: ["'self'"],
-      objectSrc: ["'none'"],
-      frameAncestors: ["'none'"],
-      baseUri: ["'self'"],
-      formAction: ["'self'"],
     },
-    xsSSFilter: true,
+    xssFilter: true,
     referrerPolicy: { policy: "strict-origin-when-cross-origin" },
   })(req, res, next);
 };

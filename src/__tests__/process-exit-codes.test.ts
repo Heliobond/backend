@@ -12,7 +12,7 @@ describe("process exit codes", () => {
         PROJECT_REGISTRY_CONTRACT_ID: "",
         PORT: "0",
       },
-      ["-e", "require('ts-node/register'); require('./src/config').validateRequiredEnv();"],
+      ["-e", "require('./src/config').validateRequiredEnv();"],
     );
 
     expect(result.status).toBe(1);
@@ -50,7 +50,10 @@ describe("process exit codes", () => {
         PROJECT_REGISTRY_CONTRACT_ID: "x",
         PORT: "0",
       },
-      ["-e", "process.once('SIGTERM', () => process.exit(0)); process.emit('SIGTERM');"],
+      [
+        "-e",
+        "const { EventEmitter } = require('events'); const events = new EventEmitter(); process.once('SIGTERM', () => process.exit(0)); process.kill(process.pid, 'SIGTERM');",
+      ],
     );
 
     expect(result.status).toBe(0);

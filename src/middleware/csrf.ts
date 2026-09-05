@@ -3,7 +3,7 @@ import { Request, Response, NextFunction } from "express";
 
 const CSRF_TOKEN_LENGTH = 32;
 const CSRF_TOKEN_EXPIRY_MS = 60 * 60 * 1000;
-const SYSSESION_COOKIE_NAME = "CSRF-SESSION";
+const SESSION_COOKIE_NAME = "CSRF-SESSION";
 
 interface CsrfTokenEntry {
   token: string;
@@ -36,7 +36,10 @@ function cleanExpiredTokens(): void {
   }
 }
 
-function getCookieOptions() {
+function getCookieOptions(): {
+  secure: boolean;
+  sameSite: "strict" | "lax";
+} {
   const isProduction = process.env.NODE_ENV === "production";
   return {
     secure: isProduction,
@@ -45,7 +48,7 @@ function getCookieOptions() {
 }
 
 function getSessionId(req: Request): string | undefined {
-  return req.cookies?[SESSION_COOKIE_NAME] as string | undefined;
+  return req.cookies?.[SESSION_COOKIE_NAME] as string | undefined;
 }
 
 export function generateCsrfToken(req: Request, res: Response): string {
@@ -90,9 +93,9 @@ export function csrfProtection(req: Request, res: Response, next: NextFunction):
   }
 
   const headerToken =
-    req.headers["x-csrf-token"] as string | undefined ||
-    req.headers["x-xsrf-token"] as string | undefined;
-  const cookieToken = req.cookies?["XSRF-TOKEN"] as string | undefined;
+    (req.headers["x-csrf-token"] as string | undefined) ||
+    (req.headers["x-xsrf-token"] as string | undefined);
+  const cookieToken = req.cookies?.["XSRF-TOKEN"] as string | undefined;
   const bodyToken = (req.body as Record<string, unknown>)?._csrf as string | undefined;
 
   const token = headerToken || bodyToken;

@@ -1,4 +1,4 @@
-import { config, validateRequiredEnv } from "../config";
+import { config, validateRequiredEnv, initEnv } from "../config";
 import { initEnv as initLibEnv } from "../lib/env";
 
 describe("Environment Config Module (Issue #272)", () => {
@@ -18,8 +18,6 @@ describe("Environment Config Module (Issue #272)", () => {
       process.env.PROJECT_REGISTRY_CONTRACT_ID = "C1234567890";
 
       expect(() => validateRequiredEnv()).not.toThrow();
-      jest.resetModules();
-      const { initEnv } = jest.requireActual<typeof import("../config")>("../config");
       const env = initEnv();
       expect(env).toBeDefined();
       expect(env.ADMIN_SECRET_KEY).toBe("test-secret-key");
@@ -55,14 +53,15 @@ describe("Environment Config Module (Issue #272)", () => {
   });
 
   describe("Optional environment variable defaults", () => {
-    it("provides fallback defaults for optional configuration fields", async () => {
+    it("provides fallback defaults for optional configuration fields", () => {
       delete process.env.STELLAR_NETWORK;
       delete process.env.RPC_URL;
       delete process.env.PORT;
       delete process.env.FRONTEND_URL;
 
       jest.resetModules();
-      const freshConfig = (await import("../config")).config as typeof config;
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const freshConfig = require("../config").config as typeof config;
 
       expect(freshConfig.STELLAR_NETWORK).toBe("testnet");
       expect(freshConfig.RPC_URL).toBe("https://soroban-testnet.stellar.org");

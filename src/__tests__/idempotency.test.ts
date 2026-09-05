@@ -5,7 +5,6 @@ import * as satelliteSources from "../lib/satellite-sources";
 import * as scoring from "../lib/scoring";
 import * as registry from "../lib/registry";
 import { resetIdempotencyState, updateScoreForProject } from "../lib/scoreService";
-import { rpcPool } from "../lib/stellar";
 
 describe("idempotency key behavior", () => {
   beforeEach(() => {
@@ -14,23 +13,19 @@ describe("idempotency key behavior", () => {
 
     jest.spyOn(iot, "getSolarData").mockReturnValue({
       timestamp: Date.now(),
-      power_output_kw: 60,
-      efficiency_pct: 60,
-      max_power_kw: 100,
+      power_output_kw: 100,
+      efficiency_pct: 0.85,
+      max_power_kw: 120,
     });
     jest.spyOn(satelliteSources, "fetchSatelliteWithFallback").mockResolvedValue({
       timestamp: Date.now(),
       forest_density_pct: 50,
       ndvi_score: 0.5,
-      source: "test",
+      source: "sentinel-2",
       dataSource: "live",
     });
     jest.spyOn(scoring, "computeScores").mockReturnValue({ credit_quality: 10, green_impact: 20 });
     jest.spyOn(registry, "updateImpactScore").mockResolvedValue("tx-hash-1");
-  });
-
-  afterAll(async () => {
-    await rpcPool.shutdown();
   });
 
   it("allows the first submission to succeed", async () => {

@@ -22,7 +22,6 @@ jest.mock("@stellar/stellar-sdk", () => {
     rpc: {
       Api: {
         SimulateTransactionSuccessResponse: {},
-        isSimulationError: (sim: { error?: string }) => "error" in sim,
       },
     },
     Account: jest.fn().mockImplementation(() => ({})),

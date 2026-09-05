@@ -96,9 +96,7 @@ describe("webhooks routes", () => {
 
     const res = await request(app).get("/api/webhooks").expect(200);
     expect(res.body.webhooks).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ url: "https://example.com/list-test" }),
-      ]),
+      expect.arrayContaining([expect.objectContaining({ url: "https://example.com/list-test" })]),
     );
     res.body.webhooks.forEach((wh: Record<string, unknown>) => {
       expect(wh).not.toHaveProperty("secret");
@@ -125,9 +123,7 @@ describe("webhooks routes", () => {
       .post("/api/webhooks")
       .send({ url: "https://example.com/single", secret: "my-super-secret-key" });
 
-    const res = await request(app)
-      .get(`/api/webhooks/${create.body.id}`)
-      .expect(200);
+    const res = await request(app).get(`/api/webhooks/${create.body.id}`).expect(200);
     expect(res.body.url).toBe("https://example.com/single");
     expect(res.body).not.toHaveProperty("secret");
   });

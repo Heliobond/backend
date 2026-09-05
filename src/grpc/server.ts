@@ -98,10 +98,10 @@ async function getProjectScore(
 
     const data = getProjectDetails(project_id);
     callback(null, data);
-  } catch (error: any) {
+  } catch (error) {
     callback({
       code: grpc.status.INTERNAL,
-      details: error.message || "Internal server error",
+      details: error instanceof Error ? error.message : "Internal server error",
     });
   }
 }
@@ -116,7 +116,7 @@ function streamProjectScores(call: grpc.ServerWritableStream<any, any>) {
     return;
   }
 
-  const listener = (update: any) => {
+  const listener = (update: { project_id: number }) => {
     try {
       const details = getProjectDetails(update.project_id);
       call.write(details);
@@ -166,7 +166,7 @@ function chatProjectScores(call: grpc.ServerDuplexStream<any, any>) {
 
       const details = getProjectDetails(project_id);
       call.write(details);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[gRPC Chat] data processing error:", err);
     }
   });

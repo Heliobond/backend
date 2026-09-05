@@ -1,7 +1,15 @@
 export default {
   transform: {
-    "^.+\\.tsx?$": ["ts-jest", { tsconfig: "tsconfig.test.json" }],
+    // .js is included so ESM-only transitive deps of @stellar/stellar-sdk
+    // (e.g. uint8array-extras) are transpiled to CommonJS by ts-jest.
+    "^.+\\.[jt]sx?$": ["ts-jest", { tsconfig: "tsconfig.test.json" }],
   },
+  // stellar-sdk v17 and its ESM deps (@exodus/bytes, uint8array-extras,
+  // eventsource) ship untranspiled ESM, so they must not be ignored by the
+  // default node_modules pattern.
+  transformIgnorePatterns: [
+    "node_modules/(?!(@stellar|@exodus|@noble|uint8array-extras|eventsource|smol-toml)/)",
+  ],
   testEnvironment: "node",
   testMatch: ["**/__tests__/**/*.test.ts"],
   clearMocks: true,
