@@ -39,7 +39,7 @@ export interface AggregateResult {
 }
 
 const CATEGORIES: Category[] = ["solar", "forest", "wind"];
-const REGIONS: Region[] = ["north", "south", "east", "west"];
+export const REGIONS: Region[] = ["north", "south", "east", "west"];
 
 export function inferCategory(projectId: number): Category {
   return CATEGORIES[projectId % CATEGORIES.length];

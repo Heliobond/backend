@@ -55,8 +55,14 @@ describe("idempotency key behavior", () => {
       .spyOn(Date, "now")
       .mockReturnValueOnce(1_000)
       .mockReturnValueOnce(1_000 + 60_001);
+    const nowSpy = jest.spyOn(Date, "now");
 
+    // First invocation: fix time at hour 0
+    nowSpy.mockReturnValue(0);
     const first = await updateScoreForProject(42);
+
+    // Second invocation: advance to hour 1 (new hourSeed → new key)
+    nowSpy.mockReturnValue(3_600_001);
     const second = await updateScoreForProject(42);
 
     expect(first.status).toBe("success");

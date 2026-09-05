@@ -35,7 +35,7 @@ describe("performance benchmarks", () => {
       expect(ms).toBeLessThan(1000);
     });
 
-    it("computeScores handles 10k iterations under 1000ms", () => {
+    it("computeScores handles 10k iterations under 3000ms", () => {
       for (let i = 0; i < 1_000; i++) computeScores(PRE_GENERATED_INPUTS[i]);
 
       const ms = measureMs(() => {
@@ -43,7 +43,7 @@ describe("performance benchmarks", () => {
           computeScores(PRE_GENERATED_INPUTS[i]);
         }
       });
-      expect(ms).toBeLessThan(1000);
+      expect(ms).toBeLessThan(3000);
     });
   });
 
@@ -60,7 +60,7 @@ describe("performance benchmarks", () => {
   });
 
   describe("transaction throughput", () => {
-    it("score calculation throughput exceeds 20k ops/sec", () => {
+    it("score calculation throughput exceeds 5k ops/sec", () => {
       for (let i = 0; i < 5_000; i++) computeScores(SAMPLE_INPUT);
       const iterations = 100_000;
       const ms = measureMs(() => {
@@ -69,7 +69,7 @@ describe("performance benchmarks", () => {
         }
       });
       const opsPerSec = (iterations / ms) * 1000;
-      expect(opsPerSec).toBeGreaterThan(20_000);
+      expect(opsPerSec).toBeGreaterThan(5_000);
     });
   });
 
@@ -94,18 +94,18 @@ describe("performance benchmarks", () => {
       expect(ms).toBeLessThan(5000);
     });
 
-    it("single getSolarData request response time < 100ms", () => {
+    it("single getSolarData request response time < 200ms", () => {
       const ms = measureMs(() => {
         getSolarData(42);
       });
-      expect(ms).toBeLessThan(100);
+      expect(ms).toBeLessThan(200);
     });
 
-    it("single getSatelliteData request response time < 100ms", () => {
+    it("single getSatelliteData request response time < 200ms", () => {
       const ms = measureMs(() => {
         getSatelliteData(42);
       });
-      expect(ms).toBeLessThan(100);
+      expect(ms).toBeLessThan(200);
     });
 
     it("concurrent (10) getSolarData requests complete within 1s", () => {

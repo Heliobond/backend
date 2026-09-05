@@ -42,6 +42,7 @@ describe("admin routes", () => {
   let app: Express;
 
   beforeEach(() => {
+    resetIdempotencyState();
     app = buildApp();
     resetIdempotencyState();
     jest.clearAllMocks();

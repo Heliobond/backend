@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
-import { createHmac, timingSafeEqual } from "crypto";
+import { createHmac } from "crypto";
+import { timingSafeCompare } from "../lib/timing-safe";
 
 const SIGNATURE_HEADER = "x-signature";
 const TIMESTAMP_HEADER = "x-timestamp";
@@ -9,14 +10,19 @@ function getSigningSecret(): string | undefined {
   return process.env.REQUEST_SIGNING_SECRET;
 }
 
-function computeSignature(secret: string, timestamp: string, method: string, path: string, body: string): string {
+function computeSignature(
+  secret: string,
+  timestamp: string,
+  method: string,
+  path: string,
+  body: string,
+): string {
   const payload = `${timestamp}:${method}:${path}:${body}`;
   return createHmac("sha256", secret).update(payload).digest("hex");
 }
 
 function signaturesMatch(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
+  return timingSafeCompare(a, b);
 }
 
 export function requestSigning(req: Request, res: Response, next: NextFunction): void {

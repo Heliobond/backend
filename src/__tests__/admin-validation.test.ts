@@ -36,6 +36,7 @@ describe("admin /update-scores input validation", () => {
   let app: Express;
 
   beforeEach(() => {
+    resetIdempotencyState();
     app = buildApp();
     resetIdempotencyState();
     jest.clearAllMocks();

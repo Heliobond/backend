@@ -40,11 +40,11 @@ describe("rate limiting scenarios", () => {
   });
 
   it("after window reset → requests succeed again", async () => {
-    const app = buildApp(1, 50);
+    const app = buildApp(1, 200);
     await request(app).get("/ping").expect(200);
     await request(app).get("/ping").expect(429);
 
-    await new Promise((r) => setTimeout(r, 60));
+    await new Promise((r) => setTimeout(r, 250));
 
     const res = await request(app).get("/ping").expect(200);
     expect(res.body).toEqual({ ok: true });

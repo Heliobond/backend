@@ -35,11 +35,6 @@ jest.mock("../lib/feature-flags", () => ({
 
 describe("metrics collection (#283)", () => {
   describe("recordRequest / getMetrics", () => {
-    beforeEach(() => {
-      // Reset internal state by re-importing wouldn't work; instead record a known baseline.
-      jest.resetModules();
-    });
-
     it("getMetrics returns a snapshot object", () => {
       const snapshot = getMetrics();
       expect(snapshot).toHaveProperty("timestamp");

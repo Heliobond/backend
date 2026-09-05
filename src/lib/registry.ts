@@ -4,7 +4,6 @@ import {
   nativeToScVal,
   BASE_FEE,
   scValToNative,
-  rpc,
   Account,
 } from "@stellar/stellar-sdk";
 import { withRpcConnection, networkPassphrase, getAdminKeypair, signAndSubmit } from "./stellar";
@@ -22,10 +21,34 @@ function isSimulationErrorResponse(
   return "error" in sim;
 }
 
+/**
+ * Thrown when an idempotency key collision is detected — i.e. the same
+ * project score update has already been submitted within IDEMPOTENCY_TTL_MS.
+ * Callers can catch this specific error to distinguish "already done" from a
+ * real RPC failure.
+ */
+export class DuplicateSubmissionError extends Error {
+  public readonly idempotencyKey: string;
+  public readonly recordedAt: number;
+
+  constructor(key: string, recordedAt: number) {
+    super(
+      `Duplicate submission rejected — idempotency key "${key}" was already seen ` +
+        `at ${new Date(recordedAt).toISOString()}`,
+    );
+    this.name = "DuplicateSubmissionError";
+    this.idempotencyKey = key;
+    this.recordedAt = recordedAt;
+  }
+}
+
 export async function updateImpactScore(
   projectId: number,
   creditQuality: number,
   greenImpact: number,
+  /** Pre-generated idempotency key (for tracing/logging). Callers are
+   *  responsible for running the idempotency check before this call. */
+  idempotencyKey?: string,
 ): Promise<string> {
   return withRpcConnection(async (client) => {
     const keypair = getAdminKeypair();

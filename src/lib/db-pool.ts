@@ -14,6 +14,7 @@ export interface PoolMetrics {
   total: number;
   idle: number;
   active: number;
+  healthy: number;
   pendingAcquires: number;
   healthCheckErrors: number;
   totalAcquired: number;
@@ -45,6 +46,7 @@ export class RpcConnectionPool {
     total: 0,
     idle: 0,
     active: 0,
+    healthy: 0,
     pendingAcquires: 0,
     healthCheckErrors: 0,
     totalAcquired: 0,
@@ -143,6 +145,7 @@ export class RpcConnectionPool {
       total: this.connections.length,
       active: this.connections.filter((c) => c.inUse).length,
       idle: this.connections.filter((c) => !c.inUse && c.healthy).length,
+      healthy: this.connections.filter((c) => c.healthy).length,
     };
   }
 
@@ -190,5 +193,6 @@ export class RpcConnectionPool {
     this.metrics.total = 0;
     this.metrics.active = 0;
     this.metrics.idle = 0;
+    this.metrics.healthy = 0;
   }
 }

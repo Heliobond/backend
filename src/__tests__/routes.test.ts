@@ -48,6 +48,7 @@ describe("HTTP integration", () => {
   let app: Express;
 
   beforeEach(() => {
+    process.env.ADMIN_API_KEY = ADMIN_API_KEY;
     app = buildApp();
     resetIdempotencyState();
     jest.clearAllMocks();

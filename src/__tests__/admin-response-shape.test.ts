@@ -37,10 +37,14 @@ function buildApp(): Express {
   return app;
 }
 
+const authHeader = { Authorization: "Bearer test-key" };
+
 describe("admin /update-scores response shape", () => {
   let app: Express;
 
   beforeEach(() => {
+    process.env.ADMIN_API_KEY = "test-key";
+    resetIdempotencyState();
     app = buildApp();
     resetIdempotencyState();
     jest.clearAllMocks();
@@ -64,7 +68,7 @@ describe("admin /update-scores response shape", () => {
   it("response has updated field (number)", async () => {
     const res = await request(app)
       .post("/api/admin/update-scores")
-      .set("Authorization", "Bearer test-key")
+      .set(authHeader)
       .send({})
       .expect(200);
     expect(res.body).toHaveProperty("updated");
@@ -74,7 +78,7 @@ describe("admin /update-scores response shape", () => {
   it("response has results field (array)", async () => {
     const res = await request(app)
       .post("/api/admin/update-scores")
-      .set("Authorization", "Bearer test-key")
+      .set(authHeader)
       .send({})
       .expect(200);
     expect(res.body).toHaveProperty("results");
@@ -84,7 +88,7 @@ describe("admin /update-scores response shape", () => {
   it("response has errors field (array)", async () => {
     const res = await request(app)
       .post("/api/admin/update-scores")
-      .set("Authorization", "Bearer test-key")
+      .set(authHeader)
       .send({})
       .expect(200);
     expect(res.body).toHaveProperty("errors");
@@ -94,7 +98,7 @@ describe("admin /update-scores response shape", () => {
   it("response shape matches { updated, results, errors }", async () => {
     const res = await request(app)
       .post("/api/admin/update-scores")
-      .set("Authorization", "Bearer test-key")
+      .set(authHeader)
       .send({})
       .expect(200);
     expect(Object.keys(res.body).sort()).toEqual(["errors", "results", "skipped", "updated"]);
@@ -103,7 +107,7 @@ describe("admin /update-scores response shape", () => {
   it("results entries have correct shape", async () => {
     const res = await request(app)
       .post("/api/admin/update-scores")
-      .set("Authorization", "Bearer test-key")
+      .set(authHeader)
       .send({})
       .expect(200);
     for (const entry of res.body.results) {
@@ -124,7 +128,7 @@ describe("admin /update-scores response shape", () => {
       .mockRejectedValueOnce(new Error("RPC error"));
     const res = await request(app)
       .post("/api/admin/update-scores")
-      .set("Authorization", "Bearer test-key")
+      .set(authHeader)
       .send({ project_ids: [1, 2] })
       .expect(200);
     expect(res.body.errors).toHaveLength(1);

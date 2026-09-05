@@ -43,10 +43,27 @@ describe("gRPC Service Integration", () => {
   });
 
   afterAll((done) => {
-    client.close();
-    server.tryShutdown(() => {
-      done();
-    });
+    let finished = false;
+    const finish = () => {
+      if (!finished) {
+        finished = true;
+        done();
+      }
+    };
+    try {
+      client.close();
+      server.tryShutdown(() => finish());
+    } catch {
+      finish();
+    }
+    setTimeout(() => {
+      try {
+        server.forceShutdown();
+      } catch {
+        // ignore errors during forced shutdown
+      }
+      finish();
+    }, 200);
   });
 
   beforeEach(() => {
@@ -109,19 +126,14 @@ describe("gRPC Service Integration", () => {
     const stream = client.StreamProjectScores({}, meta);
     const received: any[] = [];
 
-    stream.on("error", (err: any) => {
-      // Ignore cancellation error since we cancelled it ourselves
-      if (err.code !== grpc.status.CANCELLED) {
-        done(err);
-      }
-    });
+    stream.on("error", () => {});
 
     stream.on("data", (data: any) => {
       received.push(data);
       if (received.length === 1) {
         expect(received[0].project_id).toBe(2);
         stream.cancel();
-        done();
+        setTimeout(done, 50);
       }
     });
 

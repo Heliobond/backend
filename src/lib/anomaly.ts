@@ -37,12 +37,58 @@ const DEFAULT_CONFIG: AnomalyConfig = {
   minBaseline: 5,
 };
 
+export class AnomalyValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AnomalyValidationError";
+  }
+}
+
+/**
+ * Validate a partial anomaly detection config, returning only the fields that
+ * were present and valid. Throws `AnomalyValidationError` on the first problem.
+ */
+export function validateAnomalyConfig(config: Partial<Record<keyof AnomalyConfig, unknown>>): Partial<AnomalyConfig> {
+  const validated: Partial<AnomalyConfig> = {};
+
+  if (config.sensitivityZScore !== undefined) {
+    if (typeof config.sensitivityZScore !== "number" || !Number.isFinite(config.sensitivityZScore) || config.sensitivityZScore <= 0) {
+      throw new AnomalyValidationError("sensitivityZScore must be a finite positive number");
+    }
+    validated.sensitivityZScore = config.sensitivityZScore;
+  }
+
+  if (config.trendWindowSize !== undefined) {
+    if (typeof config.trendWindowSize !== "number" || !Number.isFinite(config.trendWindowSize) || config.trendWindowSize <= 0) {
+      throw new AnomalyValidationError("trendWindowSize must be a finite positive number");
+    }
+    validated.trendWindowSize = config.trendWindowSize;
+  }
+
+  if (config.trendDeviationPct !== undefined) {
+    if (typeof config.trendDeviationPct !== "number" || !Number.isFinite(config.trendDeviationPct) || config.trendDeviationPct <= 0) {
+      throw new AnomalyValidationError("trendDeviationPct must be a finite positive number");
+    }
+    validated.trendDeviationPct = config.trendDeviationPct;
+  }
+
+  if (config.minBaseline !== undefined) {
+    if (typeof config.minBaseline !== "number" || !Number.isFinite(config.minBaseline) || config.minBaseline <= 0) {
+      throw new AnomalyValidationError("minBaseline must be a finite positive number");
+    }
+    validated.minBaseline = config.minBaseline;
+  }
+
+  return validated;
+}
+
 // Per-project rolling history for baseline
 const historyStore = new Map<number, Map<MetricKey, number[]>>();
 let globalConfig: AnomalyConfig = { ...DEFAULT_CONFIG };
 
-export function configureAnomalyDetection(config: Partial<AnomalyConfig>): void {
-  globalConfig = { ...globalConfig, ...config };
+export function configureAnomalyDetection(config: Partial<Record<keyof AnomalyConfig, unknown>>): void {
+  const validated = validateAnomalyConfig(config);
+  globalConfig = { ...globalConfig, ...validated };
 }
 
 export function getAnomalyConfig(): AnomalyConfig {

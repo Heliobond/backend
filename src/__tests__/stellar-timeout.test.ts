@@ -46,6 +46,7 @@ describe("signAndSubmit timeout behavior", () => {
       sign: jest.fn(),
     });
     client = {
+      getLedgerEntries: jest.fn().mockResolvedValue({ entries: [] }),
       sendTransaction: jest.fn(),
       getTransaction: jest.fn(),
       getLedgerEntries: jest.fn().mockResolvedValue({ entries: [] }),
