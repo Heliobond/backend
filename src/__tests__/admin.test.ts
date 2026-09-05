@@ -9,15 +9,19 @@ import { resetIdempotencyState } from "../lib/scoreService";
 
 jest.mock("../lib/registry", () => {
   class RpcDegradedError extends Error {
+    code: number;
     constructor(message?: string) {
       super(message ?? "RPC is degraded");
       this.name = "RpcDegradedError";
+      this.code = 14;
     }
   }
   return {
     updateImpactScore: jest.fn(),
     getTotalProjects: jest.fn(),
     RpcDegradedError,
+    isRpcDegradedError: (error: Error) =>
+      error instanceof RpcDegradedError || (error as { code?: number }).code === 14,
   };
 });
 jest.mock("../routes/iot");
@@ -45,7 +49,7 @@ describe("admin routes", () => {
     resetIdempotencyState();
     app = buildApp();
     resetIdempotencyState();
-    jest.clearAllMocks();
+    jest.resetAllMocks();
     (iot.getSolarData as jest.Mock).mockReturnValue({
       efficiency_pct: 85,
       power_output_kw: 500,
