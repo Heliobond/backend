@@ -3,8 +3,7 @@ import type { Role } from "../lib/roles";
 import { hasPermission, listRoles } from "../lib/roles";
 
 declare global {
-
-  // eslint-disable-next-line @typescript-es/no-namespace
+   
   namespace Express {
     interface Request {
       userId?: string;
@@ -12,10 +11,10 @@ declare global {
   }
 }
 
-  /**
-   * Resolve the caller's user identity from the X-User-Id header.
-   * This is intentionally thin — in production you'd verify a JWT here.
-   */
+/**
+ * Resolve the caller's user identity from the X-User-Id header.
+ * This is intentionally thin — in production you'd verify a JWT here.
+ */
 export function identifyUser(req: Request, res: Response, next: NextFunction): void {
   const userId = req.headers["x-user-id"];
   if (typeof userId === "string" && userId.trim()) {

@@ -6,7 +6,7 @@ import {
   notFoundHandler,
   parseProjectId,
   maxProjectId,
-  DEFAULT_MAX_PROJECT_ID,
+  MAX_PROJECT_ID,
 } from "../middleware/errors";
 
 function buildApp(): Express {
@@ -74,50 +74,30 @@ describe("request validation + structured errors", () => {
 describe("project id bounds", () => {
   const app = buildApp();
 
-  afterEach(() => {
-    delete process.env.MAX_PROJECT_ID;
-  });
-
-  it("defaults the upper bound to 1000000", () => {
-    expect(maxProjectId()).toBe(DEFAULT_MAX_PROJECT_ID);
-    expect(DEFAULT_MAX_PROJECT_ID).toBe(1_000_000);
+  it("defaults the upper bound to 100000", () => {
+    expect(maxProjectId()).toBe(MAX_PROJECT_ID);
+    expect(MAX_PROJECT_ID).toBe(100_000);
   });
 
   it("accepts the highest allowed id", () => {
-    expect(parseProjectId("1000000", "project id")).toBe(1_000_000);
+    expect(parseProjectId("100000", "project id")).toBe(100_000);
   });
 
   it("rejects an id one past the upper bound", () => {
-    expect(() => parseProjectId("1000001", "project id")).toThrow(
-      /project id must be between 1 and 1000000/,
-    );
+    expect(() => parseProjectId("100001", "project id")).toThrow(/not exceeding 100000/);
   });
 
-  it.each(["1.5", "0.9", "-5", "+5", "1e6", " 7", "7 ", "0x10", "Infinity", "NaN"])(
+  it.each(["1.5", "0.9", "-5", "+5", "1e6", " 7", "7 ", "0x10", "Infinity", "NaN", "abc"])(
     "rejects %p as a project id",
     (raw) => {
       expect(() => parseProjectId(raw, "project id")).toThrow(/positive integer/);
     },
   );
 
-  it("honours a raised MAX_PROJECT_ID", () => {
-    process.env.MAX_PROJECT_ID = "5";
-    expect(parseProjectId("5", "project id")).toBe(5);
-    expect(() => parseProjectId("6", "project id")).toThrow(/between 1 and 5/);
-  });
-
-  it("ignores an unusable MAX_PROJECT_ID and keeps the default", () => {
-    process.env.MAX_PROJECT_ID = "abc";
-    expect(maxProjectId()).toBe(DEFAULT_MAX_PROJECT_ID);
-
-    process.env.MAX_PROJECT_ID = "0";
-    expect(maxProjectId()).toBe(DEFAULT_MAX_PROJECT_ID);
-  });
-
   it("returns 400 over HTTP for a very large id", async () => {
     const res = await request(app).get("/api/iot/solar/999999999999").expect(400);
     expect(res.body).toEqual({
-      error: { code: "bad_request", message: expect.stringContaining("between 1 and") },
+      error: { code: "bad_request", message: expect.stringContaining("not exceeding") },
     });
   });
 
@@ -129,6 +109,6 @@ describe("project id bounds", () => {
   });
 
   it("still serves an id inside the valid range", async () => {
-    await request(app).get("/api/iot/solar/1000000").expect(200);
+    await request(app).get("/api/iot/solar/100000").expect(200);
   });
 });

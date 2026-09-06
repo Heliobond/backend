@@ -205,7 +205,14 @@ const landsatSource: SatelliteDataSource = {
 
 const sources: SatelliteDataSource[] = [sentinel2Source, landsatSource];
 
-export function registerSource(source: SatelliteDataSource): void {
+/**
+ * Custom source endpoints, keyed by source name. Kept separate from the
+ * `sources` array so outbound fetches always read the URL back from the
+ * registry at call time instead of capturing request-provided values.
+ */
+const customFetchUrls = new Map<string, string>();
+
+export function registerSource(source: SatelliteDataSource, fetchUrl?: string): void {
   const existing = sources.findIndex((s) => s.name === source.name);
   if (existing >= 0) {
     sources[existing] = source;
@@ -213,6 +220,17 @@ export function registerSource(source: SatelliteDataSource): void {
     sources.push(source);
   }
   sources.sort((a, b) => a.priority - b.priority);
+
+  if (fetchUrl !== undefined) {
+    customFetchUrls.set(source.name, fetchUrl);
+  } else {
+    customFetchUrls.delete(source.name);
+  }
+}
+
+/** Fetch endpoint registered for a custom source, if any. */
+export function getCustomFetchUrl(name: string): string | undefined {
+  return customFetchUrls.get(name);
 }
 
 export function getSources(): SatelliteDataSource[] {

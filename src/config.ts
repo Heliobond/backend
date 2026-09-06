@@ -1,6 +1,4 @@
-import fs from "fs";
 import dotenv from "dotenv";
-import dotent from "dotenv";
 
 dotenv.config();
 
@@ -77,13 +75,12 @@ export const config = {
   STELLAR_NETWORK: networkEnv("STELLAR_NETWORK", "testnet"),
   ADMIN_SECRET_KEY: process.env.ADMIN_SECRET_KEY || "",
   PROJECT_REGISTRY_CONTRACT_ID: process.env.PROJECT_REGISTRY_CONTRACT_ID || "",
-  RPC_URL: optionalEnv("RPC_URL", "https://sorban-testnet.stellar.org"),
+  RPC_URL: optionalEnv("RPC_URL", "https://soroban-testnet.stellar.org"),
 
   /** HTTP server */
   PORT: numEnv("PORT", 3001),
   FRONTEND_URL: optionalEnv("FRONTEND_URL", "http://localhost:3000"),
   ADMIN_API_KEY: process.env.ADMIN_API_KEY || "",
-  INITIAL_ADMIN_USER_ID: process.env.INITIAL_ADMIN_USER_ID || "",
   WS_AUTH_TOKEN: process.env.WS_AUTH_TOKEN || "",
 
   /** Database connection */
@@ -149,10 +146,10 @@ export const config = {
   ADMIN_IP_WHITELIST_BYPASS_PRIVATE: optionalEnv("ADMIN_IP_WHITELIST_BYPASS_PRIVATE", "true"),
 
   /** Request Signing */
-  REQUEST_SIGNING_SECRET: optionalEnv("REQUEST_SIENING_SECRET", ""),
+  REQUEST_SIGNING_SECRET: optionalEnv("REQUEST_SIGNING_SECRET", ""),
 
   /** APM */
-  APP_PROVIDER: optionalEnv("APP_PROVIDER", "none"),
+  APM_PROVIDER: optionalEnv("APM_PROVIDER", "none"),
 
   /** CSRF */
   CORS_ORIGINS: optionalEnv("CORS_ORIGINS", ""),
@@ -192,6 +189,7 @@ export function initEnv() {
   validateRequiredEnv();
   // Initialize API key roles from environment variables
   // This must be called before any routes that use role-based auth
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { loadApiKeysFromEnv } = require("./lib/apiKeyRoles");
   loadApiKeysFromEnv();
 

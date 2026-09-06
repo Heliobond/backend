@@ -6,6 +6,7 @@ describe("seededRandom", () => {
 
   afterEach(() => {
     dateNowSpy?.mockRestore();
+    jest.useRealTimers();
   });
 
   it("same project ID, same hour → same values", () => {
@@ -16,16 +17,18 @@ describe("seededRandom", () => {
   });
 
   it("same project ID, different hours → different values", () => {
-    dateNowSpy = jest.spyOn(Date, "now");
-    dateNowSpy.mockReturnValue(0);
+    // seededRandom derives its seed from the current hour via getHourSeed(),
+    // which reads `new Date()` — so mock the clock with fake timers rather
+    // than Date.now (which getHourSeed never calls).
+    jest.useFakeTimers();
+    jest.setSystemTime(0);
     const val1 = seededRandom(1);
-    dateNowSpy.mockReturnValue(HOUR_MS);
+    jest.setSystemTime(HOUR_MS);
     const val2 = seededRandom(1);
-    dateNowSpy.mockReturnValue(HOUR_MS * 2);
+    jest.setSystemTime(HOUR_MS * 2);
     const val3 = seededRandom(1);
 
-    const allSame = val1 === val2 && val2 === val3;
-    expect(allSame).toBe(false);
+    expect(val1 === val2 && val2 === val3).toBe(false);
   });
 
   it("different project IDs → different values", () => {
@@ -47,11 +50,12 @@ describe("seededRandom", () => {
   });
 
   it("values change across hours for same project ID", () => {
-    dateNowSpy = jest.spyOn(Date, "now").mockReturnValue(1000);
+    jest.useFakeTimers();
+    jest.setSystemTime(1000);
     const hour0 = seededRandom(42);
-    dateNowSpy.mockReturnValue(1000 + HOUR_MS);
+    jest.setSystemTime(1000 + HOUR_MS);
     const hour1 = seededRandom(42);
-    dateNowSpy.mockReturnValue(1000 + HOUR_MS * 2);
+    jest.setSystemTime(1000 + HOUR_MS * 2);
     const hour2 = seededRandom(42);
 
     expect(hour0).not.toBe(hour1);

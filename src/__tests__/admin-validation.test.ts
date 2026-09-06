@@ -39,6 +39,7 @@ describe("admin /update-scores input validation", () => {
     resetIdempotencyState();
     app = buildApp();
     jest.clearAllMocks();
+    resetIdempotencyState();
     (iot.getSolarData as jest.Mock).mockReturnValue({
       efficiency_pct: 85,
       power_output_kw: 500,

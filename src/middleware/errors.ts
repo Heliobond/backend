@@ -36,7 +36,7 @@ export function badRequest(message: string): ApiError {
   return new ApiError(400, "bad_request", message);
 }
 
-export const MAX_PROJECT_ID = 1_000_000;
+export const MAX_PROJECT_ID = 100_000;
 export const DEFAULT_MAX_PROJECT_ID = MAX_PROJECT_ID;
 
 export function maxProjectId(): number {
@@ -63,7 +63,7 @@ export function parseProjectId(raw: string | string[] | undefined, field = "id")
   }
   const limit = maxProjectId();
   if (id > limit) {
-    throw badRequest(`${field} must be between 1 and ${limit}`);
+    throw badRequest(`${field} must be a positive integer not exceeding ${limit}`);
   }
   return id;
 }

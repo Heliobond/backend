@@ -13,6 +13,14 @@ jest.mock("../lib/registry", () => ({
   getTotalProjects: jest.fn(),
 }));
 
+// config snapshots env vars at import time, so setting process.env later has no
+// effect on the middleware; keep the real config (iot needs MAX_POWER_KW etc.)
+// and only override the admin key.
+jest.mock("../config", () => {
+  const actual = jest.requireActual("../config");
+  return { config: { ...actual.config, ADMIN_API_KEY: "test-key" } };
+});
+
 const ADMIN_API_KEY = "test-key";
 const authHeader = { Authorization: `Bearer ${ADMIN_API_KEY}` };
 
@@ -97,9 +105,15 @@ describe("HTTP integration", () => {
     });
 
     it("returns 500 when ADMIN_API_KEY is not configured", async () => {
-      delete process.env.ADMIN_API_KEY;
-      const res = await request(app).post("/api/admin/update-scores").send({}).expect(500);
-      expect(res.body.error.code).toBe("server_misconfigured");
+      const configModule = jest.requireMock("../config") as { config: { ADMIN_API_KEY: string } };
+      const orig = configModule.config.ADMIN_API_KEY;
+      configModule.config.ADMIN_API_KEY = "";
+      try {
+        const res = await request(app).post("/api/admin/update-scores").send({}).expect(500);
+        expect(res.body.error.code).toBe("server_misconfigured");
+      } finally {
+        configModule.config.ADMIN_API_KEY = orig;
+      }
     });
   });
 });

@@ -5,8 +5,10 @@ import {
   fetchSatelliteWithFallback,
   getSourceHealth,
   registerSource,
+  getCustomFetchUrl,
 } from "../lib/satellite-sources";
 import { parseProjectId, badRequest } from "../middleware/errors";
+import { validatePublicUrl } from "../lib/ssrf";
 
 const router = Router();
 
@@ -54,10 +56,18 @@ const CUSTOM_SOURCE_FETCH_TIMEOUT_MS = 10_000;
  * shape. Expects JSON with numeric forest_density_pct and ndvi_score fields.
  */
 async function fetchFromCustomUrl(
-  fetchUrl: string,
   projectId: number,
   sourceName: string,
 ): Promise<{ forest_density_pct: number; ndvi_score: number; timestamp: number; source: string }> {
+  // Read the endpoint back from the registry at call time.
+  const fetchUrl = getCustomFetchUrl(sourceName);
+  if (fetchUrl === undefined) {
+    throw new Error(`Custom source ${sourceName} has no registered fetch URL`);
+  }
+
+  // Re-validate immediately before sending to avoid DNS rebinding attacks after registration.
+  await validatePublicUrl(fetchUrl);
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), CUSTOM_SOURCE_FETCH_TIMEOUT_MS);
 
@@ -116,10 +126,11 @@ router.post("/", (req: Request, res: Response) => {
   }
 
   try {
-     
-    new URL(fetchUrl);
-  } catch {
-    return res.status(400).json({ error: "fetchUrl must be a valid URL" });
+    validatedUrl = await validatePublicUrl(fetchUrl);
+  } catch (err) {
+    return res
+      .status(400)
+      .json({ error: err instanceof Error ? err.message : "fetchUrl must be a valid URL" });
   }
 
   const sourcePriority = typeof priority === "number" ? priority : 99;

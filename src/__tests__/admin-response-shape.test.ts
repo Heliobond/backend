@@ -9,12 +9,26 @@ import { resetIdempotencyState } from "../lib/idempotency";
 import { extractApiKeyRole } from "../middleware/requireApiKeyRole";
 import { loadApiKeysFromEnv } from "../lib/apiKeyRoles";
 
-jest.mock("../lib/registry", () => ({
-  updateImpactScore: jest.fn(),
-  getTotalProjects: jest.fn(),
-}));
+jest.mock("../lib/registry", () => {
+  class RpcDegradedError extends Error {
+    constructor(message?: string) {
+      super(message ?? "RPC is degraded");
+      this.name = "RpcDegradedError";
+    }
+  }
+  return {
+    updateImpactScore: jest.fn(),
+    getTotalProjects: jest.fn(),
+    RpcDegradedError,
+  };
+});
 jest.mock("../routes/iot");
 jest.mock("../lib/scoring");
+jest.mock("../config", () => ({
+  config: {
+    ADMIN_API_KEY: "test-key",
+  },
+}));
 
 function buildApp(): Express {
   const app = express();

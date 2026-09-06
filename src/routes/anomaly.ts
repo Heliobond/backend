@@ -1,5 +1,11 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { detectAnomalies, configureAnomalyDetection, getAnomalyConfig, clearHistory, AnomalyValidationError } from "../lib/anomaly";
+import {
+  detectAnomalies,
+  configureAnomalyDetection,
+  getAnomalyConfig,
+  clearHistory,
+  AnomalyConfig,
+} from "../lib/anomaly";
 import { getSolarData, getSatelliteData } from "./iot";
 import { parseProjectId, badRequest } from "../middleware/errors";
 
@@ -63,27 +69,41 @@ router.get("/", (_req: Request, res: Response) => {
  * PUT /v1/anomaly/config
  * Update anomaly detection sensitivity and window settings.
  * Body: { sensitivityZScore?, trendWindowSize?, trendDeviationPct?, minBaseline? }
+ * Only the keys present in the body are applied; the rest keep their current values.
  */
-router.put("/config", (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { sensitivityZScore, trendWindowSize, trendDeviationPct, minBaseline } = req.body as Record<string, unknown>;
-    configureAnomalyDetection({ sensitivityZScore, trendWindowSize, trendDeviationPct, minBaseline });
-    res.json({ ok: true, config: getAnomalyConfig() });
-  } catch (err) {
-    if (err instanceof AnomalyValidationError) return next(badRequest(err.message));
-    next(err);
+router.put("/config", (req: Request, res: Response) => {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const update: Partial<AnomalyConfig> = {};
+  for (const key of [
+    "sensitivityZScore",
+    "trendWindowSize",
+    "trendDeviationPct",
+    "minBaseline",
+  ] as const) {
+    if (body[key] !== undefined) update[key] = body[key] as number;
   }
+  configureAnomalyDetection(update);
+  res.json({ ok: true, config: getAnomalyConfig() });
 });
 
 /**
- * DELETE /v1/anomaly/history/:id?
- * Clear the baseline history for a specific project (or all projects).
+ * DELETE /v1/anomaly/history
+ * Clear the baseline history for all projects.
  */
-router.delete("/history/:id?", (req: Request, res: Response, next: NextFunction) => {
+router.delete("/history", (_req: Request, res: Response) => {
+  clearHistory();
+  res.json({ ok: true, cleared: "all" });
+});
+
+/**
+ * DELETE /v1/anomaly/history/:id
+ * Clear the baseline history for a specific project.
+ */
+router.delete("/history/:id", (req: Request, res: Response, next: NextFunction) => {
   try {
-    const id = req.params.id ? parseProjectId(req.params.id, "project id") : undefined;
+    const id = parseProjectId(req.params.id, "project id");
     clearHistory(id);
-    res.json({ ok: true, cleared: id ?? "all" });
+    res.json({ ok: true, cleared: id });
   } catch (err) {
     next(err);
   }

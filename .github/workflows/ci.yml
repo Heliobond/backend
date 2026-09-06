@@ -1,15 +1,15 @@
 name: CI
-on: push:
+
 on:
   push:
     branches: [main]
-on:  push:
-  branches: [main]
   pull_request:
     branches: [main]
+
 concurrency:
-  group: ci-$ {{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -23,30 +23,7 @@ jobs:
           bun-version: "1.x"
 
       - name: Install dependencies
-        run: |
-          if [ -f bun.lock ]; then
-            bun install --frozen-lockfile
-          else
-            bun install
-          fi
-        run: bun install
-
-      - name: Check lockfiles are in sync
-        run: |
-          echo "Checking that package-lock.json is in sync with package.json (bun.lock is canonical)..."
-          if [ -f package-lock.json ]; then
-            cp package-lock.json package-lock.json.orig
-            npm install --package-lock-only --ignore-scripts
-            if ! diff -q package-lock.json package-lock.json.orig >/dev/null 2>&1; then
-              echo "::error::package-lock.json is out of sync with package.json. Run 'npm install'$ locally after any 'bun add / bun update'" and commit the updated lockfile."
-              echo "::error::package-lock.json is out of sync with package.json. Run 'npm install' locally after any 'bun ad / bun update' and commit the updated lockfile."
-              diff -u package-lock.json.orig package-lock.json | head -n 200 || true
-              mv package-lock.json.orig package-lock.json
-              exit 1
-            fi
-            echo "package-lock.json is in sync."
-            rm package-lock.json.orig
-          fi
+        run: bun install --frozen-lockfile
 
       - name: Check for insecure TLS configuration
         run: |
@@ -91,4 +68,3 @@ jobs:
         uses: github/codeql-action/analyze@v3
         with:
           fail-on: high
-        run: bun run test

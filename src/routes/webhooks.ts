@@ -65,7 +65,13 @@ router.get("/:id", (req: Request, res: Response) => {
     res.status(404).json({ error: "not_found", message: "Webhook not found" });
     return;
   }
-  res.json({ id: wh.id, url: wh.url, max_retries: wh.max_retries, retry_delay_ms: wh.retry_delay_ms, created_at: wh.created_at });
+  res.json({
+    id: wh.id,
+    url: wh.url,
+    max_retries: wh.max_retries,
+    retry_delay_ms: wh.retry_delay_ms,
+    created_at: wh.created_at,
+  });
 });
 
 /** DELETE /api/webhooks/:id — unregister a webhook */
