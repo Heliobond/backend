@@ -86,7 +86,7 @@ describe("API Key Management and Authentication", () => {
 
     it("should return usage stats", async () => {
       const key = generateApiKey("Consumer Stats", 10);
-      
+
       const res = await request(app)
         .get(`/admin/api-keys/${key.id}/usage`)
         .set("Authorization", "Bearer admin-secret-key");
@@ -107,15 +107,18 @@ describe("API Key Management and Authentication", () => {
     it("should block requests with no key", async () => {
       const res = await request(app).get("/protected");
       expect(res.status).toBe(401);
-      expect(res.body.error).toBe("unauthorized");
+      expect(res.body).toEqual({
+        error: {
+          code: "unauthorized",
+          message: "Missing API key in Authorization bearer token or X-API-Key header",
+        },
+      });
     });
 
     it("should accept valid consumer key and record usage", async () => {
       const key = generateApiKey("Authenticated Consumer");
 
-      const res = await request(app)
-        .get("/protected")
-        .set("X-API-Key", key.key);
+      const res = await request(app).get("/protected").set("X-API-Key", key.key);
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
@@ -136,7 +139,12 @@ describe("API Key Management and Authentication", () => {
       // Request 4 -> Blocked (429)
       const res4 = await request(app).get("/protected").set("X-API-Key", key.key);
       expect(res4.status).toBe(429);
-      expect(res4.body.error).toBe("too_many_requests");
+      expect(res4.body).toEqual({
+        error: {
+          code: "too_many_requests",
+          message: "Rate limit exceeded for this API key. Please retry later.",
+        },
+      });
     });
   });
 });

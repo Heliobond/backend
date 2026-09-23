@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { logger } from "../lib/logger";
+import { errorBody } from "./errors";
 
 interface CidrRange {
   network: string;
@@ -98,8 +99,7 @@ export function ipWhitelist(req: Request, res: Response, next: NextFunction): vo
     method: req.method,
   });
 
-  res.status(403).json({
-    error: "forbidden",
-    message: "Your IP address is not authorized to access admin endpoints",
-  });
+  res
+    .status(403)
+    .json(errorBody("forbidden", "Your IP address is not authorized to access admin endpoints"));
 }

@@ -8,6 +8,7 @@ import {
   maxProjectId,
   MAX_PROJECT_ID,
 } from "../middleware/errors";
+import { createValidator } from "../middleware/validation";
 
 function buildApp(): Express {
   const app = express();
@@ -67,6 +68,22 @@ describe("request validation + structured errors", () => {
         code: "bad_request",
         message: "Request body is not valid JSON",
       },
+    });
+  });
+});
+
+describe("schema validation errors", () => {
+  it("returns the standard error response shape", async () => {
+    const app = express();
+    app.use(express.json());
+    app.post("/test", createValidator({ type: "object", required: ["name"] }), (_req, res) =>
+      res.sendStatus(204),
+    );
+
+    const res = await request(app).post("/test").send({}).expect(400);
+
+    expect(res.body).toEqual({
+      error: { code: "validation_error", message: "Missing required field: name" },
     });
   });
 });

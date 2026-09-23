@@ -35,7 +35,12 @@ describe("CSRF protection middleware", () => {
   it("rejects POST requests without CSRF token", async () => {
     const res = await request(app).post("/test");
     expect(res.status).toBe(403);
-    expect(res.body.error).toBe("csrf_token_missing");
+    expect(res.body).toEqual({
+      error: {
+        code: "csrf_token_missing",
+        message: "CSRF Token is required for this request",
+      },
+    });
   });
 
   it("accepts POST requests with valid CSRF token in header", async () => {
@@ -63,7 +68,12 @@ describe("CSRF protection middleware", () => {
 
     const postRes = await agent.post("/test").set("X-CSRF-Token", "invalid-token").send({});
     expect(postRes.status).toBe(403);
-    expect(postRes.body.error).toBe("csrf_token_invalid");
+    expect(postRes.body).toEqual({
+      error: {
+        code: "csrf_token_invalid",
+        message: "CSRF token does not match the cookie token",
+      },
+    });
   });
 
   it("accepts POST requests with CSRF token in body", async () => {

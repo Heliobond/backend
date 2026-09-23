@@ -58,7 +58,9 @@ describe("requestSigning middleware", () => {
     requestSigning(req, res, next);
 
     expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith({ error: "Missing signature or timestamp header" });
+    expect(res.json).toHaveBeenCalledWith({
+      error: { code: "unauthorized", message: "Missing signature or timestamp header" },
+    });
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -89,7 +91,9 @@ describe("requestSigning middleware", () => {
     requestSigning(req, res, next);
 
     expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith({ error: "Request timestamp expired or invalid" });
+    expect(res.json).toHaveBeenCalledWith({
+      error: { code: "unauthorized", message: "Request timestamp expired or invalid" },
+    });
   });
 
   it("should return 401 when signature is invalid", () => {
@@ -107,7 +111,9 @@ describe("requestSigning middleware", () => {
     requestSigning(req, res, next);
 
     expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith({ error: "Invalid request signature" });
+    expect(res.json).toHaveBeenCalledWith({
+      error: { code: "unauthorized", message: "Invalid request signature" },
+    });
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -126,7 +132,9 @@ describe("requestSigning middleware", () => {
     requestSigning(req, res, next);
 
     expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith({ error: "Invalid request signature" });
+    expect(res.json).toHaveBeenCalledWith({
+      error: { code: "unauthorized", message: "Invalid request signature" },
+    });
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -149,7 +157,9 @@ describe("requestSigning middleware", () => {
     requestSigning(req, res, next);
 
     expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith({ error: "Invalid request signature" });
+    expect(res.json).toHaveBeenCalledWith({
+      error: { code: "unauthorized", message: "Invalid request signature" },
+    });
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -168,7 +178,9 @@ describe("requestSigning middleware", () => {
     requestSigning(req, res, next);
 
     expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith({ error: "Invalid request signature" });
+    expect(res.json).toHaveBeenCalledWith({
+      error: { code: "unauthorized", message: "Invalid request signature" },
+    });
     expect(next).not.toHaveBeenCalled();
   });
 
