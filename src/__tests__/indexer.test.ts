@@ -1,14 +1,153 @@
 import { indexer } from "../lib/indexer";
 
-describe("EventIndexer", () => {
-  beforeEach(() => {
-    (indexer as any).store = {
-      events: [],
-      cursor: 0,
-      lastUpdated: Date.now(),
-    };
+// Prevent withRpcConnection from touching the real Stellar network; we supply
+// a mock client directly through the callback.
+jest.mock("../lib/stellar", () => ({
+  withRpcConnection: jest
+    .fn()
+    .mockImplementation((fn: (client: unknown) => Promise<unknown>) => fn(mockClient)),
+}));
+
+// Defined at module scope so individual tests can reconfigure per-call behaviour.
+const mockClient = {
+  getLatestLedger: jest.fn(),
+  getEvents: jest.fn(),
+  getTransaction: jest.fn(),
+};
+
+const resetStore = () => {
+  (indexer as any).store = { events: [], cursor: 0, lastUpdated: Date.now() };
+  (indexer as any).isIndexing = false;
+};
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  resetStore();
+});
+
+// ---------------------------------------------------------------------------
+// poll() — correct RPC surface
+// ---------------------------------------------------------------------------
+
+describe("EventIndexer.poll()", () => {
+  it("calls getEvents() to discover transactions, NOT getTransaction(seq) for every ledger", async () => {
+    // Arrange: ledger range 1 → 5, one contract event with a real tx hash.
+    const TX_HASH = "a".repeat(64);
+    mockClient.getLatestLedger.mockResolvedValue({ sequence: 5 });
+    mockClient.getEvents.mockResolvedValue({
+      events: [{ txHash: TX_HASH, ledger: 3, type: "contract" }],
+    });
+    // processTransaction calls getTransaction with the real hash to fetch details.
+    mockClient.getTransaction.mockResolvedValue({
+      source: `G${"A".repeat(55)}`,
+      events: [{ type: "deposit", amount: 500, shares: 10 }],
+    });
+
+    await indexer.poll();
+
+    // getEvents must have been invoked with the ledger range — this is the
+    // correct way to enumerate events across ledgers.
+    expect(mockClient.getEvents).toHaveBeenCalledWith(expect.objectContaining({ startLedger: 1 }));
+
+    // getTransaction must have been called with the real 64-char hash, never
+    // with a plain ledger sequence number like "1", "2", "3", etc.
+    const transactionCalls: string[] = mockClient.getTransaction.mock.calls.map(
+      ([arg]: [string]) => arg,
+    );
+    for (const arg of transactionCalls) {
+      expect(arg).toBe(TX_HASH); // must be a hash, not "1"/"2"/"3"/"4"/"5"
+      expect(/^\d+$/.test(arg)).toBe(false); // must NOT be a bare integer string
+    }
   });
 
+  it("advances the cursor to endLedger after a successful poll", async () => {
+    mockClient.getLatestLedger.mockResolvedValue({ sequence: 10 });
+    mockClient.getEvents.mockResolvedValue({ events: [] });
+
+    await indexer.poll();
+
+    expect(indexer.getStore().cursor).toBe(10);
+  });
+
+  it("does not advance cursor or call getEvents when endLedger <= startLedger", async () => {
+    (indexer as any).store.cursor = 10;
+    mockClient.getLatestLedger.mockResolvedValue({ sequence: 10 });
+
+    await indexer.poll();
+
+    expect(mockClient.getEvents).not.toHaveBeenCalled();
+    expect(indexer.getStore().cursor).toBe(10);
+  });
+
+  it("deduplicates events sharing the same txHash so processTransaction runs once per tx", async () => {
+    const TX_HASH = "b".repeat(64);
+    mockClient.getLatestLedger.mockResolvedValue({ sequence: 5 });
+    // Two events in the same transaction — should only trigger one processTransaction call.
+    mockClient.getEvents.mockResolvedValue({
+      events: [
+        { txHash: TX_HASH, ledger: 3 },
+        { txHash: TX_HASH, ledger: 3 },
+      ],
+    });
+    mockClient.getTransaction.mockResolvedValue(null);
+
+    await indexer.poll();
+
+    expect(mockClient.getTransaction).toHaveBeenCalledTimes(1);
+    expect(mockClient.getTransaction).toHaveBeenCalledWith(TX_HASH);
+  });
+
+  it("handles a getEvents response with no events without throwing", async () => {
+    mockClient.getLatestLedger.mockResolvedValue({ sequence: 3 });
+    mockClient.getEvents.mockResolvedValue({ events: [] });
+
+    await expect(indexer.poll()).resolves.not.toThrow();
+    expect(indexer.getStore().cursor).toBe(3);
+  });
+
+  it("skips events that carry no recognisable txHash", async () => {
+    mockClient.getLatestLedger.mockResolvedValue({ sequence: 5 });
+    mockClient.getEvents.mockResolvedValue({
+      events: [{ ledger: 3 /* no txHash field */ }],
+    });
+
+    await indexer.poll();
+
+    expect(mockClient.getTransaction).not.toHaveBeenCalled();
+  });
+
+  it("ingests a deposit event discovered through poll() end-to-end", async () => {
+    const TX_HASH = "c".repeat(64);
+    const SOURCE = `G${"B".repeat(55)}`;
+    mockClient.getLatestLedger.mockResolvedValue({ sequence: 7 });
+    mockClient.getEvents.mockResolvedValue({
+      events: [{ txHash: TX_HASH, ledger: 5 }],
+    });
+    mockClient.getTransaction.mockResolvedValue({
+      source: SOURCE,
+      events: [{ type: "deposit", amount: 1000, shares: 50 }],
+    });
+
+    await indexer.poll();
+
+    const stored = indexer.getStore().events;
+    expect(stored).toHaveLength(1);
+    expect(stored[0]).toMatchObject({
+      type: "deposit",
+      address: SOURCE,
+      amount: 1000,
+      shares: 50,
+      txHash: TX_HASH,
+      ledger: 5,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// processTransaction() — unchanged behaviour
+// ---------------------------------------------------------------------------
+
+describe("EventIndexer.processTransaction()", () => {
   it("indexes real transaction fields instead of fabricating them", async () => {
     const sourceAccount = `G${"A".repeat(55)}`;
     const txHash = "txhash-123";
