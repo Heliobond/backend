@@ -144,6 +144,48 @@ export function validateApiKey(key: string): ApiKey | null {
   return null;
 }
 
+export function resolveAuthContext(headers: any): {
+  providedKey: string;
+  isAdmin: boolean;
+  isConsumer: boolean;
+  consumerName: string;
+  keyRecord: ApiKey | null;
+  rateLimited: boolean;
+} {
+  const authHeader = headers.authorization;
+  const apiKeyHeader = headers["x-api-key"];
+  let providedKey = "";
+
+  if (apiKeyHeader && typeof apiKeyHeader === "string") {
+    providedKey = apiKeyHeader;
+  } else if (authHeader && typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
+    providedKey = authHeader.substring(7);
+  }
+
+  let isAdmin = false;
+  let isConsumer = false;
+  let consumerName = "";
+  let keyRecord: ApiKey | null = null;
+  let rateLimited = false;
+
+  const adminKey = process.env.ADMIN_API_KEY;
+  if (adminKey && timingSafeCompare(providedKey, adminKey)) {
+    isAdmin = true;
+  } else if (providedKey) {
+    keyRecord = validateApiKey(providedKey);
+    if (keyRecord) {
+      if (isRateLimited(keyRecord.id, keyRecord.rate_limit)) {
+        rateLimited = true;
+      } else {
+        isConsumer = true;
+        consumerName = keyRecord.consumer_name;
+      }
+    }
+  }
+
+  return { providedKey, isAdmin, isConsumer, consumerName, keyRecord, rateLimited };
+}
+
 export function incrementUsage(id: string): void {
   const apiKey = keysStore.get(id);
   if (apiKey) {
