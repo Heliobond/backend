@@ -52,7 +52,7 @@ For a bare `docker run`, pass them explicitly:
 ```bash
 docker run --memory=512m --cpus=0.5 \
   -e NODE_OPTIONS=--max-old-space-size=384 \
-  -p 3000:3000 --env-file .env \
+  -p 3001:3001 --env-file .env \
   ghcr.io/<owner>/backend:latest
 ```
 
