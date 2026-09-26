@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { Request, Response, NextFunction } from "express";
+import { config } from "../config";
 import { errorBody } from "./errors";
 
 const CSRF_TOKEN_LENGTH = 32;
@@ -41,7 +42,7 @@ function getCookieOptions(): {
   secure: boolean;
   sameSite: "strict" | "lax";
 } {
-  const isProduction = process.env.NODE_ENV === "production";
+  const isProduction = config.NODE_ENV === "production";
   return {
     secure: isProduction,
     sameSite: isProduction ? "strict" : "lax",
@@ -133,7 +134,7 @@ export function csrfProtection(req: Request, res: Response, next: NextFunction):
   }
 
   const origin = req.headers.origin || req.headers.referer;
-  const allowedOrigins = (process.env.CORS_ORIGINS || process.env.FRONTEND_URL || "")
+  const allowedOrigins = (config.CORS_ORIGINS || config.FRONTEND_URL || "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);

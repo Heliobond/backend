@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { createHmac } from "crypto";
+import { config } from "../config";
 import { timingSafeCompare } from "../lib/timing-safe";
 import { errorBody } from "./errors";
 
@@ -8,7 +9,7 @@ const TIMESTAMP_HEADER = "x-timestamp";
 const MAX_TIMESTAMP_AGE_MS = 5 * 60 * 1000; // 5 minutes
 
 function getSigningSecret(): string | undefined {
-  return process.env.REQUEST_SIGNING_SECRET;
+  return config.REQUEST_SIGNING_SECRET;
 }
 
 function computeSignature(
