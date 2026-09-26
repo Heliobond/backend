@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { indexer } from "../lib/indexer";
+import { logger } from "../lib/logger";
 import { badRequest } from "../middleware/errors";
 import { seededRandom } from "../lib/iot";
 
@@ -83,7 +84,7 @@ router.get("/:address", async (req: Request, res: Response, next: NextFunction) 
 
     res.json(response);
   } catch (error) {
-    console.error("[portfolio] error:", error);
+    logger.error("[portfolio] error", logger.formatError(error));
     next(error);
   }
 });

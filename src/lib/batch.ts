@@ -1,3 +1,5 @@
+import { logger } from "./logger";
+
 /**
  * Batch transaction support (#54).
  *
@@ -102,7 +104,7 @@ async function runBatchNative(
 ): Promise<void> {
   // Native batch: submit all ops in a single transaction envelope.
   // Not yet available — fall back to sequential until implemented.
-  console.warn("[batch] native Soroban batch detected but not yet implemented; falling back");
+  logger.warn("[batch] native Soroban batch detected but not yet implemented; falling back");
   await runBatchSequential(job, processor);
 }
 

@@ -1,5 +1,6 @@
 import { rpc } from "@stellar/stellar-sdk";
 import { withRpcConnection } from "./stellar";
+import { logger } from "./logger";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -293,7 +294,7 @@ class EventIndexer {
         this.store.lastUpdated = Date.now();
       });
     } catch (err) {
-      console.error("[indexer] poll failed:", err);
+      logger.error("[indexer] poll failed", logger.formatError(err));
     } finally {
       this.isIndexing = false;
     }
@@ -328,7 +329,7 @@ class EventIndexer {
 
       this.store.events.push(event);
     } catch (err) {
-      console.debug(`[indexer] could not process tx ${txHash}:`, err);
+      logger.debug(`[indexer] could not process tx ${txHash}`, logger.formatError(err));
     }
   }
 

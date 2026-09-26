@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { getTotalProjects } from "../lib/registry";
+import { logger } from "../lib/logger";
 import { getSolarData, getSatelliteData, seededRandom } from "./iot";
 import { computeScores } from "../lib/scoring";
 import { badRequest, parseProjectId, parseOptionalInt } from "../middleware/errors";
@@ -123,7 +124,7 @@ router.get("/", async (req: Request, res: Response, next: NextFunction) => {
 
     res.json(response);
   } catch (error) {
-    console.error("[projects] list error:", error);
+    logger.error("[projects] list error", logger.formatError(error));
     next(error);
   }
 });
@@ -150,7 +151,7 @@ router.get("/:id", async (req: Request, res: Response, next: NextFunction) => {
 
     res.json(response);
   } catch (error) {
-    console.error("[projects] detail error:", error);
+    logger.error("[projects] detail error", logger.formatError(error));
     next(error);
   }
 });

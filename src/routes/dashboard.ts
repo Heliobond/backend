@@ -1,4 +1,5 @@
 import { Router, Request, Response, NextFunction } from "express";
+import { logger } from "../lib/logger";
 import {
   collectScores,
   portfolioSummary,
@@ -17,7 +18,7 @@ router.get("/summary", async (_req: Request, res: Response, next: NextFunction) 
     const scores = await collectScores();
     res.json(portfolioSummary(scores));
   } catch (error) {
-    console.error("[dashboard] summary error:", error);
+    logger.error("[dashboard] summary error", logger.formatError(error));
     next(error);
   }
 });
@@ -29,7 +30,7 @@ router.get("/performers", async (req: Request, res: Response, next: NextFunction
     const scores = await collectScores();
     res.json(rankPerformers(scores, limit));
   } catch (error) {
-    console.error("[dashboard] performers error:", error);
+    logger.error("[dashboard] performers error", logger.formatError(error));
     next(error);
   }
 });
@@ -42,7 +43,7 @@ router.get("/distribution", async (req: Request, res: Response, next: NextFuncti
     const scores = await collectScores();
     res.json({ field, buckets: scoreDistribution(scores, field, bucket) });
   } catch (error) {
-    console.error("[dashboard] distribution error:", error);
+    logger.error("[dashboard] distribution error", logger.formatError(error));
     next(error);
   }
 });
@@ -63,7 +64,7 @@ router.get("/export", async (_req: Request, res: Response, next: NextFunction) =
     res.setHeader("Content-Disposition", 'attachment; filename="dashboard-export.csv"');
     res.send(summaryToCsv(scores));
   } catch (error) {
-    console.error("[dashboard] export error:", error);
+    logger.error("[dashboard] export error", logger.formatError(error));
     next(error);
   }
 });

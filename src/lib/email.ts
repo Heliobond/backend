@@ -8,6 +8,7 @@
  * any extra dependencies.
  */
 import { createHmac, randomUUID } from "crypto";
+import { logger } from "./logger";
 
 export type Frequency = "daily" | "weekly";
 
@@ -181,7 +182,7 @@ export async function sendEmail(
     return { provider: "sendgrid", delivered: true };
   }
   // Console transport — keeps the system working without external setup.
-  console.log(`[email] to=${msg.to} subject=${msg.subject}\n${msg.body}`);
+  logger.info(`[email] to=${msg.to} subject=${msg.subject}\n${msg.body}`);
   return { provider: "console", delivered: true };
 }
 
@@ -207,7 +208,7 @@ export async function sendAlertIfSignificant(change: ScoreChange): Promise<numbe
     } catch (err) {
       // One bad recipient must never abort the rest of the batch — mirror the
       // per-project isolation pattern used in runHourlyScoreUpdate.
-      console.error(`[email] alert send failed for ${sub.email}:`, err);
+      logger.error(`[email] alert send failed for ${sub.email}`, logger.formatError(err));
     }
   }
   return sent;
@@ -236,7 +237,7 @@ export async function sendDigest(frequency: Frequency, changes: ScoreChange[]): 
     } catch (err) {
       // One bad recipient must never abort the rest of the batch — mirror the
       // per-project isolation pattern used in runHourlyScoreUpdate.
-      console.error(`[email] digest send failed for ${sub.email}:`, err);
+      logger.error(`[email] digest send failed for ${sub.email}`, logger.formatError(err));
     }
   }
   return sent;
