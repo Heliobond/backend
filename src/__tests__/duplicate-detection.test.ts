@@ -14,16 +14,28 @@ jest.mock("../lib/logger", () => ({
   },
 }));
 
-import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
-import { logger } from "../lib/logger";
+let tryBeginUpdate: typeof import("../lib/duplicate-detection").tryBeginUpdate;
+let markCompleted: typeof import("../lib/duplicate-detection").markCompleted;
+let markFailed: typeof import("../lib/duplicate-detection").markFailed;
+let logger: typeof import("../lib/logger").logger;
 
 describe("duplicate-detection (cron concurrency guard)", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    // Re-import the real module (with the logger mock applied) so its
+    // in-memory lock map starts empty: the map is module-level state, so
+    // jest.resetModules() alone keeps the original bindings (and their locks)
+    // around. jest.requireMock would hand back an automatic mock whose
+    // functions return undefined, so requireActual is used instead.
+    jest.resetModules();
+    const fresh = jest.requireActual("../lib/duplicate-detection");
+    tryBeginUpdate = fresh.tryBeginUpdate;
+    markCompleted = fresh.markCompleted;
+    markFailed = fresh.markFailed;
+    // After resetModules the fresh module resolves a NEW logger mock instance;
+    // re-import it so assertions see the same functions it calls.
+    const freshLogger = await import("../lib/logger");
+    logger = freshLogger.logger;
     jest.clearAllMocks();
-    markCompleted("project-1");
-    markCompleted("project-2");
-    markCompleted(123);
-    markCompleted("concurrent-test");
   });
 
   it("allows first update attempt for a given ID", () => {
@@ -45,7 +57,7 @@ describe("duplicate-detection (cron concurrency guard)", () => {
     expect(result.allowed).toBe(false);
     expect(result.key).toBe("");
     expect(result.reason).toMatch(/Update already in progress since/);
-    expect(logger.warn).toHaveBeenCalledWith(
+    expect(logger.warn as jest.Mock).toHaveBeenCalledWith(
       expect.stringContaining("[duplicate-detection] Skipping update for project-1:"),
     );
   });
@@ -56,7 +68,7 @@ describe("duplicate-detection (cron concurrency guard)", () => {
 
     expect(result1.allowed).toBe(true);
     expect(result2.allowed).toBe(true);
-    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.warn as jest.Mock).not.toHaveBeenCalled();
   });
 
   it("releases lock after successful completion", () => {
@@ -67,7 +79,7 @@ describe("duplicate-detection (cron concurrency guard)", () => {
     // Should allow new attempt after lock is released
     const result = tryBeginUpdate("project-1");
     expect(result.allowed).toBe(true);
-    expect(logger.debug).toHaveBeenCalledWith(
+    expect(logger.debug as jest.Mock).toHaveBeenCalledWith(
       "[duplicate-detection] Lock released for project-1 after successful completion",
     );
   });
@@ -80,7 +92,7 @@ describe("duplicate-detection (cron concurrency guard)", () => {
     // Should allow new attempt after lock is released
     const result = tryBeginUpdate("project-1");
     expect(result.allowed).toBe(true);
-    expect(logger.debug).toHaveBeenCalledWith(
+    expect(logger.debug as jest.Mock).toHaveBeenCalledWith(
       "[duplicate-detection] Lock released for project-1 after failure",
     );
   });
@@ -96,7 +108,7 @@ describe("duplicate-detection (cron concurrency guard)", () => {
     const secondRun = tryBeginUpdate(projectId);
     expect(secondRun.allowed).toBe(false);
     expect(secondRun.reason).toMatch(/Update already in progress/);
-    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn as jest.Mock).toHaveBeenCalledTimes(1);
 
     // Complete first run
     markCompleted(projectId);
@@ -121,10 +133,10 @@ describe("duplicate-detection (cron concurrency guard)", () => {
     tryBeginUpdate("project-1");
     tryBeginUpdate("project-1");
 
-    expect(logger.warn).toHaveBeenCalledWith(
+    expect(logger.warn as jest.Mock).toHaveBeenCalledWith(
       expect.stringContaining("[duplicate-detection] Skipping update for project-1:"),
     );
-    expect(logger.warn).toHaveBeenCalledWith(
+    expect(logger.warn as jest.Mock).toHaveBeenCalledWith(
       expect.stringContaining("Update already in progress since"),
     );
   });

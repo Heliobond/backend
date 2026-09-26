@@ -131,13 +131,13 @@ describe("deployment workflow tests (#284)", () => {
   });
 
   describe("dependency audit workflow", () => {
-    it("ci.yml includes a dependency audit job", () => {
-      const content = readWorkflow("ci.yml");
-      expect(content).toMatch(/audit|Audit/);
+    it("security-audit.yml includes a dependency audit job", () => {
+      const content = readWorkflow("security-audit.yml");
+      expect(content).toMatch(/dependency-audit/i);
     });
 
     it("audit runs npm audit or equivalent", () => {
-      const content = readWorkflow("ci.yml");
+      const content = readWorkflow("security-audit.yml");
       expect(content).toMatch(/npm audit|yarn audit|bun audit/);
     });
   });

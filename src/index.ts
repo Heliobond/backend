@@ -139,7 +139,10 @@ function requestTimeout(timeoutMs: number) {
 //  - a CIDR or IP      — trust specific proxy IP(s)
 //  - a number N         — trust the first N hops in X-Forwarded-For
 const trustProxy = process.env.TRUST_PROXY || "false";
-app.set("trust proxy", trustProxy === "true" ? true : trustProxy);
+// Express accepts `true`, `false`, a hop count, or an IP/CIDR list here. The
+// literal string "false" is not a valid value — proxy-addr throws on it — so
+// map the documented disabled value onto the boolean it stands for.
+app.set("trust proxy", trustProxy === "true" ? true : trustProxy === "false" ? false : trustProxy);
 
 // Validate CORS origin
 function validateCorsOrigin(origin: string | undefined): string | undefined {
@@ -365,6 +368,20 @@ app.use(notFoundHandler);
 app.use(errorHandler);
 
 // ── Cron: index contract events every 5 minutes ──────────────────────────────
+// `cronTasks` and `scheduleCron` are declared here (not at the bottom of the
+// file) because the first scheduleCron call below pushes into the array — a
+// const declared later would still be in its temporal dead zone here.
+const cronTasks: ScheduledTask[] = [];
+
+function scheduleCron(
+  expression: string,
+  fn: () => void | Promise<void>,
+  opts?: { timezone?: string },
+): void {
+  const task = cron.schedule(expression, fn, opts);
+  cronTasks.push(task);
+}
+
 scheduleCron(
   "*/5 * * * *",
   async () => {
@@ -606,18 +623,6 @@ const grpcServer = startGrpcServer(50051);
 startSecretRotation();
 
 // ── Graceful shutdown (#57) ──────────────────────────────────────────────────
-// Track all scheduled cron tasks so we can stop them cleanly.
-const cronTasks: ScheduledTask[] = [];
-
-function scheduleCron(
-  expression: string,
-  fn: () => void | Promise<void>,
-  opts?: { timezone?: string },
-): void {
-  const task = cron.schedule(expression, fn, opts);
-  cronTasks.push(task);
-}
-
 let isShuttingDown = false;
 
 async function gracefulShutdown(signal: string): Promise<void> {

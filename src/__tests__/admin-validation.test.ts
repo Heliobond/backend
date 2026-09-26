@@ -2,10 +2,10 @@ import request from "supertest";
 import express, { Express } from "express";
 import adminRouter from "../routes/admin";
 import { errorHandler } from "../middleware/errors";
+import { resetIdempotencyState } from "../lib/scoreService";
 import * as registry from "../lib/registry";
 import * as iot from "../routes/iot";
 import * as scoring from "../lib/scoring";
-import { resetIdempotencyState } from "../lib/scoreService";
 
 // Factory mock avoids loading the real registry module, which throws at import
 // time when PROJECT_REGISTRY_CONTRACT_ID is unset (e.g. in CI).

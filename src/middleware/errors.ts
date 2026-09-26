@@ -36,16 +36,19 @@ export function badRequest(message: string): ApiError {
   return new ApiError(400, "bad_request", message);
 }
 
+/** Hard upper bound on project ids, used when MAX_PROJECT_ID is unset or invalid. */
 export const MAX_PROJECT_ID = 100_000;
 export const DEFAULT_MAX_PROJECT_ID = MAX_PROJECT_ID;
 
+/**
+ * Upper bound on project ids. `MAX_PROJECT_ID` can be raised/lowered per
+ * deployment; anything unset, non-integer or below 1 falls back to the default.
+ */
 export function maxProjectId(): number {
-  const envVal = process.env.MAX_PROJECT_ID;
-  if (envVal) {
-    const parsed = parseInt(envVal, 10);
-    if (!Number.isNaN(parsed) && parsed > 0) return parsed;
-  }
-  return MAX_PROJECT_ID;
+  const raw = process.env.MAX_PROJECT_ID;
+  if (raw === undefined || raw === "") return DEFAULT_MAX_PROJECT_ID;
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : DEFAULT_MAX_PROJECT_ID;
 }
 
 /**

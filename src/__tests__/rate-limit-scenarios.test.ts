@@ -23,6 +23,7 @@ describe("rate limiting scenarios", () => {
       await request(app).get("/ping").expect(200);
     }
     const res = await request(app).get("/ping").expect(429);
+    // Matches the documented error contract: { error: { code, message } }.
     expect(res.body).toEqual({
       error: {
         code: "too_many_requests",
