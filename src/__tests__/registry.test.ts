@@ -51,6 +51,7 @@ jest.mock("../lib/stellar", () => ({
       this.name = "RpcDegradedError";
     }
   },
+  withRpcRetry: jest.fn().mockImplementation((fn: () => any) => fn()),
 }));
 
 jest.mock("../config", () => ({

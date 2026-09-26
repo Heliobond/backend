@@ -13,6 +13,7 @@ import {
   getAdminKeypair,
   signAndSubmit,
   RpcDegradedError,
+  withRpcRetry,
 } from "./stellar";
 import { config } from "../config";
 import { stellarRpcDuration, stellarRpcTotal } from "./prometheus";
@@ -95,7 +96,7 @@ export async function getTotalProjects(): Promise<number> {
 
     let sim: rpc.Api.SimulateTransactionResponse;
     try {
-      sim = await client.simulateTransaction(tx);
+      sim = await withRpcRetry(() => client.simulateTransaction(tx), "stellar:simulateTransaction");
     } catch (err) {
       end();
       stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });

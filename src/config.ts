@@ -114,6 +114,10 @@ function buildConfig() {
     TX_RETRY_BASE_DELAY_MS: numEnv("TX_RETRY_BASE_DELAY_MS", 200),
     TX_RETRY_MAX_DELAY_MS: numEnv("TX_RETRY_MAX_DELAY_MS", 10000),
 
+    /** Stellar RPC retries */
+    RPC_MAX_RETRIES: numEnv("RPC_MAX_RETRIES", 3),
+    RPC_RETRY_BASE_MS: numEnv("RPC_RETRY_BASE_MS", 1000),
+
     /** Stellar transaction polling */
     POLL_INTERVAL_MS: numEnv("POLL_INTERVAL_MS", 1500),
     POLL_MAX_ATTEMPTS: numEnv("POLL_MAX_ATTEMPTS", 20),
