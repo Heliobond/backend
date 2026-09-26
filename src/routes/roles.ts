@@ -1,4 +1,4 @@
-import { Router, Request, Response } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import { assignRole, removeRole, listRoles, type Role } from "../lib/roles";
 import { identifyUser, requireAuth, requireRole } from "../middleware/rbac";
 import { badRequest } from "../middleware/errors";
@@ -7,10 +7,23 @@ const router = Router();
 
 const VALID_ROLES: Role[] = ["admin", "operator", "viewer"];
 
+/**
+ * Allow the first role assignment to bootstrap the system.
+ * When no roles exist yet, permit assigning the "admin" role without
+ * requiring an existing admin (otherwise there is no way to create one).
+ */
+function requireAdminOrBootstrap(req: Request, res: Response, next: NextFunction): void {
+  if (listRoles().length === 0 && (req.body as { role?: unknown })?.role === "admin") {
+    next();
+    return;
+  }
+  requireRole("admin")(req, res, next);
+}
+
 router.use(identifyUser);
 
-/** POST /api/roles  — assign a role to a user (admin only) */
-router.post("/", requireAuth, requireRole("admin"), (req: Request, res: Response) => {
+/** POST /api/roles  — assign a role to a user (admin only, or bootstrap when no roles exist) */
+router.post("/", requireAuth, requireAdminOrBootstrap, (req: Request, res: Response) => {
   const { userId, role } = req.body as { userId?: unknown; role?: unknown };
   if (typeof userId !== "string" || !userId.trim()) {
     throw badRequest("userId must be a non-empty string");

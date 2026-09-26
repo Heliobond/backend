@@ -66,7 +66,12 @@ export interface ReadinessReport {
 
 export function getReadiness(): ReadinessReport {
   const dbMetrics = rpcPool.getMetrics();
-  const dbReady = dbMetrics.active >= 0;
+  // The pool is ready only if it currently holds at least one connection that
+  // passed its last health check. `active`/`idle`/`total` are all non-negative
+  // counts that stay populated even when every connection is failing, so they
+  // cannot express an unhealthy pool; `healthy` drops to 0 when the RPC
+  // endpoint is unreachable and the periodic health check marks connections bad.
+  const dbReady = dbMetrics.healthy > 0;
   const outage = getOutageState();
   const satelliteReady = outage.consecutiveFailures < 3;
   const rpcReady = rpcBreaker.getState() !== "OPEN";

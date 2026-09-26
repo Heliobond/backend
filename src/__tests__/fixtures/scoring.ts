@@ -22,8 +22,7 @@ export const projectFixtures = [
     solar: { efficiency_pct: -50, power_output_kw: 100, max_power_kw: 1000 },
     satellite: { forest_density_pct: 50, ndvi_score: 0.5 },
     expectedCreditQuality: 0, // clamped to 0
-    expectedGreenImpact: 25, // (100/1000)*50 + (50/100)*50 = 5 + 25 = 30? Wait calculation: powerRatio 0.1 => 5, forest 0.5 => 25 total 30, but creditQuality is 0, greenImpact based on formula: (power/max)*50 + (forest/100)*50 = (100/1000)*50 + (50/100)*50 = 5 + 25 = 30
-    expectedGreenImpact: 30,
+    expectedGreenImpact: 30, // (power/max)*50 + (forest/100)*50 = (100/1000)*50 + (50/100)*50 = 5 + 25 = 30
   },
   {
     projectId: "excess-efficiency",

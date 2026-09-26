@@ -35,51 +35,57 @@ describe("CSRF protection middleware", () => {
   it("rejects POST requests without CSRF token", async () => {
     const res = await request(app).post("/test");
     expect(res.status).toBe(403);
-    expect(res.body.error).toBe("csrf_token_missing");
+    expect(res.body).toEqual({
+      error: {
+        code: "csrf_token_missing",
+        message: "CSRF Token is required for this request",
+      },
+    });
   });
 
   it("accepts POST requests with valid CSRF token in header", async () => {
-    const getRes = await request(app).get("/test");
+    // Use an agent so the CSRF session + XSRF-TOKEN cookies set on GET are
+    // carried on the subsequent POST (the store is keyed by session cookie).
+    const agent = request.agent(app);
+    const getRes = await agent.get("/test");
     const cookies = Array.isArray(getRes.headers["set-cookie"])
       ? getRes.headers["set-cookie"]
       : [getRes.headers["set-cookie"]];
     const cookie = cookies.find((c: string) => c.startsWith("XSRF-TOKEN="));
     const token = cookie?.split("=")[1]?.split(";")[0];
 
-    const postRes = await request(app)
-      .post("/test")
-      .set("X-CSRF-Token", token!)
-      .send({});
+    const postRes = await agent.post("/test").set("X-CSRF-Token", token!).send({});
     expect(postRes.status).toBe(200);
   });
 
   it("rejects POST requests with invalid CSRF token", async () => {
-    const getRes = await request(app).get("/test");
+    const agent = request.agent(app);
+    const getRes = await agent.get("/test");
     const cookies = Array.isArray(getRes.headers["set-cookie"])
       ? getRes.headers["set-cookie"]
       : [getRes.headers["set-cookie"]];
     const cookie = cookies.find((c: string) => c.startsWith("XSRF-TOKEN="));
-    const token = cookie?.split("=")[1]?.split(";")[0];
 
-    const postRes = await request(app)
-      .post("/test")
-      .set("X-CSRF-Token", "invalid-token")
-      .send({});
+    const postRes = await agent.post("/test").set("X-CSRF-Token", "invalid-token").send({});
     expect(postRes.status).toBe(403);
-    expect(postRes.body.error).toBe("csrf_token_invalid");
+    expect(postRes.body).toEqual({
+      error: {
+        code: "csrf_token_invalid",
+        message: "CSRF token does not match the cookie token",
+      },
+    });
   });
 
   it("accepts POST requests with CSRF token in body", async () => {
-    const getRes = await request(app).get("/test");
+    const agent = request.agent(app);
+    const getRes = await agent.get("/test");
     const cookies = Array.isArray(getRes.headers["set-cookie"])
       ? getRes.headers["set-cookie"]
       : [getRes.headers["set-cookie"]];
     const cookie = cookies.find((c: string) => c.startsWith("XSRF-TOKEN="));
     const token = cookie?.split("=")[1]?.split(";")[0];
 
-    const postRes = await request(app)
-      .post("/test")
-      .send({ _csrf: token });
+    const postRes = await agent.post("/test").send({ _csrf: token });
     expect(postRes.status).toBe(200);
   });
 });

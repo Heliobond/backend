@@ -31,9 +31,11 @@ import { createHandler } from "graphql-http/lib/use/express";
 import { graphqlSchema, graphqlRoot, createGraphQLContext } from "./graphql/schema";
 import { startGrpcServer } from "./grpc/server";
 import { getSolarData } from "./lib/iot";
+import { assignRole } from "./lib/roles";
 import { fetchSatelliteWithFallback } from "./lib/satellite-sources";
 import { computeScores } from "./lib/scoring";
-import { updateImpactScore } from "./lib/registry";
+import { getTotalProjects, updateImpactScore, DuplicateSubmissionError } from "./lib/registry";
+import { generateIdempotencyKey, checkIdempotency } from "./lib/idempotency";
 import { runHourlyScoreUpdate } from "./lib/scoreUpdateCron";
 import { isErrorRateLimited } from "./lib/error-limiter";
 import { isRpcOutageExtended, isRpcAvailable, getRpcStatus } from "./lib/stellar";
@@ -64,6 +66,7 @@ import { getTraces, getTraceSummary } from "./lib/tracer";
 import { tracingMiddleware } from "./middleware/tracing";
 import { checkScheduledRotations } from "./lib/apiKeys";
 import { ipWhitelist } from "./middleware/ipWhitelist";
+import { apiKeyAuth } from "./middleware/apiKeyAuth";
 import { requestSigning } from "./middleware/requestSigning";
 import { initApm } from "./lib/apm";
 import { csrfProtection, setCsrfCookie } from "./middleware/csrf";
@@ -74,8 +77,16 @@ import { featureFlagContext, registerFlagRoutes } from "./middleware/featureFlag
 import { loadFlags, getFlagAnalytics } from "./lib/feature-flags";
 import { compressionMiddleware, getCompressionMetrics } from "./middleware/compression";
 import { handleListenError } from "./lib/listen-errors";
+import { initBenchmarkSamples } from "./lib/benchmarking";
+import { createBenchmarkSampleInitializer } from "./lib/benchmarkStartup";
 
 const env = initEnv();
+
+// Seed initial admin from env var (RBAC bootstrap)
+const initialAdminUserId = process.env.INITIAL_ADMIN_USER_ID?.trim();
+if (initialAdminUserId) {
+  assignRole(initialAdminUserId, "admin");
+}
 
 // Initialize APM in background — errors are logged but don't block startup
 initApm().catch((err: Error) => {
@@ -91,6 +102,32 @@ if (!process.env.ADMIN_API_KEY) {
 const app = express();
 const PORT = env.PORT;
 
+function parseTimeoutMs(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+const REQUEST_TIMEOUT_MS = parseTimeoutMs(process.env.REQUEST_TIMEOUT_MS, 30000);
+const ADMIN_REQUEST_TIMEOUT_MS = parseTimeoutMs(process.env.ADMIN_REQUEST_TIMEOUT_MS, 60000);
+
+function requestTimeout(timeoutMs: number) {
+  return (req: any, res: any, next: any) => {
+    if (res.locals.timeoutTimer) {
+      clearTimeout(res.locals.timeoutTimer);
+    }
+    const timer = setTimeout(() => {
+      if (!res.headersSent) {
+        res.status(408).json({ error: "request_timeout", message: "Request timed out" });
+      }
+      req.destroy();
+    }, timeoutMs);
+    res.locals.timeoutTimer = timer;
+    const clearTimer = () => clearTimeout(timer);
+    res.once("finish", clearTimer);
+    res.once("close", clearTimer);
+    next();
+  };
+}
 // Trust proxy configuration — required for Express to parse X-Forwarded-For
 // via req.ip / req.ips.  Without this, ipWhitelist must hand-parse headers,
 // which is vulnerable to spoofing.
@@ -102,7 +139,10 @@ const PORT = env.PORT;
 //  - a CIDR or IP      — trust specific proxy IP(s)
 //  - a number N         — trust the first N hops in X-Forwarded-For
 const trustProxy = process.env.TRUST_PROXY || "false";
-app.set("trust proxy", trustProxy === "true" ? true : trustProxy);
+// Express accepts `true`, `false`, a hop count, or an IP/CIDR list here. The
+// literal string "false" is not a valid value — proxy-addr throws on it — so
+// map the documented disabled value onto the boolean it stands for.
+app.set("trust proxy", trustProxy === "true" ? true : trustProxy === "false" ? false : trustProxy);
 
 // Validate CORS origin
 function validateCorsOrigin(origin: string | undefined): string | undefined {
@@ -150,6 +190,9 @@ app.use(
     level: parseInt(process.env.COMPRESSION_LEVEL ?? "6", 10),
   }),
 );
+app.use(requestTimeout(REQUEST_TIMEOUT_MS));
+app.use("/v1/admin", requestTimeout(ADMIN_REQUEST_TIMEOUT_MS));
+app.use("/api/admin", requestTimeout(ADMIN_REQUEST_TIMEOUT_MS));
 app.use(express.json({ limit: env.BODY_SIZE_LIMIT }));
 app.use(sanitizeInputs);
 app.use(csrfProtection);
@@ -193,6 +236,11 @@ app.get("/v1/traces", adminLimiter, (req, res) => {
 });
 
 // ── Swagger UI at /docs ─────────────────────────────────────────────────────
+// Swagger UI bootstraps with an inline script, which the global CSP blocks.
+app.use("/docs", (_req, res, next) => {
+  res.removeHeader("Content-Security-Policy");
+  next();
+});
 app.use("/docs", swaggerUi.serve, swaggerUi.setup(openApiSpec));
 // Raw OpenAPI spec for tooling
 app.get("/docs.json", (_req, res) => res.json(openApiSpec));
@@ -244,8 +292,10 @@ app.put("/v1/admin/logging/level", ipWhitelist, adminLimiter, (req, res) => {
   try {
     setLogLevel(level as any);
     res.json({ level: getLogLevel(), message: "Log level updated successfully" });
-  } catch (err: any) {
-    res.status(400).json({ error: "invalid_level", message: err.message });
+  } catch (err) {
+    res
+      .status(400)
+      .json({ error: "invalid_level", message: err instanceof Error ? err.message : String(err) });
   }
 });
 
@@ -264,55 +314,53 @@ const v1 = express.Router();
 v1.use(versionHeaders);
 v1.use(acceptVersion);
 
-v1.use("/iot", publicLimiter, iotRouter);
-v1.use("/admin", ipWhitelist, adminLimiter, requestSigning, adminRouter);
+v1.use("/iot", publicLimiter, apiKeyAuth, iotRouter);
+v1.use("/admin/feature-flags/analytics", ipWhitelist, adminLimiter, requestSigning, adminRouter);
 v1.use("/admin/batch", ipWhitelist, adminLimiter, requestSigning, batchRouter);
-v1.use("/projects", publicLimiter, projectsRouter);
-v1.use("/projects/:id/history", publicLimiter, historyRouter);
-v1.use("/projects/aggregate", publicLimiter, aggregateRouter);
+v1.use("/projects", publicLimiter, apiKeyAuth, projectsRouter);
+v1.use("/projects/:id/history", publicLimiter, apiKeyAuth, historyRouter);
+v1.use("/projects/aggregate", publicLimiter, apiKeyAuth, aggregateRouter);
 v1.use("/portfolio", publicLimiter, portfolioRouter);
-v1.use("/roles", ipWhitelist, adminLimiter, requestSigning, rolesRouter);
+v1.use("/roles", ipWhitelist, adminLimiter, rolesRouter);
 v1.use("/webhooks", ipWhitelist, adminLimiter, requestSigning, webhooksRouter);
 v1.use("/panels", ipWhitelist, adminLimiter, requestSigning, panelsRouter);
-v1.use("/metadata", ipWhitelist, adminLimiter, requestSigning, metadataRouter);
-v1.use("/dashboard", publicLimiter, dashboardRouter);
+v1.use("/metadata", ipWhitelist, adminLimiter, metadataRouter);
+v1.use("/dashboards", publicLimiter, apiKeyAuth, dashboardRouter);
 v1.use("/email", ipWhitelist, adminLimiter, requestSigning, emailRouter);
 v1.use("/anomaly", publicLimiter, anomalyRouter);
 v1.use("/scoring/formulas", ipWhitelist, adminLimiter, requestSigning, scoringFormulasRouter);
-v1.use("/chains", ipWhitelist, adminLimiter, requestSigning, chainsRouter);
+v1.use("/chains", publicLimiter, adminLimiter, chainsRouter);
 v1.use("/satellite-sources", ipWhitelist, adminLimiter, requestSigning, satelliteSourcesRouter);
-v1.use("/comparison", publicLimiter, comparisonRouter);
-v1.use("/benchmarking", publicLimiter, benchmarkingRouter);
-v1.use("/financial", publicLimiter, financialRouter);
+v1.use("/comparison", publicLimiter, apiKeyAuth, comparisonRouter);
+v1.use("/benchmarking", publicLimiter, apiKeyAuth, benchmarkingRouter);
+v1.use("/financial", publicLimiter, apiKeyAuth, financialRouter);
 v1.use("/forecast", publicLimiter, forecastRouter);
-v1.use("/maintenance", publicLimiter, maintenanceRouter);
+v1.use("/maintenance", publicLimiter, apiKeyAuth, maintenanceRouter);
 v1.use("/investor", publicLimiter, investorRouter);
 v1.use("/admin/api-keys", ipWhitelist, adminLimiter, requestSigning, apiKeysRouter);
-
-app.use("/v1", v1);
 
 // ── Legacy /api paths (deprecated) ──────────────────────────────────────────
 // Kept for backward compatibility; will be removed after 2027-01-01.
 app.use("/api", deprecationHeaders, versionHeaders);
-app.use("/api/iot", publicLimiter, iotRouter);
+app.use("/api/iot", publicLimiter, apiKeyAuth, iotRouter);
 app.use("/api/admin", ipWhitelist, adminLimiter, adminRouter);
 app.use("/api/admin/batch", ipWhitelist, adminLimiter, batchRouter);
-app.use("/api/projects", publicLimiter, projectsRouter);
-app.use("/api/projects/:id/history", publicLimiter, historyRouter);
-app.use("/api/projects/aggregate", publicLimiter, aggregateRouter);
-app.use("/api/portfolio", publicLimiter, portfolioRouter);
+app.use("/api/projects", publicLimiter, apiKeyAuth, projectsRouter);
+app.use("/api/projects/:id/history", publicLimiter, apiKeyAuth, historyRouter);
+app.use("/api/projects/aggregate", publicLimiter, apiKeyAuth, aggregateRouter);
+app.use("/api/portfolio", publicLimiter, apiKeyAuth, portfolioRouter);
 app.use("/api/roles", ipWhitelist, adminLimiter, rolesRouter);
 app.use("/api/webhooks", ipWhitelist, adminLimiter, webhooksRouter);
 app.use("/api/panels", ipWhitelist, adminLimiter, panelsRouter);
 app.use("/api/metadata", ipWhitelist, adminLimiter, metadataRouter);
-app.use("/api/dashboard", publicLimiter, dashboardRouter);
+app.use("/api/dashboard", publicLimiter, apiKeyAuth, dashboardRouter);
 app.use("/api/email", ipWhitelist, adminLimiter, emailRouter);
-app.use("/api/comparison", publicLimiter, comparisonRouter);
-app.use("/api/benchmarking", publicLimiter, benchmarkingRouter);
-app.use("/api/financial", publicLimiter, financialRouter);
-app.use("/api/forecast", publicLimiter, forecastRouter);
-app.use("/api/maintenance", publicLimiter, maintenanceRouter);
-app.use("/api/investor", publicLimiter, investorRouter);
+app.use("/api/comparison", publicLimiter, apiKeyAuth, comparisonRouter);
+app.use("/api/benchmarking", publicLimiter, apiKeyAuth, benchmarkingRouter);
+app.use("/api/financial", publicLimiter, apiKeyAuth, financialRouter);
+app.use("/api/forecast", publicLimiter, apiKeyAuth, forecastRouter);
+app.use("/api/maintenance", publicLimiter, apiKeyAuth, maintenanceRouter);
+app.use("/api/investor", publicLimiter, apiKeyAuth, investorRouter);
 app.use("/api/admin/api-keys", ipWhitelist, adminLimiter, apiKeysRouter);
 
 // JSON 404 for anything unmatched, then the structured error handler.
@@ -320,6 +368,20 @@ app.use(notFoundHandler);
 app.use(errorHandler);
 
 // ── Cron: index contract events every 5 minutes ──────────────────────────────
+// `cronTasks` and `scheduleCron` are declared here (not at the bottom of the
+// file) because the first scheduleCron call below pushes into the array — a
+// const declared later would still be in its temporal dead zone here.
+const cronTasks: ScheduledTask[] = [];
+
+function scheduleCron(
+  expression: string,
+  fn: () => void | Promise<void>,
+  opts?: { timezone?: string },
+): void {
+  const task = cron.schedule(expression, fn, opts);
+  cronTasks.push(task);
+}
+
 scheduleCron(
   "*/5 * * * *",
   async () => {
@@ -387,28 +449,50 @@ scheduleCron(
         const satellite = await fetchSatelliteWithFallback(item.projectId);
         const fresh = computeScores({ solar, satellite });
 
-        const tx_hash = await updateImpactScore(
-          item.projectId,
-          fresh.credit_quality,
-          fresh.green_impact,
-        );
-        processed.push(item.projectId);
-        logger.info(
-          `[cron] tx-queue: project ${item.projectId} retried successfully tx=${tx_hash}`,
-        );
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        incrementRetry(item.projectId, errMsg);
-
-        if (hasExceededMaxRetries(item.projectId)) {
-          logger.error(
-            `[cron] tx-queue: project ${item.projectId} exceeded max retries (${maxRetries}), dropping`,
+        // Generate an idempotency key for this retry so a queued transaction
+        // that was already submitted on-chain is not double-submitted.
+        const idempotencyKey = generateIdempotencyKey(item.projectId);
+        const { isDuplicate } = checkIdempotency(idempotencyKey);
+        if (isDuplicate) {
+          logger.info(
+            `[cron] tx-queue: project ${item.projectId} skipped — already submitted this hour (key=${idempotencyKey})`,
           );
           remove(item.projectId);
+          processed.push(item.projectId);
         } else {
-          logger.warn(
-            `[cron] tx-queue: project ${item.projectId} retry failed (attempt ${item.retryCount + 1}), will retry`,
+          const tx_hash = await updateImpactScore(
+            item.projectId,
+            fresh.credit_quality,
+            fresh.green_impact,
+            idempotencyKey,
           );
+          processed.push(item.projectId);
+          logger.info(
+            `[cron] tx-queue: project ${item.projectId} retried successfully tx=${tx_hash}`,
+          );
+        }
+      } catch (err) {
+        if (err instanceof DuplicateSubmissionError) {
+          // Belt-and-suspenders: also catch if DuplicateSubmissionError bubbles up.
+          logger.info(
+            `[cron] tx-queue: project ${item.projectId} skipped (duplicate): ${err.message}`,
+          );
+          remove(item.projectId);
+          processed.push(item.projectId);
+        } else {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          incrementRetry(item.projectId, errMsg);
+
+          if (hasExceededMaxRetries(item.projectId)) {
+            logger.error(
+              `[cron] tx-queue: project ${item.projectId} exceeded max retries (${maxRetries}), dropping`,
+            );
+            remove(item.projectId);
+          } else {
+            logger.warn(
+              `[cron] tx-queue: project ${item.projectId} retry failed (attempt ${item.retryCount + 1}), will retry`,
+            );
+          }
         }
       }
     }
@@ -429,9 +513,9 @@ scheduleCron(
       const status = getRpcStatus();
       logger.error(
         `[alert] Stellar RPC outage detected: ` +
-        `consecutiveFailures=${status.consecutiveFailures}, ` +
-        `outageDurationMs=${status.outageDurationMs}, ` +
-        `lastSuccessAgoMs=${status.lastSuccessAgoMs}`,
+          `consecutiveFailures=${status.consecutiveFailures}, ` +
+          `outageDurationMs=${status.outageDurationMs}, ` +
+          `lastSuccessAgoMs=${status.lastSuccessAgoMs}`,
       );
     }
   },
@@ -451,9 +535,11 @@ scheduleCron(
           key_ids: rotated.map((k) => k.id),
         });
       }
-    } catch (err: any) {
+    } catch (err) {
       if (!isErrorRateLimited("cron:api-key-rotation")) {
-        logger.error("[cron] API key rotation check failed", { error: err?.message });
+        logger.error("[cron] API key rotation check failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
       recordCronRun("api-key-rotation", "error");
     }
@@ -461,16 +547,27 @@ scheduleCron(
   { timezone: CRON_TIMEZONE },
 );
 
-const server = app.listen(PORT, () => {
-  logger.info(`Heliobond backend listening on port ${PORT}`);
+const initializeBenchmarkSamples = createBenchmarkSampleInitializer({
+  getTotalProjects,
+  seedSamples: initBenchmarkSamples,
+  warn: logger.warn,
 });
 
-// Bind failures (EADDRINUSE, EACCES, …) surface here instead of as an uncaught
-// exception with a raw stack trace. Exits 1 so supervisors treat it as a failure.
-server.on("error", (err: NodeJS.ErrnoException) => handleListenError(err, PORT));
+const serverPromise = initializeBenchmarkSamples().then((sampleSize) => {
+  logger.info("[startup] benchmark samples initialized", { sample_size: sampleSize });
 
-// Real-time score updates over WebSocket (ws://<host>/ws)
-attachWebSocketServer(server);
+  const server = app.listen(PORT, () => {
+    logger.info(`Heliobond backend listening on port ${PORT}`);
+  });
+
+  // Bind failures (EADDRINUSE, EACCES, …) surface here instead of as an uncaught
+  // exception with a raw stack trace. Exits 1 so supervisors treat it as a failure.
+  server.on("error", (err: NodeJS.ErrnoException) => handleListenError(err, PORT));
+
+  // Real-time score updates over WebSocket (ws://<host>/ws)
+  attachWebSocketServer(server);
+  return server;
+});
 
 // GraphQL endpoint and playground setup
 app.all(
@@ -484,13 +581,14 @@ app.all(
 
 app.get("/graphql-playground", (req, res) => {
   // Generate a nonce for inline script CSP
-  const nonce = require('crypto').randomBytes(16).toString('hex');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const nonce = require("crypto").randomBytes(16).toString("hex");
 
   res.setHeader("Content-Type", "text/html");
   // Override CSP to allow inline script with nonce
   res.setHeader(
     "Content-Security-Policy",
-    `default-src 'self'; script-src 'self' https://unpkg.com 'nonce-${nonce}'; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; connect-src 'self'`
+    `default-src 'self'; script-src 'self' https://unpkg.com 'nonce-${nonce}'; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; connect-src 'self'`,
   );
 
   res.send(`
@@ -525,18 +623,6 @@ const grpcServer = startGrpcServer(50051);
 startSecretRotation();
 
 // ── Graceful shutdown (#57) ──────────────────────────────────────────────────
-// Track all scheduled cron tasks so we can stop them cleanly.
-const cronTasks: ScheduledTask[] = [];
-
-function scheduleCron(
-  expression: string,
-  fn: () => void | Promise<void>,
-  opts?: { timezone?: string },
-): void {
-  const task = cron.schedule(expression, fn, opts);
-  cronTasks.push(task);
-}
-
 let isShuttingDown = false;
 
 async function gracefulShutdown(signal: string): Promise<void> {
@@ -549,6 +635,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
   const shutdownPromise = (async () => {
     // 1. Stop accepting new HTTP requests
     logger.info("[shutdown] closing HTTP server (draining in-flight requests)…");
+    const server = await serverPromise;
     await new Promise<void>((resolve) => server.close(() => resolve()));
     logger.info("[shutdown] HTTP server closed");
 
@@ -564,8 +651,10 @@ async function gracefulShutdown(signal: string): Promise<void> {
     try {
       await rpcPool.shutdown();
       logger.info("[shutdown] connection pool drained");
-    } catch (err: any) {
-      logger.error("[shutdown] pool drain error", { error: err?.message });
+    } catch (err) {
+      logger.error("[shutdown] pool drain error", {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
 
     // 4. Stop the secret rotation timer so it doesn't keep the process alive
@@ -605,8 +694,10 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
   try {
     await Promise.race([shutdownPromise, timeoutPromise]);
-  } catch (err: any) {
-    logger.error("[shutdown] forced exit", { error: err?.message });
+  } catch (err) {
+    logger.error("[shutdown] forced exit", {
+      error: err instanceof Error ? err.message : String(err),
+    });
     process.exit(1);
   }
 }

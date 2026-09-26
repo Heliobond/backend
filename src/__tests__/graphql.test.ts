@@ -22,10 +22,12 @@ function buildApp(): Express {
   app.all(
     "/graphql",
     createHandler({
-      schema: graphqlSchema,
+      // Cast needed: ts-jest resolves graphql's GraphQLSchema nominally distinct
+      // from the one in graphql-http's handler types despite identical paths.
+      schema: graphqlSchema as any,
       rootValue: graphqlRoot,
       context: (req: any) => createGraphQLContext(req.raw) as any,
-    })
+    }),
   );
 
   app.use(errorHandler);
@@ -76,9 +78,7 @@ describe("GraphQL API Integration", () => {
       }
     `;
 
-    const res = await request(app)
-      .post("/graphql")
-      .send({ query });
+    const res = await request(app).post("/graphql").send({ query });
 
     expect(res.status).toBe(200);
     expect(res.body.errors).toBeDefined();
@@ -99,10 +99,7 @@ describe("GraphQL API Integration", () => {
       }
     `;
 
-    const res = await request(app)
-      .post("/graphql")
-      .set("X-API-Key", consumerKey)
-      .send({ query });
+    const res = await request(app).post("/graphql").set("X-API-Key", consumerKey).send({ query });
 
     expect(res.status).toBe(200);
     expect(res.body.errors).toBeUndefined();
@@ -146,10 +143,7 @@ describe("GraphQL API Integration", () => {
       }
     `;
 
-    const res = await request(app)
-      .post("/graphql")
-      .set("X-API-Key", consumerKey)
-      .send({ query });
+    const res = await request(app).post("/graphql").set("X-API-Key", consumerKey).send({ query });
 
     expect(res.status).toBe(200);
     expect(res.body.errors).toBeDefined();

@@ -3,7 +3,8 @@ import { RequestHandler } from "express";
 
 /**
  * Composed helmet middleware that sets the following security headers:
- *   Content-Security-Policy  — restricts resource origins
+ *   Content-Security-Policy  — restricts resource origins (disabled for /docs
+ *                              so the Swagger UI can load its assets)
  *   X-Frame-Options          — blocks clickjacking (DENY; this is an API, never framed)
  *   X-Content-Type-Options   — prevents MIME sniffing
  *   Strict-Transport-Security — enforces HTTPS for 1 year
@@ -11,31 +12,36 @@ import { RequestHandler } from "express";
  *   Referrer-Policy          — controls referrer information leakage
  *   Permissions-Policy       — restricts browser feature access
  */
-export const securityHeaders: RequestHandler = helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "https://unpkg.com"],
-      styleSrc: ["'self'", "'unsafe-inline'", "https://unpkg.com"],
-      imgSrc: ["'self'", "data:"],
-      connectSrc: ["'self'"],
-      fontSrc: ["'self'"],
-      objectSrc: ["'none'"],
-      frameAncestors: ["'none'"],
-      baseUri: ["'self'"],
-      formAction: ["'self'"],
+export const securityHeaders: RequestHandler = (req, res, next) => {
+  const isDocsPath = req.path.startsWith("/docs");
+  helmet({
+    contentSecurityPolicy: isDocsPath
+      ? false
+      : {
+          directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "https://unpkg.com"],
+            styleSrc: ["'self'", "'unsafe-inline'", "https://unpkg.com"],
+            imgSrc: ["'self'", "data:"],
+            connectSrc: ["'self'"],
+            fontSrc: ["'self'"],
+            objectSrc: ["'none'"],
+            frameAncestors: ["'none'"],
+            baseUri: ["'self'"],
+            formAction: ["'self'"],
+          },
+        },
+    frameguard: { action: "deny" },
+    noSniff: true,
+    hsts: {
+      maxAge: 31_536_000,
+      includeSubDomains: true,
+      preload: true,
     },
-  },
-  frameguard: { action: "deny" },
-  noSniff: true,
-  hsts: {
-    maxAge: 31_536_000,
-    includeSubDomains: true,
-    preload: true,
-  },
-  xssFilter: true,
-  referrerPolicy: { policy: "strict-origin-when-cross-origin" },
-});
+    xssFilter: true,
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+  })(req, res, next);
+};
 
 export const permissionsHeaders: RequestHandler = (_req, res, next) => {
   res.setHeader(

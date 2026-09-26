@@ -1,8 +1,10 @@
 import crypto from "crypto";
 import { Request, Response, NextFunction } from "express";
+import { errorBody } from "./errors";
 
 const CSRF_TOKEN_LENGTH = 32;
 const CSRF_TOKEN_EXPIRY_MS = 60 * 60 * 1000;
+const SESSION_COOKIE_NAME = "CSRF-SESSION";
 
 interface CsrfTokenEntry {
   token: string;
@@ -15,6 +17,17 @@ function generateToken(): string {
   return crypto.randomBytes(CSRF_TOKEN_LENGTH).toString("hex");
 }
 
+function generateSessionId(): string {
+  return crypto.randomBytes(16).toString("hex");
+}
+
+function timingSafeCompare(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a);
+  const bBuf = Buffer.from(b);
+  if (aBuf.length !== bBuf.length) return false;
+  return crypto.timingSafeEqual(aBuf, bBuf);
+}
+
 function cleanExpiredTokens(): void {
   const now = Date.now();
   for (const [key, entry] of tokenStore) {
@@ -24,31 +37,51 @@ function cleanExpiredTokens(): void {
   }
 }
 
-function getClientIdentifier(req: Request): string {
-  const ip = req.ip || req.socket.remoteAddress || "unknown";
-  const userAgent = req.headers["user-agent"] || "unknown";
-  return `${ip}:${userAgent}`;
+function getCookieOptions(): {
+  secure: boolean;
+  sameSite: "strict" | "lax";
+} {
+  const isProduction = process.env.NODE_ENV === "production";
+  return {
+    secure: isProduction,
+    sameSite: isProduction ? "strict" : "lax",
+  };
+}
+
+function getSessionId(req: Request): string | undefined {
+  return req.cookies?.[SESSION_COOKIE_NAME] as string | undefined;
 }
 
 export function generateCsrfToken(req: Request, res: Response): string {
   cleanExpiredTokens();
-  const identifier = getClientIdentifier(req);
-  const existing = tokenStore.get(identifier);
+
+  let sessionId = getSessionId(req);
+  if (!sessionId) {
+    sessionId = generateSessionId();
+    const opts = getCookieOptions();
+    res.cookie(SESSION_COOKIE_NAME, sessionId, {
+      ...opts,
+      httpOnly: true,
+      path: "/",
+    });
+  }
+
+  const existing = tokenStore.get(sessionId);
   if (existing && Date.now() - existing.createdAt < CSRF_TOKEN_EXPIRY_MS) {
     return existing.token;
   }
+
   const token = generateToken();
-  tokenStore.set(identifier, { token, createdAt: Date.now() });
+  tokenStore.set(sessionId, { token, createdAt: Date.now() });
   return token;
 }
 
 export function setCsrfCookie(req: Request, res: Response): void {
   const token = generateCsrfToken(req, res);
-  const isProduction = process.env.NODE_ENV === "production";
+  const opts = getCookieOptions();
   res.cookie("XSRF-TOKEN", token, {
+    ...opts,
     httpOnly: false,
-    secure: isProduction,
-    sameSite: isProduction ? "strict" : "lax",
     path: "/",
   });
 }
@@ -61,36 +94,41 @@ export function csrfProtection(req: Request, res: Response, next: NextFunction):
   }
 
   const headerToken =
-    req.headers["x-csrf-token"] as string | undefined ||
-    req.headers["x-xsrf-token"] as string | undefined;
-  const cookieToken = req.cookies?.["XSRF-TOKEN"];
+    (req.headers["x-csrf-token"] as string | undefined) ||
+    (req.headers["x-xsrf-token"] as string | undefined);
+  const cookieToken = req.cookies?.["XSRF-TOKEN"] as string | undefined;
   const bodyToken = (req.body as Record<string, unknown>)?._csrf as string | undefined;
 
   const token = headerToken || bodyToken;
   if (!token) {
-    res.status(403).json({
-      error: "csrf_token_missing",
-      message: "CSRF token is required for this request",
-    });
+    res
+      .status(403)
+      .json(errorBody("csrf_token_missing", "CSRF Token is required for this request"));
     return;
   }
 
-  const identifier = getClientIdentifier(req);
-  const stored = tokenStore.get(identifier);
-  if (!stored || stored.token !== token) {
-    res.status(403).json({
-      error: "csrf_token_invalid",
-      message: "CSRF token is invalid or expired",
-    });
+  if (!cookieToken || !timingSafeCompare(token, cookieToken)) {
+    res
+      .status(403)
+      .json(errorBody("csrf_token_invalid", "CSRF token does not match the cookie token"));
+    return;
+  }
+
+  const sessionId = getSessionId(req);
+  if (!sessionId) {
+    res.status(403).json(errorBody("csrf_token_invalid", "CSRF session is missing"));
+    return;
+  }
+
+  const stored = tokenStore.get(sessionId);
+  if (!stored || !timingSafeCompare(stored.token, token)) {
+    res.status(403).json(errorBody("csrf_token_invalid", "CSRF token is invalid or expired"));
     return;
   }
 
   if (Date.now() - stored.createdAt > CSRF_TOKEN_EXPIRY_MS) {
-    tokenStore.delete(identifier);
-    res.status(403).json({
-      error: "csrf_token_expired",
-      message: "CSRF token has expired",
-    });
+    tokenStore.delete(sessionId);
+    res.status(403).json(errorBody("csrf_token_expired", "CSRF token has expired"));
     return;
   }
 
@@ -111,10 +149,7 @@ export function csrfProtection(req: Request, res: Response, next: NextFunction):
       }
     });
     if (!isAllowed) {
-      res.status(403).json({
-        error: "csrf_origin_invalid",
-        message: "Request origin is not allowed",
-      });
+      res.status(403).json(errorBody("csrf_origin_invalid", "Request origin is not allowed"));
       return;
     }
   }

@@ -65,7 +65,12 @@ export function withRpcConnection<T>(fn: (client: rpc.Server) => Promise<T>): Pr
   return rpcBreaker.execute(
     () => rpcPool.withConnection(fn),
     async () => {
-      throw new RpcDegradedError("Stellar RPC circuit is OPEN – request rejected");
+      // Reached when the circuit is OPEN, or when it is HALF_OPEN and another
+      // caller already holds the single trial slot. Callers treat this as
+      // "retry later", which is what keeps a recovering RPC endpoint probed
+      // once rather than by a stampede of concurrent requests.
+      const state = rpcBreaker.getState();
+      throw new RpcDegradedError(`Stellar RPC circuit is ${state} – request rejected`);
     },
   );
 }
@@ -167,38 +172,32 @@ async function _attemptSubmit(
 
   const accountResponse = await client.getLedgerEntries(accountKey);
 
-  if (!accountResponse.entries || accountResponse.entries.length === 0) {
-    logger.warn("stellar: getLedgerEntries returned no account entry, retrying");
-    throw new Error("getLedgerEntries returned empty response for admin account");
+  // Fetch the latest sequence from ledger state when available and use the
+  // higher of (chain, local tracker). A fresh or unregistered account returns
+  // no entry — fall back to the sequence the transaction was prepared with.
+  const firstEntry = accountResponse.entries?.[0];
+  if (firstEntry && firstEntry.val.type === "account") {
+    const onChainSequence = firstEntry.val.account.seqNum;
+
+    if (localSequenceTracker === null || onChainSequence > localSequenceTracker) {
+      localSequenceTracker = onChainSequence;
+    }
+
+    const targetSequence = (localSequenceTracker + 1n).toString();
+    const account = new Account(keypair.publicKey(), targetSequence);
+
+    const builder = new TransactionBuilder(account, {
+      fee: tx.fee,
+      networkPassphrase,
+      timebounds: tx.timeBounds || (tx.tx ? tx.tx.timeBounds : undefined),
+    });
+
+    for (const op of tx.operations) {
+      builder.addOperation(op);
+    }
+
+    tx = builder.build();
   }
-
-  const accountEntry = accountResponse.entries[0].val.account();
-  if (!accountEntry) {
-    logger.warn("stellar: account entry is malformed, retrying");
-    throw new Error("getLedgerEntries returned malformed account entry");
-  }
-
-  const onChainSequence = BigInt(accountEntry.seqNum().toString());
-
-  // Use the higher value between live ledger and local in-memory tracker
-  if (localSequenceTracker === null || onChainSequence > localSequenceTracker) {
-    localSequenceTracker = onChainSequence;
-  }
-
-  const targetSequence = (localSequenceTracker + 1n).toString();
-  const account = new Account(keypair.publicKey(), targetSequence);
-
-  const builder = new TransactionBuilder(account, {
-    fee: tx.fee,
-    networkPassphrase,
-    timebounds: tx.timeBounds || (tx.tx ? tx.tx.timeBounds : undefined),
-  });
-
-  for (const op of tx.operations) {
-    builder.addOperation(op);
-  }
-
-  tx = builder.build();
 
   tx.sign(keypair);
   const result = await client.sendTransaction(tx);

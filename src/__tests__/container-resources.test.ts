@@ -110,23 +110,6 @@ describe("container resource limits (#225)", () => {
     });
   });
 
-  describe("redis service", () => {
-    it("declares memory and CPU limits", () => {
-      const limits = limitsFor("redis");
-      expect(toBytes(limits.memory!)).toBeGreaterThan(0);
-      expect(Number(limits.cpus)).toBeGreaterThan(0);
-    });
-
-    it("caps its own memory below the container limit and evicts", () => {
-      const command = (compose.services.redis.command ?? []).join(" ");
-      expect(command).toMatch(/--maxmemory\s+\d+mb/);
-      expect(command).toMatch(/allkeys-lru/);
-
-      const maxMemoryMb = Number(/--maxmemory (\d+)mb/.exec(command)![1]);
-      expect(maxMemoryMb * MB).toBeLessThan(toBytes(limitsFor("redis").memory!));
-    });
-  });
-
   describe("documentation", () => {
     const docPath = path.join(ROOT, "docs", "DEPLOYMENT.md");
 

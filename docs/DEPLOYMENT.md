@@ -3,6 +3,10 @@
 How the backend gets built, what it is allowed to consume at runtime, and how it
 reaches staging and production.
 
+Database connections to staging and production use TLS with certificate
+validation. The CA certificate is supplied via the `DATABASE_CA` environment
+variable; `rejectUnauthorized` is never disabled.
+
 ## Resource requirements
 
 The service is a single Node process: an Express API plus a `node-cron` polling
@@ -48,7 +52,7 @@ For a bare `docker run`, pass them explicitly:
 ```bash
 docker run --memory=512m --cpus=0.5 \
   -e NODE_OPTIONS=--max-old-space-size=384 \
-  -p 3000:3000 --env-file .env \
+  -p 3001:3001 --env-file .env \
   ghcr.io/<owner>/backend:latest
 ```
 
@@ -78,6 +82,8 @@ Three workflows, each with a distinct job:
 | `ci.yml`      | push to `main`, PRs to `main`     | build, test, dependency audit |
 | `release.yml` | push to `main`, manual dispatch   | version, changelog, git tag   |
 | `deploy.yml`  | push to `main`, release, tag `v*` | build image, push, deploy     |
+| `load-test.yml` | schedule (`0 2 * * *`) & manual dispatch | k6 load testing scenarios |
+| `security-audit.yml` | schedule (`0 6 * * 1`) & manual dispatch | dependency audit, code scan, secret detection, license compliance |
 
 ### What triggers which environment
 
@@ -120,6 +126,7 @@ Environments view, with a link back to the workflow run.
 | ----------------- | -------- | ------------------------------------ |
 | `GITHUB_TOKEN`    | built-in | GHCR push and deployment status      |
 | `DEPLOY_HOOK_URL` | yes      | Endpoint told to pull the new digest |
+| `DATABASE_CA`     | yes      | CA certificate for Postgres TLS; required in staging and production |
 
 `DEPLOY_HOOK_URL` is whatever the hosting platform exposes — a Render or Railway
 deploy hook, a Fly webhook, or a self-hosted endpoint. It receives:

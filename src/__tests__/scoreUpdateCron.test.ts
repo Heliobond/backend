@@ -70,10 +70,12 @@ jest.mock("../lib/health", () => ({
 jest.mock("../config", () => ({
   config: {
     CRON_FAILURE_THRESHOLD: 0.5,
+    IDEMPOTENCY_TTL_MS: 3_600_000,
   },
 }));
 
 import { runHourlyScoreUpdate } from "../lib/scoreUpdateCron";
+import { resetIdempotencyState } from "../lib/scoreService";
 import { getTotalProjects, updateImpactScore, RpcDegradedError } from "../lib/registry";
 import { getSolarData } from "../lib/iot";
 import { fetchSatelliteWithFallback } from "../lib/satellite-sources";
@@ -83,6 +85,10 @@ import { markFailed } from "../lib/duplicate-detection";
 
 describe("runHourlyScoreUpdate (cron job execution flow)", () => {
   beforeEach(() => {
+    // scoreService.updateScoreForProject is left real, so its module-level
+    // idempotency map must be cleared between runs or later tests get rejected
+    // as duplicates of earlier ones in the same file.
+    resetIdempotencyState();
     jest.clearAllMocks();
     (getSolarData as jest.Mock).mockReturnValue({
       efficiency_pct: 85,
@@ -114,9 +120,9 @@ describe("runHourlyScoreUpdate (cron job execution flow)", () => {
     await runHourlyScoreUpdate();
 
     expect(updateImpactScore).toHaveBeenCalledTimes(3);
-    expect(updateImpactScore).toHaveBeenNthCalledWith(1, 1, 85, 70);
-    expect(updateImpactScore).toHaveBeenNthCalledWith(2, 2, 85, 70);
-    expect(updateImpactScore).toHaveBeenNthCalledWith(3, 3, 85, 70);
+    expect(updateImpactScore).toHaveBeenNthCalledWith(1, 1, 85, 70, expect.any(String));
+    expect(updateImpactScore).toHaveBeenNthCalledWith(2, 2, 85, 70, expect.any(String));
+    expect(updateImpactScore).toHaveBeenNthCalledWith(3, 3, 85, 70, expect.any(String));
     expect(recordCronRun).toHaveBeenCalledWith("score-update", "success");
   });
 

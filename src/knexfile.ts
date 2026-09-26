@@ -1,7 +1,5 @@
 import type { Knex } from "knex";
-import dotenv from "dotenv";
-
-dotenv.config();
+import fs from "fs";
 
 const baseConfig: Knex.Config = {
   client: "pg",
@@ -17,6 +15,22 @@ const baseConfig: Knex.Config = {
     idleTimeoutMillis: 60000,
   },
 };
+
+/**
+ * TLS options for non-local database connections. Certificate validation is
+ * always on; a private CA is supported via DB_SSL_CA_PATH (or DB_SSL_CA /
+ * DATABASE_CA).
+ */
+function getSslConfig(): { rejectUnauthorized: true; ca?: string } {
+  const caPath = process.env.DB_SSL_CA_PATH || process.env.DB_SSL_CA || process.env.DATABASE_CA;
+  if (caPath) {
+    return {
+      ca: fs.readFileSync(caPath, "utf8"),
+      rejectUnauthorized: true,
+    };
+  }
+  return { rejectUnauthorized: true };
+}
 
 const config: Record<string, Knex.Config> = {
   development: {
@@ -53,7 +67,7 @@ const config: Record<string, Knex.Config> = {
       database: process.env.DB_NAME,
       user: process.env.DB_USER,
       password: process.env.DB_PASSWORD,
-      ssl: { rejectUnauthorized: false },
+      ssl: getSslConfig(),
     },
   },
 
@@ -65,7 +79,7 @@ const config: Record<string, Knex.Config> = {
       database: process.env.DB_NAME,
       user: process.env.DB_USER,
       password: process.env.DB_PASSWORD,
-      ssl: { rejectUnauthorized: false },
+      ssl: getSslConfig(),
     },
     pool: {
       min: 5,

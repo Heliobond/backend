@@ -1,7 +1,7 @@
 import { logger } from "./logger";
 import { config } from "../config";
 
-const MAX_POWER_KW = config.MAX_POWER_KW;
+const MAX_POWER_KW = config.MAX_POWER_KW || 1000;
 const DEFAULT_EFFICIENCY_PCT = 60;
 const DEFAULT_FOREST_DENSITY_PCT = 50;
 
@@ -19,7 +19,7 @@ const CRON_TIMEZONE = process.env.CRON_TIMEZONE ?? "UTC";
  */
 export function getHourSeed(): number {
   try {
-    const now = new Date();
+    const now = new Date(Date.now());
     const formatter = new Intl.DateTimeFormat("en-US", {
       year: "numeric",
       month: "2-digit",

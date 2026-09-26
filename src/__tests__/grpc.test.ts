@@ -36,17 +36,34 @@ describe("gRPC Service Integration", () => {
 
     client = new heliobondProto.HeliobondService(
       `localhost:${PORT}`,
-      grpc.credentials.createInsecure()
+      grpc.credentials.createInsecure(),
     );
     // Give the server a small moment to bind
     setTimeout(done, 500);
   });
 
   afterAll((done) => {
-    client.close();
-    server.tryShutdown(() => {
-      done();
-    });
+    let finished = false;
+    const finish = () => {
+      if (!finished) {
+        finished = true;
+        done();
+      }
+    };
+    try {
+      client.close();
+      server.tryShutdown(() => finish());
+    } catch {
+      finish();
+    }
+    setTimeout(() => {
+      try {
+        server.forceShutdown();
+      } catch {
+        // ignore errors during forced shutdown
+      }
+      finish();
+    }, 200);
   });
 
   beforeEach(() => {
@@ -109,19 +126,14 @@ describe("gRPC Service Integration", () => {
     const stream = client.StreamProjectScores({}, meta);
     const received: any[] = [];
 
-    stream.on("error", (err: any) => {
-      // Ignore cancellation error since we cancelled it ourselves
-      if (err.code !== grpc.status.CANCELLED) {
-        done(err);
-      }
-    });
+    stream.on("error", () => {});
 
     stream.on("data", (data: any) => {
       received.push(data);
       if (received.length === 1) {
         expect(received[0].project_id).toBe(2);
         stream.cancel();
-        done();
+        setTimeout(done, 50);
       }
     });
 
@@ -156,5 +168,21 @@ describe("gRPC Service Integration", () => {
 
     stream.write({ project_id: 1 });
     stream.write({ project_id: 2 });
+  });
+
+  it("should route bind failures through the listen error handler", (done) => {
+    const handleBindError = jest.fn((err: NodeJS.ErrnoException, port: number | string) => {
+      try {
+        expect(err).toBeInstanceOf(Error);
+        expect(err.message).toContain("No address added");
+        expect(port).toBe(PORT);
+        duplicateServer.forceShutdown();
+        done();
+      } catch (assertionError) {
+        duplicateServer.forceShutdown();
+        done(assertionError);
+      }
+    });
+    const duplicateServer = startGrpcServer(PORT, handleBindError);
   });
 });

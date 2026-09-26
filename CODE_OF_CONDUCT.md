@@ -92,3 +92,6 @@ All appeal communications are treated with the same confidentiality as the origi
 ---
 
 *This enforcement guide is adapted from the [Contributor Covenant v2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/) enforcement guidelines.*
+
+
+

@@ -130,29 +130,29 @@ class ProjectResolver {
     this.id = id;
   }
 
-  async solar(_args: any, context: GraphQLContext) {
+  async solar(_args: unknown, context: GraphQLContext) {
     return context.loaders.solarLoader.load(parseInt(this.id, 10));
   }
 
-  async satellite(_args: any, context: GraphQLContext) {
+  async satellite(_args: unknown, context: GraphQLContext) {
     return context.loaders.satelliteLoader.load(parseInt(this.id, 10));
   }
 
-  async credit_quality(_args: any, context: GraphQLContext) {
+  async credit_quality(_args: unknown, context: GraphQLContext) {
     const solar = await context.loaders.solarLoader.load(parseInt(this.id, 10));
     const satellite = await context.loaders.satelliteLoader.load(parseInt(this.id, 10));
     const scores = computeScores({ solar, satellite });
     return scores.credit_quality;
   }
 
-  async green_impact(_args: any, context: GraphQLContext) {
+  async green_impact(_args: unknown, context: GraphQLContext) {
     const solar = await context.loaders.solarLoader.load(parseInt(this.id, 10));
     const satellite = await context.loaders.satelliteLoader.load(parseInt(this.id, 10));
     const scores = computeScores({ solar, satellite });
     return scores.green_impact;
   }
 
-  async financials(_args: any, context: GraphQLContext) {
+  async financials(_args: unknown, context: GraphQLContext) {
     const solar = await context.loaders.solarLoader.load(parseInt(this.id, 10));
     const input = createDefaultFinancialInput(solar.max_power_kw, solar.efficiency_pct);
     const npvResult = calculateNPV(input);
@@ -203,7 +203,7 @@ export const graphqlRoot = {
     return paginatedIds.map((id) => new ProjectResolver(String(id)));
   },
 
-  portfolioSummary: async (_args: any, context: GraphQLContext) => {
+  portfolioSummary: async (_args: unknown, context: GraphQLContext) => {
     if (!context.isAdmin && !context.isConsumer) {
       throw new Error("Unauthorized: Valid API Key is required");
     }

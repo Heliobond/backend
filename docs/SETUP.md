@@ -5,7 +5,7 @@ Comprehensive guide for new developers to set up and run the Heliobond backend l
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) v20 or later
-- [Bun](https://bun.sh) (`curl -fsSL https://bun.sh/install | bash`)
+- [Bun](https://bun.sh) (`curl -fsSLh https://bun.sh/install | bash`)
 - [Git](https://git-scm.com/)
 - A Stellar secret key (for signing transactions on testnet)
 - A Soroban contract address for the ProjectRegistry
@@ -37,19 +37,25 @@ ADMIN_SECRET_KEY=S...
 # Required: Soroban ProjectRegistry contract address
 PROJECT_REGISTRY_CONTRACT_ID=...
 ```
-
 All other variables have sensible defaults for local development.
 
 ### Environment Variables Reference
 
 | Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
+|----------|----------|----------|---------------------------------------------------------------------------------------------------------|
 | `STELLAR_NETWORK` | No | `testnet` | `testnet` or `mainnet` |
-| `ADMIN_SECRET_KEY` | Yes | — | Stellar secret key for signing transactions |
-| `PROJECT_REGISTRY_CONTRACT_ID` | Yes | — | Soroban contract address |
+| `ADMIN_SECRET_KEY` | Yes | -- | Stellar secret key for signing transactions |
+| `PROJECT_REGISTRY_CONTRACT_ID` | Yes | -- | Soroban contract address |
 | `RPC_URL` | No | `https://soroban-testnet.stellar.org` | Stellar RPC endpoint |
+| `DB_HOST` | No | `localhost` | PostgreSQL host (required for staging/production) |
+| `DB_PORT` | No | `5432` | PostgreSQL port |
+| `DB_NAME` | No | env-specific | PostgreSQL database name (defaults: `heliobond_dev` development, `heliobond_test` test; required for staging/production) |
+| `DB_USER` | No | `postgres` | PostgreSQL user (required for staging/production) |
+| `DB_PASSWORD` | No | -- | PostgreSQL password |
 | `PORT` | No | `3001` | HTTP port |
 | `FRONTEND_URL` | No | `http://localhost:3000` | CORS origin |
+| `ADMIN_API_KEY` | No | -- | Bearer token for admin endpoints (dev mode if unset) |
+| `WS_AUTH_TOKEN` | No | -- | WebSocket auth token (falls back to ADMIN_API_KEY) |
 | `ADMIN_API_KEY` | No | — | Bearer token for admin endpoints (dev mode if unset) |
 | `WS_AUTH_TOKEN` | Prod | — | `/ws` bearer token (`Authorization: Bearer`); required in production, no `?token=`, no ADMIN_API_KEY fallback |
 
@@ -137,26 +143,25 @@ bun run load-test:graphql
 
 ```
 backend/
-├── src/
-│   ├── __tests__/        # Jest test files
-│   ├── graphql/          # GraphQL schema and resolvers
-│   ├── grpc/             # gRPC server and proto definitions
-│   ├── lib/              # Core business logic
-│   │   ├── scoring.ts    # Score computation
-│   │   ├── stellar.ts    # Stellar RPC client
-│   │   ├── registry.ts   # Soroban contract calls
-│   │   └── ...
-│   ├── middleware/        # Express middleware
-│   ├── proto/            # Protocol buffer definitions
-│   ├── routes/           # Express route handlers
-│   └── index.ts          # Application entry point
-├── load-tests/           # k6 load testing scenarios
-├── .github/workflows/    # CI/CD pipelines
-├── package.json
-├── tsconfig.json
-└── jest.config.ts
-```
-
+├ src/
+│  ├__tests__/        # Jest test files
+│ ├ graphql/         # GraphQL schema and resolvers
+─ ├ grpc/             # gRPC server and proto definitions
+│ ├ lib/              # Core business logic
+│   ├ scoring.ts    # Score computation
+│    ├ stellar.ts    # Stellar RPC client
+│   ├ registry.ts   # Soroban contract calls
+│   ├ ...
+│ ├ middleware/        # Express middleware
+│ ├ proto/            # Protocol buffer definitions
+│ ├ routes/           # Express route handlers
+│ ├ index.ts          # Application entry point
+├ load-tests/          # k6 load testing scenarios
+│ ├ .github/workflows/    # CI/CD pipelines
+│ ├ package.json
+│ ├ tsconfig.json
+│ ├ jest.config.ts
+▀▀
 ## Common Issues
 
 ### "ADMIN_SECRET_KEY is required"
@@ -200,15 +205,15 @@ bun install
 
 Once the server is running:
 
-- **Swagger UI**: http://localhost:3001/docs
-- **GraphQL Playground**: http://localhost:3001/graphql-playground
-- **Health Check**: http://localhost:3001/health
-- **OpenAPI Spec**: http://localhost:3001/docs.json
+- *Swagger UI*: http://localhost:3001/docs
+- *GraphQL Playground*: http://localhost:3001/graphql-playground
+- *Health Check*: http://localhost:3001/health
+- *OpenAPI Spec*: http://localhost:3001/docs.json
 
 ## Git Workflow
 
 1. Create a feature branch from `main`
 2. Make changes with descriptive commits
 3. Run lint and typecheck before pushing
-4. Open a PR against `main`
+4. Open a PR against main
 5. CI will run build and tests automatically

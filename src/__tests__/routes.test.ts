@@ -3,6 +3,7 @@ import express, { Express } from "express";
 import iotRouter from "../routes/iot";
 import adminRouter from "../routes/admin";
 import { getHealth } from "../lib/health";
+import { resetIdempotencyState } from "../lib/scoreService";
 import { errorHandler, notFoundHandler } from "../middleware/errors";
 import * as registry from "../lib/registry";
 
@@ -12,6 +13,13 @@ jest.mock("../lib/registry", () => ({
   updateImpactScore: jest.fn(),
   getTotalProjects: jest.fn(),
 }));
+// config snapshots env vars at import time, so setting process.env later has no
+// effect on the middleware; keep the real config (iot needs MAX_POWER_KW etc.)
+// and only override the admin key.
+jest.mock("../config", () => {
+  const actual = jest.requireActual("../config");
+  return { config: { ...actual.config, ADMIN_API_KEY: "test-key" } };
+});
 
 const ADMIN_API_KEY = "test-key";
 const authHeader = { Authorization: `Bearer ${ADMIN_API_KEY}` };
@@ -19,7 +27,7 @@ const authHeader = { Authorization: `Bearer ${ADMIN_API_KEY}` };
 function buildApp(): Express {
   const app = express();
   app.use(express.json());
-  app.get("/health", (_req, res) => res.json(getHealth()));
+  app.get("/health", async (_req, res) => res.json(await getHealth()));
   app.use("/api/iot", iotRouter);
   app.use("/api/admin", adminRouter);
   app.use(notFoundHandler);
@@ -31,15 +39,12 @@ describe("HTTP integration", () => {
   let app: Express;
 
   beforeEach(() => {
-    app = buildApp();
     process.env.ADMIN_API_KEY = ADMIN_API_KEY;
+    app = buildApp();
     jest.clearAllMocks();
+    resetIdempotencyState();
     (registry.updateImpactScore as jest.Mock).mockResolvedValue("tx-hash");
     (registry.getTotalProjects as jest.Mock).mockResolvedValue(2);
-  });
-
-  afterEach(() => {
-    delete process.env.ADMIN_API_KEY;
   });
 
   describe("GET /health", () => {
@@ -101,9 +106,15 @@ describe("HTTP integration", () => {
     });
 
     it("returns 500 when ADMIN_API_KEY is not configured", async () => {
-      delete process.env.ADMIN_API_KEY;
-      const res = await request(app).post("/api/admin/update-scores").send({}).expect(500);
-      expect(res.body.error.code).toBe("server_misconfigured");
+      const configModule = jest.requireMock("../config") as { config: { ADMIN_API_KEY: string } };
+      const original = configModule.config.ADMIN_API_KEY;
+      configModule.config.ADMIN_API_KEY = "";
+      try {
+        const res = await request(app).post("/api/admin/update-scores").send({}).expect(500);
+        expect(res.body.error.code).toBe("server_misconfigured");
+      } finally {
+        configModule.config.ADMIN_API_KEY = original;
+      }
     });
   });
 });

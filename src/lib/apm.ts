@@ -41,8 +41,10 @@ async function initDatadog(): Promise<void> {
     } else {
       logger.warn("dd-trace package not installed, DataDog APM disabled");
     }
-  } catch (err: any) {
-    logger.error("Failed to initialize DataDog APM", { error: err?.message });
+  } catch (err) {
+    logger.error("Failed to initialize DataDog APM", {
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -54,8 +56,10 @@ async function initNewRelic(): Promise<void> {
     } else {
       logger.warn("newrelic package not installed, New Relic APM disabled");
     }
-  } catch (err: any) {
-    logger.error("Failed to initialize New Relic APM", { error: err?.message });
+  } catch (err) {
+    logger.error("Failed to initialize New Relic APM", {
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -136,10 +140,7 @@ async function initOpenTelemetry(): Promise<void> {
     await sdk.start();
     logger.info("OpenTelemetry tracing initialized", {
       serviceName,
-      exporters: [
-        enableOtlp ? "otlp" : null,
-        enableZipkin ? "zipkin" : null,
-      ].filter(Boolean),
+      exporters: [enableOtlp ? "otlp" : null, enableZipkin ? "zipkin" : null].filter(Boolean),
     });
 
     // Graceful shutdown
@@ -147,14 +148,18 @@ async function initOpenTelemetry(): Promise<void> {
       try {
         await sdk.shutdown();
         logger.info("OpenTelemetry tracing shut down");
-      } catch (err: any) {
-        logger.error("Failed to shut down OpenTelemetry", { error: err?.message });
+      } catch (err) {
+        logger.error("Failed to shut down OpenTelemetry", {
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     };
 
     process.on("SIGTERM", shutdown);
     process.on("SIGINT", shutdown);
-  } catch (err: any) {
-    logger.error("Failed to initialize OpenTelemetry APM", { error: err?.message });
+  } catch (err) {
+    logger.error("Failed to initialize OpenTelemetry APM", {
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }

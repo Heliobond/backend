@@ -6,6 +6,8 @@ import { computeScores } from "../lib/scoring";
 import { getTotalProjects } from "../lib/registry";
 import { validateApiKey, isRateLimited, incrementUsage } from "../lib/apiKeys";
 import { scoreEvents, SCORE_UPDATE_EVENT } from "../lib/events";
+import { handleListenError } from "../lib/listen-errors";
+import { logger } from "../lib/logger";
 import { timingSafeCompare } from "../lib/timing-safe";
 
 const PROTO_PATH = path.join(__dirname, "../proto/heliobond.proto");
@@ -96,10 +98,10 @@ async function getProjectScore(
 
     const data = getProjectDetails(project_id);
     callback(null, data);
-  } catch (error: any) {
+  } catch (error) {
     callback({
       code: grpc.status.INTERNAL,
-      details: error.message || "Internal server error",
+      details: error instanceof Error ? error.message : "Internal server error",
     });
   }
 }
@@ -114,7 +116,7 @@ function streamProjectScores(call: grpc.ServerWritableStream<any, any>) {
     return;
   }
 
-  const listener = (update: any) => {
+  const listener = (update: { project_id: number }) => {
     try {
       const details = getProjectDetails(update.project_id);
       call.write(details);
@@ -128,6 +130,12 @@ function streamProjectScores(call: grpc.ServerWritableStream<any, any>) {
   call.on("cancelled", () => {
     scoreEvents.off(SCORE_UPDATE_EVENT, listener);
   });
+  call.on("close", () => {
+    scoreEvents.off(SCORE_UPDATE_EVENT, listener);
+  });
+  call.on("error", () => {
+    scoreEvents.off(SCORE_UPDATE_EVENT, listener);
+  });
 }
 
 // Bidirectional streaming handler
@@ -139,6 +147,8 @@ function chatProjectScores(call: grpc.ServerDuplexStream<any, any>) {
     call.destroy(err);
     return;
   }
+
+  call.on("error", () => {});
 
   call.on("data", async (request) => {
     try {
@@ -156,7 +166,7 @@ function chatProjectScores(call: grpc.ServerDuplexStream<any, any>) {
 
       const details = getProjectDetails(project_id);
       call.write(details);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[gRPC Chat] data processing error:", err);
     }
   });
@@ -166,7 +176,10 @@ function chatProjectScores(call: grpc.ServerDuplexStream<any, any>) {
   });
 }
 
-export function startGrpcServer(port = 50051): grpc.Server {
+export function startGrpcServer(
+  port = 50051,
+  handleBindError: (err: NodeJS.ErrnoException, port: number | string) => void = handleListenError,
+): grpc.Server {
   const server = new grpc.Server({
     "grpc.keepalive_time_ms": 120000,
     "grpc.keepalive_timeout_ms": 20000,
@@ -182,10 +195,10 @@ export function startGrpcServer(port = 50051): grpc.Server {
 
   server.bindAsync(`0.0.0.0:${port}`, grpc.ServerCredentials.createInsecure(), (err, boundPort) => {
     if (err) {
-      console.error(`[gRPC] Failed to bind to port ${port}:`, err);
+      handleBindError(err as NodeJS.ErrnoException, port);
       return;
     }
-    console.log(`[gRPC] Server running on 0.0.0.0:${boundPort}`);
+    logger.info(`[gRPC] Server running on 0.0.0.0:${boundPort}`);
   });
 
   return server;

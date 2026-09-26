@@ -5,8 +5,10 @@ import {
   fetchSatelliteWithFallback,
   getSourceHealth,
   registerSource,
+  getCustomFetchUrl,
 } from "../lib/satellite-sources";
 import { parseProjectId, badRequest } from "../middleware/errors";
+import { validatePublicUrl } from "../lib/ssrf";
 
 const router = Router();
 
@@ -54,14 +56,25 @@ const CUSTOM_SOURCE_FETCH_TIMEOUT_MS = 10_000;
  * shape. Expects JSON with numeric forest_density_pct and ndvi_score fields.
  */
 async function fetchFromCustomUrl(
-  fetchUrl: string,
   projectId: number,
   sourceName: string,
 ): Promise<{ forest_density_pct: number; ndvi_score: number; timestamp: number; source: string }> {
+  // Read the endpoint back from the registry at call time.
+  const fetchUrl = getCustomFetchUrl(sourceName);
+  if (fetchUrl === undefined) {
+    throw new Error(`Custom source ${sourceName} has no registered fetch URL`);
+  }
+
+  // Re-validate immediately before sending to avoid DNS rebinding attacks after registration.
+  await validatePublicUrl(fetchUrl);
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), CUSTOM_SOURCE_FETCH_TIMEOUT_MS);
 
   let response: globalThis.Response;
+  // `Response` above refers to the express Response imported for the route
+  // handlers, so derive the fetch type instead of naming the global directly.
+  let response: Awaited<ReturnType<typeof fetch>>;
   try {
     response = await fetch(`${fetchUrl}?projectId=${encodeURIComponent(String(projectId))}`, {
       method: "GET",
@@ -100,7 +113,7 @@ async function fetchFromCustomUrl(
  * Body: { name, priority, fetchUrl } — fetchUrl is the external endpoint
  * queried (via `?projectId=<id>`) for live satellite readings.
  */
-router.post("/", (req: Request, res: Response) => {
+router.post("/", async (req: Request, res: Response) => {
   const { name, priority, fetchUrl } = req.body as {
     name?: string;
     priority?: number;
@@ -115,21 +128,31 @@ router.post("/", (req: Request, res: Response) => {
     return res.status(400).json({ error: "fetchUrl is required" });
   }
 
+  // SSRF guard: only allow http/https URLs that resolve to public addresses.
+  let validatedUrl: string;
   try {
      
     new URL(fetchUrl);
   } catch {
     return res.status(400).json({ error: "fetchUrl must be a valid URL" });
+    validatedUrl = await validatePublicUrl(fetchUrl);
+  } catch (err) {
+    return res
+      .status(400)
+      .json({ error: err instanceof Error ? err.message : "fetchUrl must be a valid URL" });
   }
 
   const sourcePriority = typeof priority === "number" ? priority : 99;
 
-  registerSource({
-    name,
-    priority: sourcePriority,
-    enabled: true,
-    fetch: (projectId: number) => fetchFromCustomUrl(fetchUrl, projectId, name),
-  });
+  registerSource(
+    {
+      name,
+      priority: sourcePriority,
+      enabled: true,
+      fetch: (projectId: number) => fetchFromCustomUrl(projectId, name),
+    },
+    validatedUrl,
+  );
 
   res.status(201).json({ ok: true, name, priority: sourcePriority });
 });

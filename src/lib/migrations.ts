@@ -51,7 +51,7 @@ async function getAppliedMigrations(knexInstance: Knex): Promise<string[]> {
   const hasTable = await knexInstance.schema.hasTable("knex_migrations");
   if (!hasTable) return [];
   const rows = await knexInstance("knex_migrations").select("name").orderBy("id", "asc");
-  return rows.map((r: any) => r.name);
+  return rows.map((r: { name: string }) => r.name);
 }
 
 /**
@@ -108,10 +108,12 @@ export async function runMigrations(): Promise<MigrationResult> {
     if (migrations.length === 0) {
       logger.info("[migrations] already up to date");
     }
-  } catch (err: any) {
+  } catch (err) {
     result.success = false;
-    result.errors.push(err.message);
-    logger.error("[migrations] failed", { error: err.message });
+    result.errors.push(err instanceof Error ? err.message : String(err));
+    logger.error("[migrations] failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
     throw err;
   }
 
@@ -138,10 +140,12 @@ export async function rollbackMigration(): Promise<MigrationResult> {
     if (migrations.length === 0) {
       logger.info("[migrations] nothing to rollback");
     }
-  } catch (err: any) {
+  } catch (err) {
     result.success = false;
-    result.errors.push(err.message);
-    logger.error("[migrations] rollback failed", { error: err.message });
+    result.errors.push(err instanceof Error ? err.message : String(err));
+    logger.error("[migrations] rollback failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
     throw err;
   }
 
@@ -166,10 +170,12 @@ export async function rollbackAll(): Promise<MigrationResult> {
         logger.info("[migrations] rolled back batch", { batch: batchNo, migrations });
       }
     }
-  } catch (err: any) {
+  } catch (err) {
     result.success = false;
-    result.errors.push(err.message);
-    logger.error("[migrations] full rollback failed", { error: err.message });
+    result.errors.push(err instanceof Error ? err.message : String(err));
+    logger.error("[migrations] full rollback failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
     throw err;
   }
 
@@ -279,7 +285,7 @@ export async function getMigrationHealth(): Promise<{
       if (typeof timer.unref === "function") timer.unref();
     });
     return await Promise.race([check(), timeout]);
-  } catch (err: any) {
+  } catch {
     return fallback;
   }
 }

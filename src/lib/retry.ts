@@ -6,6 +6,8 @@
  * re-thrown immediately without consuming retry budget.
  */
 
+import { logger } from "./logger";
+
 export interface RetryConfig {
   /** Maximum number of attempts (including the first). Default: 4 */
   maxAttempts: number;
@@ -94,24 +96,36 @@ export async function withRetry<T>(
     try {
       const result = await fn();
       if (attempt > 0) {
-        console.log(`[${cfg.label}] succeeded on attempt ${attempt + 1}`);
+        logger.info(`[${cfg.label}] succeeded on attempt ${attempt + 1}`, {
+          attempt: attempt + 1,
+          label: cfg.label,
+          maxAttempts: cfg.maxAttempts,
+        });
       }
       return result;
     } catch (err) {
       lastError = err;
 
       if (!isTransientError(err)) {
-        console.warn(`[${cfg.label}] permanent error, not retrying:`, (err as Error).message);
+        logger.warn(`[${cfg.label}] permanent error, not retrying`, {
+          ...logger.formatError(err),
+          attempt: attempt + 1,
+          label: cfg.label,
+          maxAttempts: cfg.maxAttempts,
+        });
         throw err;
       }
 
       if (attempt + 1 >= cfg.maxAttempts) break;
 
       const delay = backoffDelay(attempt, cfg);
-      console.warn(
-        `[${cfg.label}] attempt ${attempt + 1}/${cfg.maxAttempts} failed: ${(err as Error).message}. ` +
-          `Retrying in ${delay}ms…`,
-      );
+      logger.warn(`[${cfg.label}] attempt ${attempt + 1}/${cfg.maxAttempts} failed; retrying`, {
+        ...logger.formatError(err),
+        attempt: attempt + 1,
+        delayMs: delay,
+        label: cfg.label,
+        maxAttempts: cfg.maxAttempts,
+      });
       await new Promise((r) => setTimeout(r, delay));
     }
   }
