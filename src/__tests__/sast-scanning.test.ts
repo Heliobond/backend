@@ -64,20 +64,24 @@ describe("SAST Scanning Configuration (Issue #285)", () => {
   });
 
   describe("CI Workflow SAST Integration", () => {
-    const ciWorkflowPath = path.join(__dirname, "../../.github/workflows/ci.yml");
+    const auditWorkflowPath = path.join(__dirname, "../../.github/workflows/security-audit.yml");
 
     it("CI workflow exists", () => {
-      expect(fs.existsSync(ciWorkflowPath)).toBe(true);
+      expect(fs.existsSync(auditWorkflowPath)).toBe(true);
     });
 
-    it("CI includes dependency audit job or step", () => {
-      const content = fs.readFileSync(ciWorkflowPath, "utf-8");
-      expect(content).toMatch(/audit|Audit/);
+    it("CI includes dependency audit job", () => {
+      const content = fs.readFileSync(auditWorkflowPath, "utf-8");
+      const workflow = yaml.parse(content);
+
+      expect(workflow.jobs).toHaveProperty("dependency-audit");
     });
 
-    it("CI includes audit scan command", () => {
-      const content = fs.readFileSync(ciWorkflowPath, "utf-8");
-      expect(content).toMatch(/audit/i);
+    it("CI fails on high or critical vulnerabilities", () => {
+      const content = fs.readFileSync(auditWorkflowPath, "utf-8");
+
+      expect(content).toMatch(/bun audit/);
+      expect(content).toContain("Found $CRITICAL critical vulnerabilities");
     });
   });
 

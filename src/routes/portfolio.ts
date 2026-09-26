@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { indexer } from "../lib/indexer";
 import { badRequest } from "../middleware/errors";
+import { seededRandom } from "../lib/iot";
 
 const router = Router();
 
@@ -18,6 +19,20 @@ interface PortfolioResponse {
   current_shares: number;
   current_value: number;
   events: PortfolioEvent[];
+}
+
+/**
+ * Deterministic 32-bit string hash (FNV-1a). Portfolio pricing is seeded from
+ * the address so the simulated value is stable per (address, clock hour),
+ * mirroring how IoT readings are keyed on project id.
+ */
+function hashAddress(address: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < address.length; i++) {
+    h ^= address.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
 }
 
 router.get("/:address", async (req: Request, res: Response, next: NextFunction) => {
@@ -53,7 +68,10 @@ router.get("/:address", async (req: Request, res: Response, next: NextFunction) 
     }
 
     totalShares = Math.max(0, totalShares);
-    const pricePerShare = 1.5 + Math.random() * 0.5;
+    // Hour-seeded like every other simulated reading (see seededRandom in
+    // lib/iot), so current_value is stable across requests within an hour
+    // instead of jumping randomly on every call.
+    const pricePerShare = 1.5 + seededRandom(hashAddress(address)) * 0.5;
     const currentValue = totalShares * pricePerShare;
 
     const response: PortfolioResponse = {

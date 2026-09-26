@@ -40,29 +40,35 @@ describe("roles routes", () => {
 
   it("POST /api/roles — viewer cannot assign roles (forbidden)", async () => {
     assignRole("viewer-user", "viewer");
-    await request(app)
+    const res = await request(app)
       .post("/api/roles")
       .set("X-User-Id", "viewer-user")
       .send({ userId: "bob", role: "viewer" })
       .expect(403);
+    expect(res.body).toEqual({
+      error: {
+        code: "forbidden",
+        message: "This action requires the 'admin' role or higher",
+      },
+    });
   });
 
   it("POST /api/roles — unauthenticated request returns 401", async () => {
-    await request(app)
+    const res = await request(app)
       .post("/api/roles")
       .send({ userId: "bob", role: "viewer" })
       .expect(401);
+    expect(res.body).toEqual({
+      error: { code: "unauthorized", message: "X-User-Id header is required" },
+    });
   });
 
   it("GET /api/roles — admin lists all roles", async () => {
     assignRole("listed-user", "viewer");
-    const res = await request(app)
-      .get("/api/roles")
-      .set("X-User-Id", "admin-user")
-      .expect(200);
-    expect(res.body.roles).toEqual(expect.arrayContaining([
-      expect.objectContaining({ userId: "listed-user", role: "viewer" }),
-    ]));
+    const res = await request(app).get("/api/roles").set("X-User-Id", "admin-user").expect(200);
+    expect(res.body.roles).toEqual(
+      expect.arrayContaining([expect.objectContaining({ userId: "listed-user", role: "viewer" })]),
+    );
   });
 
   it("DELETE /api/roles/:userId — admin can revoke a role", async () => {
@@ -75,10 +81,7 @@ describe("roles routes", () => {
   });
 
   it("DELETE /api/roles/:userId — 404 for non-existent user", async () => {
-    await request(app)
-      .delete("/api/roles/ghost")
-      .set("X-User-Id", "admin-user")
-      .expect(404);
+    await request(app).delete("/api/roles/ghost").set("X-User-Id", "admin-user").expect(404);
   });
 
   describe("RBAC Role-Based Access Control (Issue #273)", () => {
@@ -101,9 +104,7 @@ describe("roles routes", () => {
     });
 
     it("no key / unauthenticated user -> 401 rejected", async () => {
-      const res = await request(app)
-        .post("/api/roles")
-        .send({ userId: "eve", role: "operator" });
+      const res = await request(app).post("/api/roles").send({ userId: "eve", role: "operator" });
       expect(res.status).toBe(401);
     });
 
@@ -116,4 +117,3 @@ describe("roles routes", () => {
     });
   });
 });
-

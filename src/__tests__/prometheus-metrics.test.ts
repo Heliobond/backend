@@ -1,7 +1,8 @@
 import request from "supertest";
 import express from "express";
 import { recordRequest, getMetrics } from "../lib/metrics";
-import { recordCronRun } from "../lib/health";
+import { recordCronRun, getHealth } from "../lib/health";
+import { getRpcStatus } from "../lib/stellar";
 
 jest.mock("../lib/stellar", () => ({
   rpcPool: {
@@ -132,7 +133,6 @@ describe("metrics collection (#283)", () => {
 
   describe("cron job metrics via health (#283 cron_job_duration_seconds analogue)", () => {
     it("cron runs are recorded in the health report", async () => {
-      const { getHealth } = await import("../lib/health");
       recordCronRun("score-update", "success");
       const health = await getHealth();
       expect(health.last_cron_run).toMatchObject({
@@ -143,7 +143,6 @@ describe("metrics collection (#283)", () => {
     });
 
     it("cron error status is captured", async () => {
-      const { getHealth } = await import("../lib/health");
       recordCronRun("indexer", "error");
       const health = await getHealth();
       expect(health.last_cron_run).toMatchObject({ status: "error" });
@@ -151,8 +150,7 @@ describe("metrics collection (#283)", () => {
   });
 
   describe("Stellar RPC metrics", () => {
-    it("getRpcStatus returns numeric consecutive failures", async () => {
-      const { getRpcStatus } = await import("../lib/stellar");
+    it("getRpcStatus returns numeric consecutive failures", () => {
       const status = getRpcStatus();
       expect(typeof status.consecutiveFailures).toBe("number");
       expect(typeof status.outageDurationMs).toBe("number");
@@ -160,7 +158,6 @@ describe("metrics collection (#283)", () => {
     });
 
     it("health report includes rpc_status with stellar fields", async () => {
-      const { getHealth } = await import("../lib/health");
       const health = await getHealth();
       expect(health.rpc_status).toHaveProperty("consecutiveFailures");
       expect(health.rpc_status).toHaveProperty("outageDurationMs");

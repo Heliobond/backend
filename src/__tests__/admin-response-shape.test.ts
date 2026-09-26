@@ -2,10 +2,10 @@ import request from "supertest";
 import express, { Express } from "express";
 import adminRouter from "../routes/admin";
 import { errorHandler } from "../middleware/errors";
+import { resetIdempotencyState } from "../lib/scoreService";
 import * as registry from "../lib/registry";
 import * as iot from "../routes/iot";
 import * as scoring from "../lib/scoring";
-import { resetIdempotencyState } from "../lib/scoreService";
 
 jest.mock("../lib/registry", () => {
   class RpcDegradedError extends Error {
@@ -45,6 +45,7 @@ describe("admin /update-scores response shape", () => {
     resetIdempotencyState();
     app = buildApp();
     jest.clearAllMocks();
+    resetIdempotencyState();
     (iot.getSolarData as jest.Mock).mockReturnValue({
       efficiency_pct: 85,
       power_output_kw: 500,
@@ -92,17 +93,13 @@ describe("admin /update-scores response shape", () => {
     expect(Array.isArray(res.body.errors)).toBe(true);
   });
 
-  it("response shape matches { updated, results, errors }", async () => {
+  it("response shape matches { updated, results, errors, skipped }", async () => {
     const res = await request(app)
       .post("/api/admin/update-scores")
       .set(authHeader)
       .send({})
       .expect(200);
-    expect(
-      Object.keys(res.body)
-        .filter((k) => k !== "skipped")
-        .sort(),
-    ).toEqual(["errors", "results", "updated"]);
+    expect(Object.keys(res.body).sort()).toEqual(["errors", "results", "skipped", "updated"]);
   });
 
   it("results entries have correct shape", async () => {
@@ -137,6 +134,10 @@ describe("admin /update-scores response shape", () => {
     expect(entry).toHaveProperty("project_id");
     expect(entry).toHaveProperty("error");
     expect(typeof entry.project_id).toBe("number");
-    expect(typeof entry.error).toBe("object");
+    // Matches the documented error contract: { error: { code, message } }.
+    expect(entry.error).toMatchObject({
+      code: "update_failed",
+      message: expect.any(String),
+    });
   });
 });

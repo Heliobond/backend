@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { createHmac } from "crypto";
 import { timingSafeCompare } from "../lib/timing-safe";
+import { errorBody } from "./errors";
 
 const SIGNATURE_HEADER = "x-signature";
 const TIMESTAMP_HEADER = "x-timestamp";
@@ -36,13 +37,13 @@ export function requestSigning(req: Request, res: Response, next: NextFunction):
   const timestamp = req.headers[TIMESTAMP_HEADER] as string | undefined;
 
   if (signature === undefined || timestamp === undefined) {
-    res.status(401).json({ error: "Missing signature or timestamp header" });
+    res.status(401).json(errorBody("unauthorized", "Missing signature or timestamp header"));
     return;
   }
 
   const timestampMs = parseInt(timestamp, 10);
   if (isNaN(timestampMs) || Math.abs(Date.now() - timestampMs) > MAX_TIMESTAMP_AGE_MS) {
-    res.status(401).json({ error: "Request timestamp expired or invalid" });
+    res.status(401).json(errorBody("unauthorized", "Request timestamp expired or invalid"));
     return;
   }
 
@@ -50,7 +51,7 @@ export function requestSigning(req: Request, res: Response, next: NextFunction):
   const expected = computeSignature(secret, timestamp, req.method, req.path, body);
 
   if (!signaturesMatch(signature, expected)) {
-    res.status(401).json({ error: "Invalid request signature" });
+    res.status(401).json(errorBody("unauthorized", "Invalid request signature"));
     return;
   }
 

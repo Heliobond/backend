@@ -4,11 +4,23 @@ import {
   nativeToScVal,
   BASE_FEE,
   scValToNative,
+  rpc,
   Account,
 } from "@stellar/stellar-sdk";
-import { withRpcConnection, networkPassphrase, getAdminKeypair, signAndSubmit } from "./stellar";
+import {
+  withRpcConnection,
+  networkPassphrase,
+  getAdminKeypair,
+  signAndSubmit,
+  RpcDegradedError,
+} from "./stellar";
 import { config } from "../config";
 import { stellarRpcDuration, stellarRpcTotal } from "./prometheus";
+
+// Re-export so callers (scoreService, routes/batch) can `instanceof`-check the
+// exact error class the RPC layer throws, instead of comparing against a
+// sibling class that `instanceof` can never match.
+export { RpcDegradedError };
 
 if (!config.PROJECT_REGISTRY_CONTRACT_ID) {
   throw new Error("PROJECT_REGISTRY_CONTRACT_ID env var is required");
@@ -80,32 +92,34 @@ export async function getTotalProjects(): Promise<number> {
       .build();
 
     const end = stellarRpcDuration.startTimer({ operation: "simulateTransaction" });
+
+    let sim: rpc.Api.SimulateTransactionResponse;
     try {
-      const result = (await client.simulateTransaction(tx)) as {
-        error?: unknown;
-        result?: { retval?: unknown };
-      };
-      if (result.error) {
-        throw new Error(String(result.error));
-      }
-      const retval = result.result?.retval;
-      if (retval === undefined) {
-        throw new Error("total_projects simulation returned no result value");
-      }
-      end();
-      stellarRpcTotal.inc({ operation: "simulateTransaction", result: "success" });
-      return Number(scValToNative(retval as any));
+      sim = await client.simulateTransaction(tx);
     } catch (err) {
       end();
       stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });
       throw err;
     }
-  });
-}
 
-export class RpcDegradedError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "RpcDegradedError";
-  }
+    // A failed simulation carries a string `error` field; the success variants
+    // do not. The `in` check narrows the union instead of relying on an `as`
+    // cast or a non-null assertion (see #228).
+    if ("error" in sim) {
+      end();
+      stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });
+      throw new Error(sim.error);
+    }
+
+    const retval = sim.result?.retval;
+    if (retval === undefined) {
+      end();
+      stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });
+      throw new Error("total_projects simulation returned no result value");
+    }
+
+    end();
+    stellarRpcTotal.inc({ operation: "simulateTransaction", result: "success" });
+    return Number(scValToNative(retval));
+  });
 }

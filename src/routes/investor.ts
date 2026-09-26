@@ -2,9 +2,13 @@ import { Router, Request, Response, NextFunction } from "express";
 import { getTotalProjects } from "../lib/registry";
 import { getSolarData, getSatelliteData } from "./iot";
 import { computeScores } from "../lib/scoring";
-import { createDefaultFinancialInput, calculateNPV, calculatePaybackPeriod } from "../lib/financial";
+import {
+  createDefaultFinancialInput,
+  calculateNPV,
+  calculatePaybackPeriod,
+} from "../lib/financial";
 import { getAuditLog } from "../lib/audit";
-import { badRequest, MAX_PROJECT_ID } from "../middleware/errors";
+import { badRequest, maxProjectId } from "../middleware/errors";
 
 const router = Router();
 
@@ -18,7 +22,7 @@ async function getPortfolioData() {
     const satellite = getSatelliteData(id);
     const scores = computeScores({ solar, satellite });
     // Deterministic funding based on project ID
-    const funding = 250000 + (id * 150000) % 600000;
+    const funding = 250000 + ((id * 150000) % 600000);
     // Expected output based on capacity factor
     const expected_output = solar.max_power_kw * 24 * 365 * 0.2; // 20% capacity factor
     const actual_output = solar.power_output_kw * 24 * 365 * 0.2;
@@ -60,7 +64,7 @@ router.get("/dashboard", async (_req: Request, res: Response, next: NextFunction
     // Formula for carbon offsets: power_output_kw * green_impact * constant factor
     const totalCarbonOffsets = portfolio.reduce(
       (acc, p) => acc + p.solar.power_output_kw * p.scores.green_impact * 0.05,
-      0
+      0,
     );
 
     const recentAuditLogs = getAuditLog().slice(-5).reverse();
@@ -123,16 +127,27 @@ router.get("/financial-summary", async (_req: Request, res: Response, next: Next
 
       // ROI = Net benefit over lifetime / installation cost
       const lifetimeYears = input.project_lifetime_years;
-      const totalBenefits = npvResult.discounted_cash_flows.reduce((acc, cf) => acc + cf.revenue, 0);
-      const totalOpsCosts = npvResult.discounted_cash_flows.reduce((acc, cf) => acc + cf.maintenance_cost, 0);
+      const totalBenefits = npvResult.discounted_cash_flows.reduce(
+        (acc, cf) => acc + cf.revenue,
+        0,
+      );
+      const totalOpsCosts = npvResult.discounted_cash_flows.reduce(
+        (acc, cf) => acc + cf.maintenance_cost,
+        0,
+      );
       const netBenefits = totalBenefits - totalOpsCosts + (input.salvage_value ?? 0);
-      const roi = input.installation_cost > 0 ? (netBenefits - input.installation_cost) / input.installation_cost : 0;
+      const roi =
+        input.installation_cost > 0
+          ? (netBenefits - input.installation_cost) / input.installation_cost
+          : 0;
 
       return {
         project_id: p.id,
         installation_cost: Math.round(input.installation_cost * 100) / 100,
         npv: Math.round(npvResult.npv * 100) / 100,
-        payback_period_years: paybackResult.reaches_payback ? Math.round(paybackResult.payback_years * 10) / 10 : null,
+        payback_period_years: paybackResult.reaches_payback
+          ? Math.round(paybackResult.payback_years * 10) / 10
+          : null,
         roi_pct: Math.round(roi * 1000) / 10,
       };
     });
@@ -151,9 +166,15 @@ router.get("/financial-summary", async (_req: Request, res: Response, next: Next
 
     const totalCost = projectFinancials.reduce((acc, p) => acc + p.installation_cost, 0);
     const totalNpv = projectFinancials.reduce((acc, p) => acc + p.npv, 0);
-    const validPaybacks = projectFinancials.filter((p) => p.payback_period_years !== null) as Array<typeof projectFinancials[0] & { payback_period_years: number }>;
-    const avgPayback = validPaybacks.length > 0 ? validPaybacks.reduce((acc, p) => acc + p.payback_period_years, 0) / validPaybacks.length : null;
-    const avgRoi = projectFinancials.reduce((acc, p) => acc + p.roi_pct, 0) / projectFinancials.length;
+    const validPaybacks = projectFinancials.filter((p) => p.payback_period_years !== null) as Array<
+      (typeof projectFinancials)[0] & { payback_period_years: number }
+    >;
+    const avgPayback =
+      validPaybacks.length > 0
+        ? validPaybacks.reduce((acc, p) => acc + p.payback_period_years, 0) / validPaybacks.length
+        : null;
+    const avgRoi =
+      projectFinancials.reduce((acc, p) => acc + p.roi_pct, 0) / projectFinancials.length;
 
     res.json({
       portfolio_financials: {
@@ -196,8 +217,11 @@ router.get("/compliance-report", async (_req: Request, res: Response, next: Next
     });
 
     const totalCredits = reports.reduce((acc, r) => acc + r.carbon_credits_issued, 0);
-    const avgGreenImpact = portfolio.length > 0 ? portfolio.reduce((acc, p) => acc + p.scores.green_impact, 0) / portfolio.length : 0;
-    
+    const avgGreenImpact =
+      portfolio.length > 0
+        ? portfolio.reduce((acc, p) => acc + p.scores.green_impact, 0) / portfolio.length
+        : 0;
+
     let portfolioStatus: "Compliant" | "Warning" | "Non-Compliant" = "Compliant";
     if (avgGreenImpact < 50) {
       portfolioStatus = "Non-Compliant";
@@ -231,8 +255,9 @@ router.post("/custom-report", async (req: Request, res: Response, next: NextFunc
       if (!project_ids.every((n) => Number.isInteger(n) && n >= 1)) {
         throw badRequest("project_ids must contain only positive integers");
       }
-      if (!project_ids.every((n) => (n as number) <= MAX_PROJECT_ID)) {
-        throw badRequest(`project_ids must not exceed maximum project id ${MAX_PROJECT_ID}`);
+      const max = maxProjectId();
+      if (!project_ids.every((n) => Number.isInteger(n) && n <= max)) {
+        throw badRequest(`project_ids must not exceed maximum project id ${max}`);
       }
     }
 
@@ -288,7 +313,9 @@ router.post("/custom-report", async (req: Request, res: Response, next: NextFunc
         pReport.financials = {
           installation_cost: Math.round(input.installation_cost * 100) / 100,
           npv: Math.round(npvResult.npv * 100) / 100,
-          payback_period_years: paybackResult.reaches_payback ? Math.round(paybackResult.payback_years * 10) / 10 : null,
+          payback_period_years: paybackResult.reaches_payback
+            ? Math.round(paybackResult.payback_years * 10) / 10
+            : null,
         };
       }
 

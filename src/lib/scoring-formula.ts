@@ -96,7 +96,8 @@ export function computeScoresWithFormula(input: IotInput, formula?: ScoringFormu
   const { solar, satellite } = input;
 
   const efficiencyComponent = solar.efficiency_pct * w.efficiency_weight;
-  const powerComponent = (solar.power_output_kw / solar.max_power_kw) * 100 * w.power_weight;
+  const powerRatio = solar.max_power_kw > 0 ? solar.power_output_kw / solar.max_power_kw : 0;
+  const powerComponent = powerRatio * 100 * w.power_weight;
   const forestComponent = satellite.forest_density_pct * w.forest_weight;
   const ndviComponent = satellite.ndvi_score * 100 * w.ndvi_weight;
 

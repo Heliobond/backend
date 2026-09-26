@@ -43,6 +43,18 @@ describe("timingSafeCompare (#209)", () => {
     expect(timingSafeCompare("clé-secrète", "cle-secrete")).toBe(false);
   });
 
+  it("does not let zero padding make distinct values compare equal", () => {
+    expect(timingSafeCompare("abc", "abc\u0000")).toBe(false);
+    expect(timingSafeCompare("abc\u0000", "abc")).toBe(false);
+  });
+
+  it("compares values longer than the fixed window without truncating them", () => {
+    const long = "k".repeat(600); // longer than the 512-byte comparison window
+    expect(timingSafeCompare(long, long)).toBe(true);
+    expect(timingSafeCompare(`${long}x`, long)).toBe(false);
+    expect(timingSafeCompare(long, long.slice(0, -1))).toBe(false);
+  });
+
   describe("constant-time guarantees", () => {
     beforeEach(() => {
       mockTimingSafeEqual.mockClear();
@@ -64,9 +76,11 @@ describe("timingSafeCompare (#209)", () => {
       timingSafeCompare("x", "a-considerably-longer-secret-value");
       expect(mockTimingSafeEqual).toHaveBeenCalledTimes(1);
 
+      // Both operands are padded to the fixed 512-byte window no matter how
+      // long the inputs actually are.
       const [a, b] = mockTimingSafeEqual.mock.calls[0] as [Buffer, Buffer];
-      expect(a).toHaveLength(32);
-      expect(b).toHaveLength(32);
+      expect(a).toHaveLength(512);
+      expect(b).toHaveLength(512);
     });
   });
 });

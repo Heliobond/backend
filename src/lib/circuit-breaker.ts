@@ -16,6 +16,7 @@ export interface BreakerMetrics {
   lastFailureAt: number | null;
   openedAt: number | null;
   lastStateChange: number;
+  halfOpenTrialInFlight: boolean;
 }
 
 export class CircuitBreaker {
@@ -26,6 +27,13 @@ export class CircuitBreaker {
   private lastFailureAt: number | null = null;
   private openedAt: number | null = null;
   private lastStateChange = Date.now();
+  /**
+   * True while the single HALF_OPEN trial request is executing. Guards the
+   * canary probe: without it, every caller that observes HALF_OPEN (or that
+   * trips the transition itself) would call through and stampede a downstream
+   * that is only just recovering.
+   */
+  private halfOpenTrialInFlight = false;
   private readonly config: Required<CircuitBreakerConfig>;
 
   constructor(config: Partial<CircuitBreakerConfig> = {}) {
@@ -39,12 +47,25 @@ export class CircuitBreaker {
   /** Execute fn, applying circuit-breaker logic. Falls back to fallback() when OPEN. */
   async execute<T>(fn: () => Promise<T>, fallback?: () => Promise<T>): Promise<T> {
     if (this.state === "OPEN") {
-      if (Date.now() - (this.openedAt ?? 0) >= this.config.recoveryTimeoutMs) {
-        this.transition("HALF_OPEN");
-      } else {
-        if (fallback) return fallback();
-        throw new Error(`[${this.config.name}] Circuit is OPEN – request rejected`);
+      if (Date.now() - (this.openedAt ?? 0) < this.config.recoveryTimeoutMs) {
+        return this.reject("OPEN", fallback);
       }
+      // The cooldown elapsed: this caller is the one that moves the breaker to
+      // HALF_OPEN and, below, gets to run the trial request.
+      this.transition("HALF_OPEN");
+    }
+
+    // HALF_OPEN admits exactly one trial request. Callers that arrive while that
+    // trial is still in flight are treated as if the circuit were still OPEN —
+    // queued behind a single canary — so a just-recovered dependency is probed
+    // once instead of being hit by a burst of concurrent requests.
+    let ownsTrial = false;
+    if (this.state === "HALF_OPEN") {
+      if (this.halfOpenTrialInFlight) {
+        return this.reject("HALF_OPEN", fallback);
+      }
+      this.halfOpenTrialInFlight = true;
+      ownsTrial = true;
     }
 
     try {
@@ -55,7 +76,17 @@ export class CircuitBreaker {
       this.onFailure();
       if (fallback && this.state === "OPEN") return fallback();
       throw err;
+    } finally {
+      // Only the trial owner clears the flag, so a rejected caller can never
+      // release a trial that is still running.
+      if (ownsTrial) this.halfOpenTrialInFlight = false;
     }
+  }
+
+  /** Reject a call: delegate to fallback() when provided, otherwise throw. */
+  private reject<T>(state: BreakerState, fallback?: () => Promise<T>): Promise<T> {
+    if (fallback) return fallback();
+    throw new Error(`[${this.config.name}] Circuit is ${state} – request rejected`);
   }
 
   private onSuccess(): void {
@@ -103,6 +134,7 @@ export class CircuitBreaker {
       lastFailureAt: this.lastFailureAt,
       openedAt: this.openedAt,
       lastStateChange: this.lastStateChange,
+      halfOpenTrialInFlight: this.halfOpenTrialInFlight,
     };
   }
 
@@ -111,6 +143,7 @@ export class CircuitBreaker {
     this.state = "CLOSED";
     this.consecutiveFailures = 0;
     this.openedAt = null;
+    this.halfOpenTrialInFlight = false;
     this.lastStateChange = Date.now();
   }
 }
