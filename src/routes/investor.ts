@@ -10,6 +10,9 @@ import {
 import { getAuditLog } from "../lib/audit";
 import { badRequest, maxProjectId } from "../middleware/errors";
 
+const CARBON_OFFSET_FACTOR = 0.05;
+const CARBON_CREDIT_FACTOR = 0.5;
+
 const router = Router();
 
 // Helper to collect all project details deterministically
@@ -63,7 +66,7 @@ router.get("/dashboard", async (_req: Request, res: Response, next: NextFunction
     const totalFunding = portfolio.reduce((acc, p) => acc + p.funding, 0);
     // Formula for carbon offsets: power_output_kw * green_impact * constant factor
     const totalCarbonOffsets = portfolio.reduce(
-      (acc, p) => acc + p.solar.power_output_kw * p.scores.green_impact * 0.05,
+      (acc, p) => acc + p.solar.power_output_kw * p.scores.green_impact * CARBON_OFFSET_FACTOR,
       0,
     );
 
@@ -205,7 +208,7 @@ router.get("/compliance-report", async (_req: Request, res: Response, next: Next
       }
 
       // Carbon credits: simulated registry entry
-      const carbonCredits = Math.round(p.solar.power_output_kw * p.scores.green_impact * 0.5);
+      const carbonCredits = Math.round(p.solar.power_output_kw * p.scores.green_impact * CARBON_CREDIT_FACTOR);
 
       return {
         project_id: p.id,
