@@ -65,7 +65,12 @@ export function withRpcConnection<T>(fn: (client: rpc.Server) => Promise<T>): Pr
   return rpcBreaker.execute(
     () => rpcPool.withConnection(fn),
     async () => {
-      throw new RpcDegradedError("Stellar RPC circuit is OPEN – request rejected");
+      // Reached when the circuit is OPEN, or when it is HALF_OPEN and another
+      // caller already holds the single trial slot. Callers treat this as
+      // "retry later", which is what keeps a recovering RPC endpoint probed
+      // once rather than by a stampede of concurrent requests.
+      const state = rpcBreaker.getState();
+      throw new RpcDegradedError(`Stellar RPC circuit is ${state} – request rejected`);
     },
   );
 }
