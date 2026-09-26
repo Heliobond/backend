@@ -9,7 +9,7 @@ const TIMESTAMP_HEADER = "x-timestamp";
 const MAX_TIMESTAMP_AGE_MS = 5 * 60 * 1000; // 5 minutes
 
 function getSigningSecret(): string | undefined {
-  return config.REQUEST_SIGNING_SECRET;
+  return process.env.REQUEST_SIGNING_SECRET || config.REQUEST_SIGNING_SECRET;
 }
 
 function computeSignature(

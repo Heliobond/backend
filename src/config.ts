@@ -70,98 +70,6 @@ function networkEnv(name: string, fallback: StellarNetwork): StellarNetwork {
   return isStellarNetwork(raw) ? raw : fallback;
 }
 
-export const config = {
-  /** Stellar / Soroban */
-  STELLAR_NETWORK: networkEnv("STELLAR_NETWORK", "testnet"),
-  ADMIN_SECRET_KEY: process.env.ADMIN_SECRET_KEY || "",
-  PROJECT_REGISTRY_CONTRACT_ID: process.env.PROJECT_REGISTRY_CONTRACT_ID || "",
-  RPC_URL: optionalEnv("RPC_URL", "https://soroban-testnet.stellar.org"),
-
-  /** HTTP server */
-  PORT: numEnv("PORT", 3001),
-  FRONTEND_URL: optionalEnv("FRONTEND_URL", "http://localhost:3000"),
-  ADMIN_API_KEY: process.env.ADMIN_API_KEY || "",
-  ADMIN_REQUEST_MAX_AGE_MS: numEnv("ADMIN_REQUEST_MAX_AGE_MS", 300000),
-  INITIAL_ADMIN_USER_ID: process.env.INITIAL_ADMIN_USER_ID || "",
-  WS_AUTH_TOKEN: process.env.WS_AUTH_TOKEN || "",
-
-  /** Database connection */
-  DB_HOST: optionalEnv("DB_HOST", "localhost"),
-  DB_PORT: numEnv("DB_PORT", 5432),
-  DB_NAME: optionalEnv("DB_NAME", ""),
-  DB_USER: optionalEnv("DB_USER", "postgres"),
-  DB_PASSWORD: optionalEnv("DB_PASSWORD", ""),
-
-  /** Connection pool */
-  DB_POOL_MIN: numEnv("DB_POOL_MIN", 2),
-  DB_POOL_MAX: numEnv("DB_POOL_MAX", 10),
-  DB_POOL_ACQUIRE_TIMEOUT_MS: numEnv("DB_POOL_ACQUIRE_TIMEOUT_MS", 5000),
-  DB_POOL_HEALTH_CHECK_INTERVAL_MS: numEnv("DB_POOL_HEALTH_CHECK_INTERVAL_MS", 30000),
-
-  /** Circuit breaker */
-  RPC_BREAKER_FAILURE_THRESHOLD: numEnv(
-    "CIRCUIT_BREAKER_THRESHOLD",
-    numEnv("RPC_BREAKER_FAILURE_THRESHOLD", 5),
-  ),
-  RPC_BREAKER_RECOVERY_TIMEOUT_MS: numEnv(
-    "CIRCUIT_BREAKER_COOLDOWN_MS",
-    numEnv("RPC_BREAKER_RECOVERY_TIMEOUT_MS", 30000),
-  ),
-
-  /** Transaction retries */
-  TX_MAX_RETRIES: numEnv("TX_MAX_RETRIES", 4),
-  TX_RETRY_BASE_DELAY_MS: numEnv("TX_RETRY_BASE_DELAY_MS", 200),
-  TX_RETRY_MAX_DELAY_MS: numEnv("TX_RETRY_MAX_DELAY_MS", 10000),
-
-  /** Stellar transaction polling */
-  POLL_INTERVAL_MS: numEnv("POLL_INTERVAL_MS", 1500),
-  POLL_MAX_ATTEMPTS: numEnv("POLL_MAX_ATTEMPTS", 20),
-
-  /** Stellar transaction timeout (seconds) */
-  TX_TIMEOUT_SECONDS: numEnv("TX_TIMEOUT_SECONDS", 30),
-
-  /** IoT max power output (kW) */
-  MAX_POWER_KW: numEnv("MAX_POWER_KW", 1000),
-
-  /** Idempotency */
-  IDEMPOTENCY_TTL_MS: numEnv("IDEMPOTENCY_TTL_MS", 3_600_000),
-
-  /** Cron */
-  CRON_TIMEZONE: optionalEnv("CRON_TIMEZONE", "UTC"),
-  CRON_FAILURE_THRESHOLD: floatEnv("CRON_FAILURE_THRESHOLD", 0.5),
-
-  /** Graceful shutdown */
-  SHUTDOWN_TIMEOUT_MS: numEnv("SHUTDOWN_TIMEOUT_MS", 30000),
-
-  /** Logging */
-  LOG_LEVEL: optionalEnv("LOG_LEVEL", ""),
-  NODE_ENV: optionalEnv("NODE_ENV", "development"),
-
-  /** Rate limiting */
-  RATE_LIMIT_WINDOW_MS: numEnv("RATE_LIMIT_WINDOW_MS", 60000),
-  RATE_LIMIT_MAX: numEnv("RATE_LIMIT_MAX", 100),
-  RATE_LIMIT_ADMIN_WINDOW_MS: numEnv("RATE_LIMIT_ADMIN_WINDOW_MS", 60000),
-  RATE_LIMIT_ADMIN_MAX: numEnv("RATE_LIMIT_ADMIN_MAX", 20),
-
-  /** IP Whitelist */
-  ADMIN_IP_WHITELIST: optionalEnv("ADMIN_IP_WHITELIST", ""),
-  ADMIN_IP_WHITELIST_BYPASS_PRIVATE: optionalEnv("ADMIN_IP_WHITELIST_BYPASS_PRIVATE", "true"),
-
-  /** Request Signing */
-  REQUEST_SIGNING_SECRET: optionalEnv("REQUEST_SIGNING_SECRET", ""),
-
-  /** APM */
-  APM_PROVIDER: optionalEnv("APM_PROVIDER", "none"),
-
-  /** CSRF */
-  CORS_ORIGINS: optionalEnv("CORS_ORIGINS", ""),
-
-  /** Body size limit */
-  BODY_SIZE_LIMIT: optionalEnv("BODY_SIZE_LIMIT", "100kb"),
-
-  /** Secrets Management */
-  SECRETS_PROVIDER: optionalEnv("SECRETS_PROVIDER", "env"),
-} as const;
 function buildConfig() {
   return {
     /** Stellar / Soroban */
@@ -174,6 +82,8 @@ function buildConfig() {
     PORT: numEnv("PORT", 3001),
     FRONTEND_URL: optionalEnv("FRONTEND_URL", "http://localhost:3000"),
     ADMIN_API_KEY: process.env.ADMIN_API_KEY || "",
+    ADMIN_REQUEST_MAX_AGE_MS: numEnv("ADMIN_REQUEST_MAX_AGE_MS", 300000),
+    INITIAL_ADMIN_USER_ID: process.env.INITIAL_ADMIN_USER_ID || "",
     WS_AUTH_TOKEN: process.env.WS_AUTH_TOKEN || "",
 
     /** Database connection */

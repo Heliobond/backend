@@ -99,6 +99,12 @@ if (!process.env.ADMIN_API_KEY) {
   );
 }
 
+if (!process.env.REQUEST_SIGNING_SECRET) {
+  logger.warn(
+    "[startup] WARNING: REQUEST_SIGNING_SECRET is not set. Admin endpoints will not verify request signatures.",
+  );
+}
+
 const app = express();
 const PORT = env.PORT;
 

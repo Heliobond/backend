@@ -224,4 +224,15 @@ describe("requestSigning middleware", () => {
 
     expect(next).toHaveBeenCalled();
   });
+
+  it("should allow request through with next() when REQUEST_SIGNING_SECRET is empty string", () => {
+    process.env.REQUEST_SIGNING_SECRET = "";
+    const req = createMockReq();
+    const res = createMockRes();
+    const next = jest.fn();
+
+    requestSigning(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+  });
 });
