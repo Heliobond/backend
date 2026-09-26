@@ -47,7 +47,7 @@ export default function () {
 
     sleep(0.3);
 
-    const dashboardRes = http.get(`${BASE_URL}/v1/dashboard`);
+    const dashboardRes = http.get(`${BASE_URL}/v1/dashboard/summary`);
     dashboardDuration.add(dashboardRes.timings.duration);
     const dashboardOk = check(dashboardRes, {
       "dashboard: not 5xx": (r) => r.status < 500,
@@ -56,7 +56,7 @@ export default function () {
 
     sleep(0.3);
 
-    const iotRes = http.get(`${BASE_URL}/v1/iot`);
+    const iotRes = http.get(`${BASE_URL}/v1/iot/solar/1`);
     const iotOk = check(iotRes, {
       "iot: not 5xx": (r) => r.status < 500,
     });
@@ -64,7 +64,7 @@ export default function () {
 
     sleep(0.3);
 
-    const financialRes = http.get(`${BASE_URL}/v1/financial`);
+    const financialRes = http.get(`${BASE_URL}/v1/financial/npv/1`);
     const financialOk = check(financialRes, {
       "financial: not 5xx": (r) => r.status < 500,
     });

@@ -37,7 +37,7 @@ export default function () {
   sleep(1);
 
   // Public IoT endpoint
-  const iotRes = http.get(`${BASE_URL}/v1/iot`);
+  const iotRes = http.get(`${BASE_URL}/v1/iot/solar/1`);
   const iotOk = check(iotRes, {
     "iot: not 5xx": (r) => r.status < 500,
   });
