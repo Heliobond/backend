@@ -144,7 +144,8 @@ function buildConfig() {
     RATE_LIMIT_ADMIN_WINDOW_MS: numEnv("RATE_LIMIT_ADMIN_WINDOW_MS", 60000),
     RATE_LIMIT_ADMIN_MAX: numEnv("RATE_LIMIT_ADMIN_MAX", 20),
 
-    /** IP Whitelist */
+    /** IP Whitelist & Proxy Trust */
+    TRUST_PROXY: optionalEnv("TRUST_PROXY", "false"),
     ADMIN_IP_WHITELIST: optionalEnv("ADMIN_IP_WHITELIST", ""),
     ADMIN_IP_WHITELIST_BYPASS_PRIVATE: optionalEnv("ADMIN_IP_WHITELIST_BYPASS_PRIVATE", "true"),
 

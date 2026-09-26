@@ -58,7 +58,7 @@ import { requestLogger } from "./middleware/requestLogger";
 import { errorHandler, notFoundHandler } from "./middleware/errors";
 import { sanitizeInputs } from "./middleware/sanitize";
 import { securityHeaders, permissionsHeaders } from "./middleware/securityHeaders";
-import { publicLimiter, adminLimiter } from "./middleware/rateLimit";
+import { publicLimiter, adminLimiter, parseTrustProxy } from "./middleware/rateLimit";
 import { versionHeaders, acceptVersion, deprecationHeaders } from "./middleware/versioning";
 import { runWithCorrelationId, generateCorrelationId } from "./lib/correlation";
 import { logger } from "./lib/logger";
@@ -144,11 +144,8 @@ function requestTimeout(timeoutMs: number) {
 //  - "loopback"        — trust loopback (127.0.0.1/8, ::1) only
 //  - a CIDR or IP      — trust specific proxy IP(s)
 //  - a number N         — trust the first N hops in X-Forwarded-For
-const trustProxy = process.env.TRUST_PROXY || "false";
-// Express accepts `true`, `false`, a hop count, or an IP/CIDR list here. The
-// literal string "false" is not a valid value — proxy-addr throws on it — so
-// map the documented disabled value onto the boolean it stands for.
-app.set("trust proxy", trustProxy === "true" ? true : trustProxy === "false" ? false : trustProxy);
+const trustProxy = process.env.TRUST_PROXY || config.TRUST_PROXY || "false";
+app.set("trust proxy", parseTrustProxy(trustProxy));
 
 // Validate CORS origin
 function validateCorsOrigin(origin: string | undefined): string | undefined {
