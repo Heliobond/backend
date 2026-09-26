@@ -1,4 +1,5 @@
-const MAX_POWER_KW = 1000;
+import { config } from "../config";
+const MAX_POWER_KW = config.MAX_POWER_KW;
 
 export interface ForecastPoint {
   timestamp: number;
