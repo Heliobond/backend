@@ -49,6 +49,28 @@ export class DuplicateSubmissionError extends Error {
   }
 }
 
+/**
+ * Thrown when an account fetch returns a stale sequence number (#540).
+ */
+export class StaleSequenceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StaleSequenceError";
+  }
+}
+
+// Local sequence tracker to guard against sequence conflicts and duplicate replay (#540)
+let localSequence: bigint | null = null;
+let submissionMutex: Promise<unknown> = Promise.resolve();
+
+export function getLocalSequence(): bigint | null {
+  return localSequence;
+}
+
+export function resetLocalSequence(): void {
+  localSequence = null;
+}
+
 export async function updateImpactScore(
   projectId: number,
   creditQuality: number,
@@ -57,26 +79,60 @@ export async function updateImpactScore(
    *  responsible for running the idempotency check before this call. */
   idempotencyKey?: string,
 ): Promise<string> {
-  return withRpcConnection(async (client) => {
-    const keypair = getAdminKeypair();
-    const account = await client.getAccount(keypair.publicKey());
-    const contract = new Contract(REGISTRY_CONTRACT_ID);
+  const execute = async () => {
+    return withRpcConnection(async (client) => {
+      const keypair = getAdminKeypair();
+      const account = await withRpcRetry(
+        () => client.getAccount(keypair.publicKey()),
+        "stellar:getAccount",
+      );
 
-    const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase })
-      .addOperation(
-        contract.call(
-          "update_impact_score",
-          nativeToScVal(projectId, { type: "u32" }),
-          nativeToScVal(creditQuality, { type: "u32" }),
-          nativeToScVal(greenImpact, { type: "u32" }),
-        ),
-      )
-      .setTimeout(config.TX_TIMEOUT_SECONDS)
-      .build();
+      const rawSeq =
+        typeof account.sequenceNumber === "function"
+          ? account.sequenceNumber()
+          : (account as any).sequence;
+      const fetchedSeq = BigInt(rawSeq);
+      if (localSequence !== null && fetchedSeq < localSequence) {
+        throw new StaleSequenceError(
+          `Stale sequence number: fetched ${rawSeq}, expected at least ${localSequence}`,
+        );
+      }
 
-    const prepared = await client.prepareTransaction(tx);
-    return signAndSubmit(client, prepared.toXDR(), keypair);
-  });
+      // Track sequence on first fetch or if chain has advanced
+      if (localSequence === null || fetchedSeq > localSequence) {
+        localSequence = fetchedSeq;
+      }
+
+      const contract = new Contract(REGISTRY_CONTRACT_ID);
+
+      const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase })
+        .addOperation(
+          contract.call(
+            "update_impact_score",
+            nativeToScVal(projectId, { type: "u32" }),
+            nativeToScVal(creditQuality, { type: "u32" }),
+            nativeToScVal(greenImpact, { type: "u32" }),
+          ),
+        )
+        .setTimeout(config.TX_TIMEOUT_SECONDS)
+        .build();
+
+      const prepared = await withRpcRetry(
+        () => client.prepareTransaction(tx),
+        "stellar:prepareTransaction",
+      );
+      const hash = await signAndSubmit(client, prepared.toXDR(), keypair);
+
+      // Increment sequence number after successful submission
+      localSequence += 1n;
+
+      return hash;
+    });
+  };
+
+  const nextMutex = submissionMutex.then(execute, execute);
+  submissionMutex = nextMutex.catch(() => {});
+  return nextMutex;
 }
 
 export async function getTotalProjects(): Promise<number> {
