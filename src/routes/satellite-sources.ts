@@ -71,7 +71,6 @@ async function fetchFromCustomUrl(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), CUSTOM_SOURCE_FETCH_TIMEOUT_MS);
 
-  let response: globalThis.Response;
   // `Response` above refers to the express Response imported for the route
   // handlers, so derive the fetch type instead of naming the global directly.
   let response: Awaited<ReturnType<typeof fetch>>;
@@ -131,10 +130,6 @@ router.post("/", async (req: Request, res: Response) => {
   // SSRF guard: only allow http/https URLs that resolve to public addresses.
   let validatedUrl: string;
   try {
-     
-    new URL(fetchUrl);
-  } catch {
-    return res.status(400).json({ error: "fetchUrl must be a valid URL" });
     validatedUrl = await validatePublicUrl(fetchUrl);
   } catch (err) {
     return res

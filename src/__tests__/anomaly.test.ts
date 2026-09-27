@@ -100,7 +100,7 @@ describe("Anomaly Detection Engine", () => {
       const outlierAlert = res.anomalies.find(a => a.type === "outlier" && a.metric === "power_output_kw");
       expect(outlierAlert).toBeDefined();
       expect(outlierAlert?.value).toBe(1000);
-      expect(Math.abs(outlierAlert?.deviation!)).toBeGreaterThan(2.5);
+      expect(Math.abs(outlierAlert!.deviation)).toBeGreaterThan(2.5);
       expect(outlierAlert?.severity).toBe("high");
     });
 

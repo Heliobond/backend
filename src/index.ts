@@ -1,4 +1,5 @@
 import express from "express";
+import { createV1Router } from "./v1Router";
 import cors from "cors";
 import cron, { ScheduledTask } from "node-cron";
 import { config, initEnv } from "./config";
@@ -15,10 +16,6 @@ import panelsRouter from "./routes/panels";
 import metadataRouter from "./routes/metadata";
 import dashboardRouter from "./routes/dashboard";
 import emailRouter from "./routes/email";
-import anomalyRouter from "./routes/anomaly";
-import scoringFormulasRouter from "./routes/scoring-formulas";
-import chainsRouter from "./routes/chains";
-import satelliteSourcesRouter from "./routes/satellite-sources";
 import aggregateRouter from "./routes/aggregate";
 import comparisonRouter from "./routes/comparison";
 import benchmarkingRouter from "./routes/benchmarking";
@@ -59,7 +56,9 @@ import { errorHandler, notFoundHandler } from "./middleware/errors";
 import { sanitizeInputs } from "./middleware/sanitize";
 import { securityHeaders, permissionsHeaders } from "./middleware/securityHeaders";
 import { publicLimiter, adminLimiter, parseTrustProxy } from "./middleware/rateLimit";
-import { versionHeaders, acceptVersion, deprecationHeaders } from "./middleware/versioning";
+// `acceptVersion` moved to `v1Router.ts` along with the rest of the v1 route
+// table; it is not used on `/api` (only `versionHeaders` is).
+import { versionHeaders, deprecationHeaders } from "./middleware/versioning";
 import { runWithCorrelationId, generateCorrelationId } from "./lib/correlation";
 import { logger } from "./lib/logger";
 import { getTraces, getTraceSummary } from "./lib/tracer";
@@ -67,7 +66,6 @@ import { tracingMiddleware } from "./middleware/tracing";
 import { checkScheduledRotations } from "./lib/apiKeys";
 import { ipWhitelist } from "./middleware/ipWhitelist";
 import { apiKeyAuth } from "./middleware/apiKeyAuth";
-import { requestSigning } from "./middleware/requestSigning";
 import { initApm } from "./lib/apm";
 import { csrfProtection, setCsrfCookie } from "./middleware/csrf";
 import { startSecretRotation, stopSecretRotation, getSecretsStatus } from "./lib/secrets";
@@ -313,34 +311,16 @@ registerFlagRoutes(flagAdminRouter);
 app.use("/v1/admin", ipWhitelist, adminLimiter, flagAdminRouter);
 
 // ── v1 routes (current) ──────────────────────────────────────────────────────
-const v1 = express.Router();
-v1.use(versionHeaders);
-v1.use(acceptVersion);
+// The route table itself lives in `v1Router.ts` so it can be asserted in tests
+// without booting this module's servers and cron jobs.
+const v1 = createV1Router();
 
-v1.use("/iot", publicLimiter, apiKeyAuth, iotRouter);
-v1.use("/admin/feature-flags/analytics", ipWhitelist, adminLimiter, requestSigning, adminRouter);
-v1.use("/admin/batch", ipWhitelist, adminLimiter, requestSigning, batchRouter);
-v1.use("/projects", publicLimiter, apiKeyAuth, projectsRouter);
-v1.use("/projects/:id/history", publicLimiter, apiKeyAuth, historyRouter);
-v1.use("/projects/aggregate", publicLimiter, apiKeyAuth, aggregateRouter);
-v1.use("/portfolio", publicLimiter, portfolioRouter);
-v1.use("/roles", ipWhitelist, adminLimiter, rolesRouter);
-v1.use("/webhooks", ipWhitelist, adminLimiter, requestSigning, webhooksRouter);
-v1.use("/panels", ipWhitelist, adminLimiter, requestSigning, panelsRouter);
-v1.use("/metadata", ipWhitelist, adminLimiter, metadataRouter);
-v1.use("/dashboards", publicLimiter, apiKeyAuth, dashboardRouter);
-v1.use("/email", ipWhitelist, adminLimiter, requestSigning, emailRouter);
-v1.use("/anomaly", publicLimiter, anomalyRouter);
-v1.use("/scoring/formulas", ipWhitelist, adminLimiter, requestSigning, scoringFormulasRouter);
-v1.use("/chains", publicLimiter, adminLimiter, chainsRouter);
-v1.use("/satellite-sources", ipWhitelist, adminLimiter, requestSigning, satelliteSourcesRouter);
-v1.use("/comparison", publicLimiter, apiKeyAuth, comparisonRouter);
-v1.use("/benchmarking", publicLimiter, apiKeyAuth, benchmarkingRouter);
-v1.use("/financial", publicLimiter, apiKeyAuth, financialRouter);
-v1.use("/forecast", publicLimiter, forecastRouter);
-v1.use("/maintenance", publicLimiter, apiKeyAuth, maintenanceRouter);
-v1.use("/investor", publicLimiter, investorRouter);
-v1.use("/admin/api-keys", ipWhitelist, adminLimiter, requestSigning, apiKeysRouter);
+// Attach the v1 router to the app. Without this the router above is never
+// mounted, so every `/v1/*` path it registers falls through to the 404 handler
+// — that is why the documented `/v1/admin/update-scores` returned 404 even
+// after its mount prefix was corrected. Registered after the `/v1/admin`
+// feature-flag router on purpose, so those routes keep priority.
+app.use("/v1", v1);
 
 // ── Legacy /api paths (deprecated) ──────────────────────────────────────────
 // Kept for backward compatibility; will be removed after 2027-01-01.
