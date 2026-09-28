@@ -316,6 +316,18 @@ describe("feature flags", () => {
       expect(getFlag("new-dashboard")).toBeUndefined();
     });
 
+    it("POST /flags/load rejects a non-object body with a structured error", async () => {
+      const res = await request(app).post("/flags/load");
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({
+        error: {
+          code: "bad_request",
+          message: "Request body must be a flag set object",
+        },
+      });
+    });
+
     it("POST /flags/load delegates internal error to errorHandler", async () => {
       const loadSpy = jest.spyOn(featureFlagsModule, "loadFlags").mockImplementationOnce(() => {
         throw new Error("Internal failure: secret_key_leaked_db_error");

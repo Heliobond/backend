@@ -12,12 +12,8 @@ services:
       - PORT=3001
       - ADMIN_SECRET_KEY=${ADMIN_SECRET_KEY}
       - PROJECT_REGISTRY_CONTRACT_ID=${PROJECT_REGISTRY_CONTRACT_ID}
-      - REDIS_URL=redis://redis:6379
       # Keep the V8 heap ceiling under the container memory limit below (#225).
       - NODE_OPTIONS=--max-old-space-size=384
-    depends_on:
-      redis:
-        condition: service_healthy
     volumes:
       - ./src:/app/src:ro
     restart: unless-stopped
@@ -37,28 +33,3 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    restart: unless-stopped
-    command: ["redis-server", "--maxmemory", "192mb", "--maxmemory-policy", "allkeys-lru"]
-    deploy:
-      resources:
-        limits:
-          cpus: "0.25"
-          memory: 256M
-        reservations:
-          cpus: "0.1"
-          memory: 64M
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-
-volumes:
-  redis_data:

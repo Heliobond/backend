@@ -28,12 +28,12 @@ export default function () {
   const endpoints = [
     "/health",
     "/v1/projects",
-    "/v1/dashboard",
-    "/v1/iot",
-    "/v1/financial",
-    "/v1/forecast",
+    "/v1/dashboard/summary",
+    "/v1/iot/solar/1",
+    "/v1/financial/npv/1",
+    "/v1/forecast/1",
     "/v1/comparison",
-    "/v1/portfolio",
+    "/v1/portfolio/0x1234567890abcdef1234567890abcdef12345678",
   ];
 
   const url = `${BASE_URL}${endpoints[Math.floor(Math.random() * endpoints.length)]}`;

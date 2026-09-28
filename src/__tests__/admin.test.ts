@@ -2,10 +2,10 @@ import request from "supertest";
 import express, { Express } from "express";
 import adminRouter from "../routes/admin";
 import { errorHandler } from "../middleware/errors";
+import { resetIdempotencyState } from "../lib/scoreService";
 import * as registry from "../lib/registry";
 import * as iot from "../routes/iot";
 import * as scoring from "../lib/scoring";
-import { resetIdempotencyState } from "../lib/scoreService";
 
 jest.mock("../lib/registry", () => {
   class RpcDegradedError extends Error {
@@ -36,15 +36,18 @@ function buildApp(): Express {
   return app;
 }
 
-const AUTH_HEADER = { Authorization: "Bearer test-key" };
+const AUTH_HEADER = { Authorization: "Bearer test-key", "x-request-timestamp": Date.now().toString() };
+
 
 describe("admin routes", () => {
   let app: Express;
 
   beforeEach(() => {
-    resetIdempotencyState();
     app = buildApp();
     jest.clearAllMocks();
+    // The route goes through the real scoreService, whose module-level
+    // idempotency map must be cleared between tests — earlier tests in this
+    // file submit the same project ids.
     resetIdempotencyState();
     (iot.getSolarData as jest.Mock).mockReturnValue({
       efficiency_pct: 85,
@@ -146,6 +149,7 @@ describe("admin routes", () => {
       const res = await request(app)
         .post("/api/admin/update-scores")
         .set("Authorization", "Bearer test-key ")
+        .set("x-request-timestamp", Date.now().toString())
         .send({});
       expect(res.status).toBe(200);
     });

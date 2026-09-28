@@ -9,8 +9,7 @@ import {
 } from "../lib/financial";
 import { updateImpactScore, getTotalProjects } from "../lib/registry";
 import { recordAudit } from "../lib/audit";
-import { validateApiKey, isRateLimited, incrementUsage } from "../lib/apiKeys";
-import { timingSafeCompare } from "../lib/timing-safe";
+import { resolveAuthContext, incrementUsage } from "../lib/apiKeys";
 
 // 1. GraphQL SDL Schema
 export const graphqlSchema = buildSchema(`
@@ -74,33 +73,14 @@ export interface GraphQLContext {
 }
 
 export function createGraphQLContext(req: any): GraphQLContext {
-  const authHeader = req.headers.authorization;
-  const apiKeyHeader = req.headers["x-api-key"];
-  let providedKey = "";
+  const auth = resolveAuthContext(req.headers);
 
-  if (apiKeyHeader && typeof apiKeyHeader === "string") {
-    providedKey = apiKeyHeader;
-  } else if (authHeader && authHeader.startsWith("Bearer ")) {
-    providedKey = authHeader.substring(7);
+  if (auth.rateLimited) {
+    throw new Error("Rate limit exceeded for this API key");
   }
 
-  let isAdmin = false;
-  let isConsumer = false;
-  let consumerName = "";
-
-  const adminKey = process.env.ADMIN_API_KEY;
-  if (adminKey && timingSafeCompare(providedKey, adminKey)) {
-    isAdmin = true;
-  } else if (providedKey) {
-    const keyRecord = validateApiKey(providedKey);
-    if (keyRecord) {
-      if (isRateLimited(keyRecord.id, keyRecord.rate_limit)) {
-        throw new Error("Rate limit exceeded for this API key");
-      }
-      incrementUsage(keyRecord.id);
-      isConsumer = true;
-      consumerName = keyRecord.consumer_name;
-    }
+  if (auth.isConsumer && auth.keyRecord) {
+    incrementUsage(auth.keyRecord.id);
   }
 
   const solarLoader = new DataLoader<number, any>(async (keys) => {
@@ -112,9 +92,9 @@ export function createGraphQLContext(req: any): GraphQLContext {
   });
 
   return {
-    isAdmin,
-    isConsumer,
-    consumerName,
+    isAdmin: auth.isAdmin,
+    isConsumer: auth.isConsumer,
+    consumerName: auth.consumerName,
     loaders: {
       solarLoader,
       satelliteLoader,

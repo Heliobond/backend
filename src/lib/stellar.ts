@@ -65,9 +65,28 @@ export function withRpcConnection<T>(fn: (client: rpc.Server) => Promise<T>): Pr
   return rpcBreaker.execute(
     () => rpcPool.withConnection(fn),
     async () => {
-      throw new RpcDegradedError("Stellar RPC circuit is OPEN – request rejected");
+      // Reached when the circuit is OPEN, or when it is HALF_OPEN and another
+      // caller already holds the single trial slot. Callers treat this as
+      // "retry later", which is what keeps a recovering RPC endpoint probed
+      // once rather than by a stampede of concurrent requests.
+      const state = rpcBreaker.getState();
+      throw new RpcDegradedError(`Stellar RPC circuit is ${state} – request rejected`);
     },
   );
+}
+
+/**
+ * Execute an RPC operation with exponential backoff and jitter for transient errors (#541).
+ * Configured via RPC_MAX_RETRIES (default 3) and RPC_RETRY_BASE_MS (default 1000).
+ */
+export async function withRpcRetry<T>(fn: () => Promise<T>, label = "stellar:rpc"): Promise<T> {
+  return withRetry(fn, {
+    maxAttempts: config.RPC_MAX_RETRIES,
+    baseDelayMs: config.RPC_RETRY_BASE_MS,
+    maxDelayMs: config.TX_RETRY_MAX_DELAY_MS,
+    jitter: 0.3,
+    label,
+  });
 }
 
 // ── Admin keypair cache (#227) ───────────────────────────────────────────────
@@ -195,7 +214,7 @@ async function _attemptSubmit(
   }
 
   tx.sign(keypair);
-  const result = await client.sendTransaction(tx);
+  const result = await withRpcRetry(() => client.sendTransaction(tx), "stellar:sendTransaction");
 
   if (result.status === "ERROR") {
     const errorString = JSON.stringify(result.errorResult);
@@ -227,7 +246,10 @@ async function _attemptSubmit(
         timer = setTimeout(r, pollIntervalMs);
       });
       timer = undefined;
-      getResult = await client.getTransaction(result.hash);
+      getResult = await withRpcRetry(
+        () => client.getTransaction(result.hash),
+        "stellar:getTransaction",
+      );
       if (++pollAttempts > config.POLL_MAX_ATTEMPTS)
         throw new Error("Transaction confirmation timeout");
     } while (getResult.status === rpc.Api.GetTransactionStatus.NOT_FOUND);

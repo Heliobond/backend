@@ -21,6 +21,8 @@ const mockConfig: Record<string, unknown> = {
   POLL_MAX_ATTEMPTS: 20,
   MAX_POWER_KW: 1000,
   TX_TIMEOUT_SECONDS: 30,
+  RPC_MAX_RETRIES: 3,
+  RPC_RETRY_BASE_MS: 10,
 };
 
 jest.mock("../config", () => ({
@@ -95,7 +97,9 @@ import {
   signAndSubmit,
   RpcDegradedError,
   networkPassphrase,
+  withRpcRetry,
 } from "../lib/stellar";
+import { withRetry } from "../lib/retry";
 import { rpc, TransactionBuilder } from "@stellar/stellar-sdk";
 
 describe("stellar utility helpers", () => {
@@ -274,5 +278,21 @@ describe("stellar utility helpers", () => {
       // 20 max attempts before throwing
       expect(client.getTransaction).toHaveBeenCalledTimes(21);
     }, 15000);
+  });
+
+  describe("withRpcRetry", () => {
+    it("delegates to withRetry with RPC retry parameters", async () => {
+      const mockFn = jest.fn().mockResolvedValue("result");
+      const result = await withRpcRetry(mockFn, "test:operation");
+
+      expect(withRetry).toHaveBeenCalledWith(mockFn, {
+        maxAttempts: 3,
+        baseDelayMs: 10,
+        maxDelayMs: 10000,
+        jitter: 0.3,
+        label: "test:operation",
+      });
+      expect(result).toBe("result");
+    });
   });
 });

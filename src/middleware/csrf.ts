@@ -1,5 +1,7 @@
 import crypto from "crypto";
 import { Request, Response, NextFunction } from "express";
+import { config } from "../config";
+import { errorBody } from "./errors";
 
 const CSRF_TOKEN_LENGTH = 32;
 const CSRF_TOKEN_EXPIRY_MS = 60 * 60 * 1000;
@@ -40,7 +42,7 @@ function getCookieOptions(): {
   secure: boolean;
   sameSite: "strict" | "lax";
 } {
-  const isProduction = process.env.NODE_ENV === "production";
+  const isProduction = config.NODE_ENV === "production";
   return {
     secure: isProduction,
     sameSite: isProduction ? "strict" : "lax",
@@ -100,50 +102,39 @@ export function csrfProtection(req: Request, res: Response, next: NextFunction):
 
   const token = headerToken || bodyToken;
   if (!token) {
-    res.status(403).json({
-      error: "csrf_token_missing",
-      message: "CSRF Token is required for this request",
-    });
+    res
+      .status(403)
+      .json(errorBody("csrf_token_missing", "CSRF Token is required for this request"));
     return;
   }
 
   if (!cookieToken || !timingSafeCompare(token, cookieToken)) {
-    res.status(403).json({
-      error: "csrf_token_invalid",
-      message: "CSRF token does not match the cookie token",
-    });
+    res
+      .status(403)
+      .json(errorBody("csrf_token_invalid", "CSRF token does not match the cookie token"));
     return;
   }
 
   const sessionId = getSessionId(req);
   if (!sessionId) {
-    res.status(403).json({
-      error: "csrf_token_invalid",
-      message: "CSRF session is missing",
-    });
+    res.status(403).json(errorBody("csrf_token_invalid", "CSRF session is missing"));
     return;
   }
 
   const stored = tokenStore.get(sessionId);
   if (!stored || !timingSafeCompare(stored.token, token)) {
-    res.status(403).json({
-      error: "csrf_token_invalid",
-      message: "CSRF token is invalid or expired",
-    });
+    res.status(403).json(errorBody("csrf_token_invalid", "CSRF token is invalid or expired"));
     return;
   }
 
   if (Date.now() - stored.createdAt > CSRF_TOKEN_EXPIRY_MS) {
     tokenStore.delete(sessionId);
-    res.status(403).json({
-      error: "csrf_token_expired",
-      message: "CSRF token has expired",
-    });
+    res.status(403).json(errorBody("csrf_token_expired", "CSRF token has expired"));
     return;
   }
 
   const origin = req.headers.origin || req.headers.referer;
-  const allowedOrigins = (process.env.CORS_ORIGINS || process.env.FRONTEND_URL || "")
+  const allowedOrigins = (config.CORS_ORIGINS || config.FRONTEND_URL || "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
@@ -159,10 +150,7 @@ export function csrfProtection(req: Request, res: Response, next: NextFunction):
       }
     });
     if (!isAllowed) {
-      res.status(403).json({
-        error: "csrf_origin_invalid",
-        message: "Request origin is not allowed",
-      });
+      res.status(403).json(errorBody("csrf_origin_invalid", "Request origin is not allowed"));
       return;
     }
   }

@@ -87,26 +87,23 @@ router.put("/config", (req: Request, res: Response) => {
 });
 
 /**
- * DELETE /v1/anomaly/history
- * Clear the baseline history for all projects.
+ * DELETE /v1/anomaly/history and DELETE /v1/anomaly/history/:id
+ * Clear the baseline history for a specific project (or all projects).
+ * Two explicit routes because path-to-regexp v8 (Express 5) dropped the `?`
+ * suffix that older Express accepted for optional params.
  */
-router.delete("/history", (_req: Request, res: Response) => {
-  clearHistory();
-  res.json({ ok: true, cleared: "all" });
-});
-
-/**
- * DELETE /v1/anomaly/history/:id
- * Clear the baseline history for a specific project.
- */
-router.delete("/history/:id", (req: Request, res: Response, next: NextFunction) => {
+const clearAnomalyHistory = (req: Request, res: Response, next: NextFunction) => {
   try {
-    const id = parseProjectId(req.params.id, "project id");
+    // `/history` has no `:id` param, which means "clear every project".
+    const id = req.params.id ? parseProjectId(req.params.id, "project id") : undefined;
     clearHistory(id);
-    res.json({ ok: true, cleared: id });
+    res.json({ ok: true, cleared: id ?? "all" });
   } catch (err) {
     next(err);
   }
-});
+};
+
+router.delete("/history", clearAnomalyHistory);
+router.delete("/history/:id", clearAnomalyHistory);
 
 export default router;

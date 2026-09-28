@@ -1,4 +1,5 @@
 import { Router, Request, Response, NextFunction } from "express";
+import { logger } from "../lib/logger";
 import {
   subscribe,
   unsubscribeByToken,
@@ -95,7 +96,7 @@ router.post("/digest", async (req: Request, res: Response, next: NextFunction) =
     const sent = await sendDigest(frequency, Array.isArray(changes) ? changes : []);
     res.json({ frequency, sent });
   } catch (error) {
-    console.error("[email] digest error:", error);
+    logger.error("[email] digest error", logger.formatError(error));
     next(error);
   }
 });

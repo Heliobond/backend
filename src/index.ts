@@ -41,7 +41,7 @@ import { isErrorRateLimited } from "./lib/error-limiter";
 import { isRpcOutageExtended, isRpcAvailable, getRpcStatus } from "./lib/stellar";
 import {
   getQueueSize,
-  dequeue,
+  getQueueSnapshot,
   remove,
   incrementRetry,
   hasExceededMaxRetries,
@@ -58,7 +58,7 @@ import { requestLogger } from "./middleware/requestLogger";
 import { errorHandler, notFoundHandler } from "./middleware/errors";
 import { sanitizeInputs } from "./middleware/sanitize";
 import { securityHeaders, permissionsHeaders } from "./middleware/securityHeaders";
-import { publicLimiter, adminLimiter } from "./middleware/rateLimit";
+import { publicLimiter, adminLimiter, parseTrustProxy } from "./middleware/rateLimit";
 import { versionHeaders, acceptVersion, deprecationHeaders } from "./middleware/versioning";
 import { runWithCorrelationId, generateCorrelationId } from "./lib/correlation";
 import { logger } from "./lib/logger";
@@ -96,6 +96,12 @@ initApm().catch((err: Error) => {
 if (!process.env.ADMIN_API_KEY) {
   console.warn(
     "[startup] WARNING: ADMIN_API_KEY is not set. Admin endpoints will return 500 errors.",
+  );
+}
+
+if (!process.env.REQUEST_SIGNING_SECRET) {
+  logger.warn(
+    "[startup] WARNING: REQUEST_SIGNING_SECRET is not set. Admin endpoints will not verify request signatures.",
   );
 }
 
@@ -138,8 +144,8 @@ function requestTimeout(timeoutMs: number) {
 //  - "loopback"        — trust loopback (127.0.0.1/8, ::1) only
 //  - a CIDR or IP      — trust specific proxy IP(s)
 //  - a number N         — trust the first N hops in X-Forwarded-For
-const trustProxy = process.env.TRUST_PROXY || "false";
-app.set("trust proxy", trustProxy === "true" ? true : trustProxy);
+const trustProxy = process.env.TRUST_PROXY || config.TRUST_PROXY || "false";
+app.set("trust proxy", parseTrustProxy(trustProxy));
 
 // Validate CORS origin
 function validateCorsOrigin(origin: string | undefined): string | undefined {
@@ -365,6 +371,20 @@ app.use(notFoundHandler);
 app.use(errorHandler);
 
 // ── Cron: index contract events every 5 minutes ──────────────────────────────
+// `cronTasks` and `scheduleCron` are declared here (not at the bottom of the
+// file) because the first scheduleCron call below pushes into the array — a
+// const declared later would still be in its temporal dead zone here.
+const cronTasks: ScheduledTask[] = [];
+
+function scheduleCron(
+  expression: string,
+  fn: () => void | Promise<void>,
+  opts?: { timezone?: string },
+): void {
+  const task = cron.schedule(expression, fn, opts);
+  cronTasks.push(task);
+}
+
 scheduleCron(
   "*/5 * * * *",
   async () => {
@@ -423,10 +443,16 @@ scheduleCron(
     const maxRetries = 10;
     const processed: number[] = [];
 
-    while (getQueueSize() > 0) {
-      const item = dequeue();
-      if (!item) break;
-
+    // Snapshot the queue once and make a single pass over it. Each item gets
+    // at most one attempt per cron tick: on success (or a detected duplicate)
+    // it is removed; on failure it is left in the queue (with its retry
+    // count bumped in place) so the *next* 5-minute tick retries it, instead
+    // of hot-looping the same failing item synchronously in this run.
+    //
+    // Items are only ever removed from the queue on success, on a detected
+    // duplicate, or once they've exceeded MAX_RETRIES — never merely because
+    // an attempt was made (see #532).
+    for (const item of getQueueSnapshot()) {
       try {
         const solar = getSolarData(item.projectId);
         const satellite = await fetchSatelliteWithFallback(item.projectId);
@@ -449,6 +475,7 @@ scheduleCron(
             fresh.green_impact,
             idempotencyKey,
           );
+          remove(item.projectId);
           processed.push(item.projectId);
           logger.info(
             `[cron] tx-queue: project ${item.projectId} retried successfully tx=${tx_hash}`,
@@ -473,7 +500,7 @@ scheduleCron(
             remove(item.projectId);
           } else {
             logger.warn(
-              `[cron] tx-queue: project ${item.projectId} retry failed (attempt ${item.retryCount + 1}), will retry`,
+              `[cron] tx-queue: project ${item.projectId} retry failed (attempt ${item.retryCount}), will retry`,
             );
           }
         }
@@ -606,18 +633,6 @@ const grpcServer = startGrpcServer(50051);
 startSecretRotation();
 
 // ── Graceful shutdown (#57) ──────────────────────────────────────────────────
-// Track all scheduled cron tasks so we can stop them cleanly.
-const cronTasks: ScheduledTask[] = [];
-
-function scheduleCron(
-  expression: string,
-  fn: () => void | Promise<void>,
-  opts?: { timezone?: string },
-): void {
-  const task = cron.schedule(expression, fn, opts);
-  cronTasks.push(task);
-}
-
 let isShuttingDown = false;
 
 async function gracefulShutdown(signal: string): Promise<void> {

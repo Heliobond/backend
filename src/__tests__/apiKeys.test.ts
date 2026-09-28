@@ -1,7 +1,8 @@
 import express from "express";
 import request from "supertest";
 import { apiKeyAuth, AuthenticatedRequest } from "../middleware/apiKeyAuth";
-import { clearApiKeys, generateApiKey, validateApiKey } from "../lib/apiKeys";
+import { clearApiKeys, generateApiKey, rotateApiKey, validateApiKey } from "../lib/apiKeys";
+import * as timingSafeLib from "../lib/timing-safe";
 import apiKeysRouter from "../routes/apiKeys";
 
 describe("API Key Management and Authentication", () => {
@@ -86,7 +87,7 @@ describe("API Key Management and Authentication", () => {
 
     it("should return usage stats", async () => {
       const key = generateApiKey("Consumer Stats", 10);
-      
+
       const res = await request(app)
         .get(`/admin/api-keys/${key.id}/usage`)
         .set("Authorization", "Bearer admin-secret-key");
@@ -107,15 +108,18 @@ describe("API Key Management and Authentication", () => {
     it("should block requests with no key", async () => {
       const res = await request(app).get("/protected");
       expect(res.status).toBe(401);
-      expect(res.body.error).toBe("unauthorized");
+      expect(res.body).toEqual({
+        error: {
+          code: "unauthorized",
+          message: "Missing API key in Authorization bearer token or X-API-Key header",
+        },
+      });
     });
 
     it("should accept valid consumer key and record usage", async () => {
       const key = generateApiKey("Authenticated Consumer");
 
-      const res = await request(app)
-        .get("/protected")
-        .set("X-API-Key", key.key);
+      const res = await request(app).get("/protected").set("X-API-Key", key.key);
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
@@ -136,7 +140,49 @@ describe("API Key Management and Authentication", () => {
       // Request 4 -> Blocked (429)
       const res4 = await request(app).get("/protected").set("X-API-Key", key.key);
       expect(res4.status).toBe(429);
-      expect(res4.body.error).toBe("too_many_requests");
+      expect(res4.body).toEqual({
+        error: {
+          code: "too_many_requests",
+          message: "Rate limit exceeded for this API key. Please retry later.",
+        },
+      });
+    });
+  });
+
+  describe("validateApiKey constant-time comparison", () => {
+    const timingSafeCompareSpy = jest.spyOn(timingSafeLib, "timingSafeCompare");
+
+    afterAll(() => {
+      timingSafeCompareSpy.mockRestore();
+    });
+
+    it("compares the active key using timingSafeCompare", () => {
+      const key = generateApiKey("Consumer", 100);
+
+      const result = validateApiKey(key.key);
+
+      expect(result).not.toBeNull();
+      expect(timingSafeCompareSpy).toHaveBeenCalledWith(key.key, key.key);
+    });
+
+    it("compares the grace-period old key using timingSafeCompare", () => {
+      const key = generateApiKey("Consumer", 100);
+      const oldKey = key.key;
+      rotateApiKey(key.id, 60 * 60 * 1000);
+
+      const result = validateApiKey(oldKey);
+
+      expect(result).not.toBeNull();
+      expect(timingSafeCompareSpy).toHaveBeenCalledWith(oldKey, oldKey);
+    });
+
+    it("calls timingSafeCompare when the provided key does not match", () => {
+      const key = generateApiKey("Consumer", 100);
+
+      const result = validateApiKey("hk_live_incorrect");
+
+      expect(result).toBeNull();
+      expect(timingSafeCompareSpy).toHaveBeenCalledWith(key.key, "hk_live_incorrect");
     });
   });
 });

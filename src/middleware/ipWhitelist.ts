@@ -1,5 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { logger } from "../lib/logger";
+import { config } from "../config";
+import { errorBody } from "./errors";
 
 interface CidrRange {
   network: string;
@@ -56,8 +58,8 @@ let allowedIPs: CidrRange[] = [];
 let bypassPrivateNetworks = true;
 
 function reloadConfig(): void {
-  allowedIPs = parseIPList(process.env.ADMIN_IP_WHITELIST);
-  bypassPrivateNetworks = process.env.ADMIN_IP_WHITELIST_BYPASS_PRIVATE !== "false";
+  allowedIPs = parseIPList(config.ADMIN_IP_WHITELIST);
+  bypassPrivateNetworks = config.ADMIN_IP_WHITELIST_BYPASS_PRIVATE !== "false";
 }
 
 reloadConfig();
@@ -98,8 +100,7 @@ export function ipWhitelist(req: Request, res: Response, next: NextFunction): vo
     method: req.method,
   });
 
-  res.status(403).json({
-    error: "forbidden",
-    message: "Your IP address is not authorized to access admin endpoints",
-  });
+  res
+    .status(403)
+    .json(errorBody("forbidden", "Your IP address is not authorized to access admin endpoints"));
 }

@@ -54,6 +54,7 @@ describe("Security - injection attacks", () => {
             const res = await request(app)
                 .post("/api/admin/update-scores")
                 .set("Authorization", "Bearer test-key")
+                .set("x-request-timestamp", Date.now().toString())
                 .send(JSON.parse('{"__proto__": {"project_ids": [999]}}'))
                 .expect(200);
 
@@ -66,6 +67,7 @@ describe("Security - injection attacks", () => {
             const res = await request(app)
                 .post("/api/admin/update-scores")
                 .set("Authorization", "Bearer test-key")
+                .set("x-request-timestamp", Date.now().toString())
                 .send({ constructor: { prototype: { project_ids: [999] } } })
                 .expect(200);
 

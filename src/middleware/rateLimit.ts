@@ -20,6 +20,22 @@ function intFromEnv(name: string, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+/**
+ * Parse TRUST_PROXY env configuration for Express trust proxy setting.
+ * Supports:
+ * - "false" / undefined / empty -> false (no proxy)
+ * - "true" -> true (trust all proxies)
+ * - Integer number N -> N hops
+ * - IP/CIDR/subnet string -> passed directly to Express/proxy-addr
+ */
+export function parseTrustProxy(value: string | undefined): boolean | number | string {
+  if (!value || value === "false") return false;
+  if (value === "true") return true;
+  const num = Number(value);
+  if (!Number.isNaN(num) && Number.isInteger(num) && num >= 0) return num;
+  return value;
+}
+
 export function createRateLimiter(windowMs: number, max: number): RateLimitRequestHandler {
   return rateLimit({
     windowMs,

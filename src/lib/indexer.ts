@@ -1,5 +1,6 @@
 import { rpc } from "@stellar/stellar-sdk";
 import { withRpcConnection } from "./stellar";
+import { logger } from "./logger";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -248,19 +249,52 @@ class EventIndexer {
 
         if (endLedger <= startLedger) return;
 
-        for (let seq = startLedger; seq <= endLedger; seq++) {
-          const ledgerTx = await client.getTransaction(seq.toString());
-          if (!ledgerTx || !("hash" in ledgerTx)) continue;
+        // Use getEvents() to enumerate real contract events in the ledger range.
+        // getTransaction() requires a 64-char hex transaction hash — passing a
+        // ledger sequence number (e.g. "12345678") is not a valid hash and will
+        // never match a real transaction, so the old loop silently discovered
+        // nothing. getEvents() is the correct RPC surface for this use-case.
+        const eventsResponse = await (client as any).getEvents({
+          startLedger,
+          filters: [{ type: "contract" }],
+        });
 
-          const txHash = "hash" in ledgerTx ? (ledgerTx as any).hash : "";
-          await this.processTransaction(client, txHash, seq);
+        const rawEvents: unknown[] = Array.isArray(eventsResponse?.events)
+          ? eventsResponse.events
+          : [];
+
+        // Collect unique (txHash, ledger) pairs so we call processTransaction
+        // once per transaction, not once per event inside that transaction.
+        const seen = new Map<string, number>();
+        for (const event of rawEvents) {
+          const e = event as Record<string, unknown>;
+          const txHash =
+            typeof e.txHash === "string" && e.txHash.trim()
+              ? e.txHash.trim()
+              : typeof e.transactionHash === "string" && e.transactionHash.trim()
+                ? e.transactionHash.trim()
+                : null;
+          const eventLedger =
+            typeof e.ledger === "number"
+              ? e.ledger
+              : typeof e.ledgerSequence === "number"
+                ? e.ledgerSequence
+                : null;
+
+          if (txHash && eventLedger !== null && !seen.has(txHash)) {
+            seen.set(txHash, eventLedger);
+          }
+        }
+
+        for (const [txHash, txLedger] of seen) {
+          await this.processTransaction(client, txHash, txLedger);
         }
 
         this.store.cursor = endLedger;
         this.store.lastUpdated = Date.now();
       });
     } catch (err) {
-      console.error("[indexer] poll failed:", err);
+      logger.error("[indexer] poll failed", logger.formatError(err));
     } finally {
       this.isIndexing = false;
     }
@@ -295,7 +329,7 @@ class EventIndexer {
 
       this.store.events.push(event);
     } catch (err) {
-      console.debug(`[indexer] could not process tx ${txHash}:`, err);
+      logger.debug(`[indexer] could not process tx ${txHash}`, logger.formatError(err));
     }
   }
 

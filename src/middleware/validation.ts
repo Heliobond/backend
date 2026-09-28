@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from "express";
+import { errorBody } from "./errors";
 
 export interface ValidationSchema {
   type?: string;
@@ -12,7 +13,10 @@ interface ValidatorOptions {
   onError?: (res: Response, error: string, status?: number) => void;
 }
 
-function validateSchema(data: unknown, schema: ValidationSchema): { valid: boolean; error?: string } {
+function validateSchema(
+  data: unknown,
+  schema: ValidationSchema,
+): { valid: boolean; error?: string } {
   if (!data || typeof data !== "object") {
     return { valid: false, error: "Request body must be an object" };
   }
@@ -108,7 +112,7 @@ export function validate(options: ValidatorOptions) {
       if (options.onError) {
         options.onError(res, error, status);
       } else {
-        res.status(status).json({ error: "validation_error", message: error });
+        res.status(status).json(errorBody("validation_error", error));
       }
       return;
     }

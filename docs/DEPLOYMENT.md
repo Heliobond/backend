@@ -52,7 +52,7 @@ For a bare `docker run`, pass them explicitly:
 ```bash
 docker run --memory=512m --cpus=0.5 \
   -e NODE_OPTIONS=--max-old-space-size=384 \
-  -p 3000:3000 --env-file .env \
+  -p 3001:3001 --env-file .env \
   ghcr.io/<owner>/backend:latest
 ```
 
@@ -82,6 +82,8 @@ Three workflows, each with a distinct job:
 | `ci.yml`      | push to `main`, PRs to `main`     | build, test, dependency audit |
 | `release.yml` | push to `main`, manual dispatch   | version, changelog, git tag   |
 | `deploy.yml`  | push to `main`, release, tag `v*` | build image, push, deploy     |
+| `load-test.yml` | schedule (`0 2 * * *`) & manual dispatch | k6 load testing scenarios |
+| `security-audit.yml` | schedule (`0 6 * * 1`) & manual dispatch | dependency audit, code scan, secret detection, license compliance |
 
 ### What triggers which environment
 

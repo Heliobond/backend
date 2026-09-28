@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from "express";
+import { config } from "../config";
 import {
   evaluateFlag,
   evaluateFlags,
@@ -11,6 +12,7 @@ import {
   type EvaluationResult,
   type FlagSet,
 } from "../lib/feature-flags";
+import { errorBody } from "./errors";
 
 // ── Express middleware ───────────────────────────────────────────────────────
 
@@ -23,7 +25,7 @@ export function featureFlagContext(req: Request, _res: Response, next: NextFunct
 
   const ctx: EvaluationContext = {
     user_id: userId,
-    environment: process.env.NODE_ENV || "development",
+    environment: config.NODE_ENV || "development",
     attributes: {
       ip: req.ip ?? "",
       user_agent: req.headers["user-agent"] ?? "",
@@ -77,7 +79,7 @@ export function registerFlagRoutes(router: import("express").Router): void {
   router.get("/flags", (req: Request, res: Response) => {
     const ctx: EvaluationContext = {
       user_id: (req.headers["x-user-id"] as string) || (req.query.user_id as string) || undefined,
-      environment: process.env.NODE_ENV || "development",
+      environment: config.NODE_ENV || "development",
     };
 
     const allFlags = listFlags();
@@ -98,7 +100,7 @@ export function registerFlagRoutes(router: import("express").Router): void {
     try {
       const flagSet = req.body as FlagSet;
       if (!flagSet || typeof flagSet !== "object") {
-        res.status(400).json({ error: "Request body must be a flag set object" });
+        res.status(400).json(errorBody("bad_request", "Request body must be a flag set object"));
         return;
       }
       loadFlags(flagSet);
@@ -113,7 +115,7 @@ export function registerFlagRoutes(router: import("express").Router): void {
     try {
       const partial = req.body as FlagSet;
       if (!partial || typeof partial !== "object") {
-        res.status(400).json({ error: "Request body must be a flag set object" });
+        res.status(400).json(errorBody("bad_request", "Request body must be a flag set object"));
         return;
       }
       mergeFlags(partial);
@@ -134,7 +136,7 @@ export function registerFlagRoutes(router: import("express").Router): void {
   router.get("/flags/:name", (req: Request, res: Response) => {
     const ctx: EvaluationContext = {
       user_id: (req.headers["x-user-id"] as string) || (req.query.user_id as string) || undefined,
-      environment: process.env.NODE_ENV || "development",
+      environment: config.NODE_ENV || "development",
     };
 
     const result = evaluateFlag(String(req.params.name), ctx);

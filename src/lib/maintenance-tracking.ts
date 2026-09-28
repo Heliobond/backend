@@ -378,10 +378,18 @@ export function clearAllData(): void {
   historyStore.clear();
 }
 
+function escapeCsv(val: string): string {
+  let escaped = val.replace(/"/g, '""');
+  if (/^[=+\-@]/.test(escaped)) {
+    escaped = "'" + escaped;
+  }
+  return `"${escaped}"`;
+}
+
 export function tasksToCsv(tasks: MaintenanceTask[]): string {
   const header = "id,project_id,title,action_type,priority,status,scheduled_date,completed_date,assigned_to,estimated_cost,actual_cost,notes";
   const rows = tasks.map((t) =>
-    `${t.id},${t.project_id},"${t.title}",${t.action_type},${t.priority},${t.status},${t.scheduled_date},${t.completed_date ?? ""},${t.assigned_to},${t.estimated_cost},${t.actual_cost ?? ""},"${t.notes}"`,
+    `${t.id},${t.project_id},${escapeCsv(t.title)},${escapeCsv(t.action_type)},${t.priority},${t.status},${t.scheduled_date},${t.completed_date ?? ""},${escapeCsv(t.assigned_to)},${t.estimated_cost},${t.actual_cost ?? ""},${escapeCsv(t.notes)}`,
   );
   return [header, ...rows].join("\n") + "\n";
 }
@@ -389,7 +397,7 @@ export function tasksToCsv(tasks: MaintenanceTask[]): string {
 export function historyToCsv(records: MaintenanceRecord[]): string {
   const header = "id,project_id,task_id,action_type,description,completed_date,cost,efficiency_before,efficiency_after,effectiveness_pct,notes";
   const rows = records.map((r) =>
-    `${r.id},${r.project_id},${r.task_id ?? ""},${r.action_type},"${r.description}",${r.completed_date},${r.cost},${r.efficiency_before ?? ""},${r.efficiency_after ?? ""},${r.effectiveness_pct ?? ""},"${r.notes}"`,
+    `${r.id},${r.project_id},${r.task_id ?? ""},${escapeCsv(r.action_type)},${escapeCsv(r.description)},${r.completed_date},${r.cost},${r.efficiency_before ?? ""},${r.efficiency_after ?? ""},${r.effectiveness_pct ?? ""},${escapeCsv(r.notes)}`,
   );
   return [header, ...rows].join("\n") + "\n";
 }
