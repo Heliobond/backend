@@ -78,8 +78,10 @@ jobs:
       - name: Bump version (manual)
         if: github.event_name == 'workflow_dispatch'
         id: bump
+        env:
+          VERSION_BUMP: ${{ github.event.inputs.version_bump }}
         run: |
-          NEW_VERSION=$(npm version "${{ github.event.inputs.version_bump }}" --no-git-tag-version)
+          NEW_VERSION=$(npm version "$VERSION_BUMP" --no-git-tag-version)
           echo "version=${NEW_VERSION#v}" >> "$GITHUB_OUTPUT"
 
       - name: Update CHANGELOG (manual)
