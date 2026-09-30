@@ -1,1 +1,27 @@
 npx lint-staged
+#!/usr/bin/env sh
+. "$(dirname "$0")/_/husky.sh"
+
+# 1. Secret Detection (using gitleaks if installed, otherwise fallback check for .env/keys)
+if command -v gitleaks >/dev/null 2>&1; then
+  echo "🔒 Scanning for secrets with gitleaks..."
+  gitleaks protect --staged --verbose || exit 1
+else
+  echo "⚠️ gitleaks not found globally; running basic staged secrets check..."
+  if git diff --cached --name-only | grep -E '(\.env|\.pem|\.key|id_rsa)$' >/dev/null; then
+    echo "❌ Error: Attempting to commit potentially sensitive files (.env, key files)."
+    exit 1
+  fi
+fi
+
+# 2. Lint and format staged files
+echo "🧹 Running lint-staged..."
+npx lint-staged || exit 1
+
+# 3. Typechecking whole project
+echo "🔍 Running TypeScript typecheck..."
+npm run typecheck || exit 1
+
+# 4. Run tests related to staged changes
+echo "🧪 Running related tests..."
+npx jest --bail --findRelatedTests $(git diff --cached --name-only --diff-filter=ACMR "*.ts" "*.tsx") --passWithNoTests || exit 1

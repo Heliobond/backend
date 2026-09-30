@@ -67,6 +67,8 @@
     "ws": "8.21.3"
   },
   "devDependencies": {
+    "@commitlint/cli": "19.8.0",
+    "@commitlint/config-conventional": "19.8.0",
     "@eslint/js": "10.0.1",
     "@types/compression": "1.8.1",
     "@types/cookie-parser": "1.4.10",
