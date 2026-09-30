@@ -25,6 +25,9 @@ describe("comparison routes", () => {
     expect(res.body.summary).toBeDefined();
     expect(res.body.summary.highest_combined).toBeDefined();
     expect(res.body.summary.lowest_combined).toBeDefined();
+    const scores = res.body.projects.map((p: { combined_score: number }) => p.combined_score);
+    expect(res.body.summary.highest_combined).toBe(Math.max(...scores));
+    expect(res.body.summary.lowest_combined).toBe(Math.min(...scores));
   });
 
   it("GET /api/comparison — 400 for missing ids", async () => {

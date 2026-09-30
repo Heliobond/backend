@@ -237,6 +237,96 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/projects/{id}/price-history": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Price and yield chart series for a project (#769)
+     * @description Returns `PricePoint[]` = `{date, price, yield?}` for the project's chart. Values are derived from the on-chain `get_score_history` timestamps and the current `get_interest_rate`. `yield` is `rate_bps / 100`; `price` is `100 / (1 + yield/100)` (one-period present value). See API.md for the full formula.
+     */
+    get: {
+      parameters: {
+        query?: {
+          /** @description Start timestamp (unix ms) */
+          from?: number;
+          /** @description End timestamp (unix ms) */
+          to?: number;
+          /** @description Bucket size for the series */
+          interval?: "day" | "week";
+        };
+        header?: never;
+        path: {
+          id: number;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description PricePoint series in ascending date order */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            /**
+             * @example {
+             *       "project_id": 27,
+             *       "interval": "day",
+             *       "count": 3,
+             *       "points": [
+             *         {
+             *           "date": "2026-09-28",
+             *           "price": 96.15,
+             *           "yield": 4
+             *         },
+             *         {
+             *           "date": "2026-09-29",
+             *           "price": 96.15,
+             *           "yield": 4
+             *         },
+             *         {
+             *           "date": "2026-09-30",
+             *           "price": 96.15,
+             *           "yield": 4
+             *         }
+             *       ]
+             *     }
+             */
+            "application/json": unknown;
+          };
+        };
+        /** @description Invalid range or interval */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            "application/json": components["schemas"]["Error"];
+          };
+        };
+        /** @description Unknown or archived project */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            "application/json": components["schemas"]["Error"];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/portfolio": {
     parameters: {
       query?: never;

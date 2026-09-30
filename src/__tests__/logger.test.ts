@@ -1,4 +1,4 @@
-import { logger, setLogLevel, getLogLevel, getLogLevels } from "../lib/logger";
+import { logger, setLogLevel, getLogLevel, getLogLevels, clearLogLevelCache } from "../lib/logger";
 
 describe("logger configuration", () => {
   const originalEnv = process.env;
@@ -7,6 +7,7 @@ describe("logger configuration", () => {
     process.env = { ...originalEnv };
     process.env.NODE_ENV = "development";
     delete process.env.LOG_LEVEL;
+    clearLogLevelCache();
   });
 
   afterEach(() => {
@@ -37,6 +38,17 @@ describe("logger configuration", () => {
     it("defaults to info for unknown environment", () => {
       process.env.NODE_ENV = "unknown";
       expect(getLogLevel()).toBe("info");
+    });
+  });
+
+  describe("level caching", () => {
+    it("reads the environment once until the cache is cleared", () => {
+      process.env.LOG_LEVEL = "error";
+      expect(getLogLevel()).toBe("error");
+      process.env.LOG_LEVEL = "debug";
+      expect(getLogLevel()).toBe("error");
+      clearLogLevelCache();
+      expect(getLogLevel()).toBe("debug");
     });
   });
 

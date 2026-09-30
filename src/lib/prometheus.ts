@@ -61,6 +61,16 @@ export const cronJobTotal = new client.Counter({
   registers: [register],
 });
 
+// Projects skipped by the cron before submitting, labelled by reason
+// (paused, archived, deleted, unchanged) so the "ALL projects failed" alert
+// stays quiet during expected states (#765).
+export const cronProjectsSkipped = new client.Counter({
+  name: "cron_projects_skipped_total",
+  help: "Projects the cron skipped before submitting, labelled by reason",
+  labelNames: ["job", "reason"] as const,
+  registers: [register],
+});
+
 // ── Transaction metrics ─────────────────────────────────────────────────────
 export const txSubmissionTotal = new client.Counter({
   name: "stellar_tx_submissions_total",
