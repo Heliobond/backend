@@ -345,3 +345,55 @@ export async function getInterestRate(projectId: number): Promise<number> {
     return Number(scValToNative(retval));
   });
 }
+
+/**
+ * Whether `projectId` exists on the registry (#768).
+ *
+ * Simulates the contract's `get_project(id)` getter with a dummy account. The
+ * getter panics with `ProjectNotFound` for ids that were never issued and for
+ * ids whose storage was removed by `delete_project` / `compact_archive`, so a
+ * `false` result lets the projects route return a real `404` instead of
+ * fabricating data for every id up to `MAX_PROJECT_ID`.
+ *
+ * Only the existence signal is needed here; the returned project payload is
+ * intentionally discarded.
+ */
+export async function projectExists(projectId: number): Promise<boolean> {
+  return withRpcConnection(async (client) => {
+    const contract = new Contract(REGISTRY_CONTRACT_ID);
+    const dummyAccount = new Account(
+      "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+      "0",
+    );
+
+    const tx = new TransactionBuilder(dummyAccount, { fee: BASE_FEE, networkPassphrase })
+      .addOperation(contract.call("get_project", nativeToScVal(projectId, { type: "u32" })))
+      .setTimeout(config.TX_TIMEOUT_SECONDS)
+      .build();
+
+    const end = stellarRpcDuration.startTimer({ operation: "simulateTransaction" });
+
+    let sim: rpc.Api.SimulateTransactionResponse;
+    try {
+      sim = await withRpcRetry(
+        () => client.simulateTransaction(tx),
+        "stellar:simulateTransaction:projectExists",
+      );
+    } catch (err) {
+      end();
+      stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });
+      throw err;
+    }
+
+    if ("error" in sim) {
+      end();
+      stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });
+      if (isMissingProjectError(sim.error)) return false;
+      throw new Error(sim.error);
+    }
+
+    end();
+    stellarRpcTotal.inc({ operation: "simulateTransaction", result: "success" });
+    return true;
+  });
+}

@@ -47,6 +47,101 @@
           },
           "green_impact": {
             "type": "number"
+          },
+          "power_output_kw": {
+            "type": "number"
+          },
+          "efficiency_pct": {
+            "type": "number"
+          },
+          "forest_density_pct": {
+            "type": "number"
+          },
+          "ndvi_score": {
+            "type": "number"
+          },
+          "timestamp": {
+            "type": "integer"
+          }
+        }
+      },
+      "ProjectDetail": {
+        "type": "object",
+        "properties": {
+          "power_output_kw": {
+            "type": "number"
+          },
+          "efficiency_pct": {
+            "type": "number"
+          },
+          "forest_density_pct": {
+            "type": "number"
+          },
+          "ndvi_score": {
+            "type": "number"
+          },
+          "timestamp": {
+            "type": "integer"
+          },
+          "funding": {
+            "type": "number"
+          }
+        }
+      },
+      "ProjectWithDetail": {
+        "type": "object",
+        "required": [
+          "project",
+          "detail",
+          "verifiedMetadata"
+        ],
+        "properties": {
+          "project": {
+            "$ref": "#/components/schemas/Project"
+          },
+          "detail": {
+            "$ref": "#/components/schemas/ProjectDetail"
+          },
+          "verifiedMetadata": {
+            "type": "boolean",
+            "description": "Whether the backend holds metadata for the project."
+          }
+        }
+      },
+      "PaginatedProjectsResponse": {
+        "type": "object",
+        "required": [
+          "projects",
+          "total",
+          "page",
+          "pageSize",
+          "hasMore"
+        ],
+        "properties": {
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Project"
+            }
+          },
+          "total": {
+            "type": "integer"
+          },
+          "filtered_total": {
+            "type": "integer"
+          },
+          "page": {
+            "type": "integer"
+          },
+          "pageSize": {
+            "type": "integer"
+          },
+          "hasMore": {
+            "type": "boolean"
+          },
+          "cursor": {
+            "type": "integer",
+            "description": "Legacy cursor alias: next offset when another page follows."
           }
         }
       },
@@ -202,12 +297,121 @@
     "/projects": {
       "get": {
         "summary": "List all projects",
+        "description": "Paginated list using the frontend's `page`/`pageSize` contract. `limit` is an alias for `pageSize`; `cursor` is a legacy offset alias that still works.",
         "tags": [
           "Projects"
         ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            },
+            "description": "1-based page number"
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 10
+            },
+            "description": "Items per page (max 100)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 10
+            },
+            "description": "Alias for pageSize"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "Legacy offset cursor; applied as an offset when present"
+          },
+          {
+            "name": "min_score",
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "max_score",
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "min_date",
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "max_date",
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "sort_by",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "id",
+                "credit_quality",
+                "green_impact",
+                "power_output_kw",
+                "efficiency_pct",
+                "forest_density_pct",
+                "ndvi_score",
+                "timestamp"
+              ],
+              "default": "id"
+            }
+          },
+          {
+            "name": "sort_order",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "default": "asc"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Array of projects"
+            "description": "Paginated projects",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedProjectsResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -215,6 +419,7 @@
     "/projects/{id}": {
       "get": {
         "summary": "Get a single project",
+        "description": "Nested project/detail/verifiedMetadata response matching the frontend's `ProjectWithDetail` shape. Unknown or deleted ids return 404.",
         "tags": [
           "Projects"
         ],
@@ -230,11 +435,11 @@
         ],
         "responses": {
           "200": {
-            "description": "Project object",
+            "description": "Project with detail",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Project"
+                  "$ref": "#/components/schemas/ProjectWithDetail"
                 }
               }
             }
@@ -325,6 +530,105 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Trend"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{id}/price-history": {
+      "get": {
+        "summary": "Price and yield chart series for a project (#769)",
+        "description": "Returns `PricePoint[]` = `{date, price, yield?}` for the project's chart. Values are derived from the on-chain `get_score_history` timestamps and the current `get_interest_rate`. `yield` is `rate_bps / 100`; `price` is `100 / (1 + yield/100)` (one-period present value). See API.md for the full formula.",
+        "tags": [
+          "History"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Start timestamp (unix ms)"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            },
+            "description": "End timestamp (unix ms)"
+          },
+          {
+            "name": "interval",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "day",
+                "week"
+              ],
+              "default": "day"
+            },
+            "description": "Bucket size for the series"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "PricePoint series in ascending date order",
+            "content": {
+              "application/json": {
+                "example": {
+                  "project_id": 27,
+                  "interval": "day",
+                  "count": 3,
+                  "points": [
+                    {
+                      "date": "2026-09-28",
+                      "price": 96.15,
+                      "yield": 4
+                    },
+                    {
+                      "date": "2026-09-29",
+                      "price": 96.15,
+                      "yield": 4
+                    },
+                    {
+                      "date": "2026-09-30",
+                      "price": 96.15,
+                      "yield": 4
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid range or interval",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or archived project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
