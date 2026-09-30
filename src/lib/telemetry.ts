@@ -110,11 +110,11 @@ export function scrubPii(value: unknown): unknown {
   if (typeof value === "string") return redactPiiString(value);
   if (Array.isArray(value)) return value.map((item) => scrubPii(item));
   if (typeof value === "object" && value !== null) {
-    const result: Record<string, unknown> = {};
+    const result = new Map<string, unknown>();
     for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      result[key] = scrubPii(item);
+      result.set(key, scrubPii(item));
     }
-    return result;
+    return Object.fromEntries(result);
   }
   return value;
 }
