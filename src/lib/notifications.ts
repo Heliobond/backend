@@ -6,8 +6,9 @@
  * double opt-in email and HMAC-signed webhook. State is in-memory, matching
  * ./email and ./webhooks.
  *
- * Wallet sign-in does not exist yet, so the HTTP layer is guarded by the
- * regular API-key auth; swap in wallet auth there once it lands.
+ * Investor preferences are guarded by the regular API-key auth; creator
+ * application state changes (see lib/creatorOnboarding) are additionally
+ * delivered through the `creator_application_status` event by wallet address.
  */
 import { createHmac, randomBytes } from "crypto";
 import { sendEmail } from "./email";
@@ -16,13 +17,18 @@ import { withRetry } from "./retry";
 import { logger } from "./logger";
 
 export type NotificationEventType =
-  "yield_distributed" | "withdrawal_queued" | "withdrawal_claimable" | "score_changed";
+  | "yield_distributed"
+  | "withdrawal_queued"
+  | "withdrawal_claimable"
+  | "score_changed"
+  | "creator_application_status";
 
 export const EVENT_TYPES: readonly NotificationEventType[] = [
   "yield_distributed",
   "withdrawal_queued",
   "withdrawal_claimable",
   "score_changed",
+  "creator_application_status",
 ];
 
 export interface NotificationPreferences {
@@ -232,6 +238,13 @@ function describe(e: NotificationEvent): { subject: string; text: string } {
       return {
         subject: `Score change for project ${e.project_id}`,
         text: `Project ${e.project_id} moved: credit quality ${d.credit_quality_delta}, green impact ${d.green_impact_delta}.`,
+      };
+    case "creator_application_status":
+      return {
+        subject: `Creator application ${String(d.status ?? "updated")}`,
+        text:
+          `Your creator application ${String(d.application_id ?? "")} is now ` +
+          `${String(d.status ?? "updated")}.`,
       };
   }
 }
