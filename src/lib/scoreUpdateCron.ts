@@ -32,6 +32,10 @@ export async function runHourlyScoreUpdate(): Promise<void> {
 
     let successCount = 0;
     let failureCount = 0;
+    // Deferred updates are queued for later rather than submitted on-chain, so
+    // they are neither a success nor a failure. Counting them as successes
+    // reported a 100% success rate during a total RPC outage (#713).
+    let deferredCount = 0;
 
     for (const projectId of projectIds) {
       await withProjectLock(projectId, async () => {
@@ -48,7 +52,7 @@ export async function runHourlyScoreUpdate(): Promise<void> {
             enqueue(projectId, scoreResult.creditQuality, scoreResult.greenImpact, "RPC degraded");
             markCompleted(projectId);
             resetErrorRateLimit(`cron:project-${projectId}`);
-            successCount++;
+            deferredCount++;
             return;
           }
 
@@ -119,7 +123,7 @@ export async function runHourlyScoreUpdate(): Promise<void> {
       });
     }
 
-    const totalProcessed = successCount + failureCount;
+    const totalProcessed = successCount + failureCount + deferredCount;
     const failureRate = totalProcessed > 0 ? failureCount / totalProcessed : 0;
 
     if (totalProcessed > 0 && failureCount === totalProcessed) {
@@ -131,6 +135,18 @@ export async function runHourlyScoreUpdate(): Promise<void> {
       recordCronRun("score-update", "error");
       endCronTimer();
       cronJobTotal.inc({ job: "score-update", result: "error" });
+    } else if (totalProcessed > 0 && deferredCount === totalProcessed) {
+      // Every project was queued instead of submitted: RPC is unreachable, so no
+      // score actually changed on-chain. Previously this was indistinguishable
+      // from a fully successful run and no alert fired (#713).
+      logger.error(
+        `[cron] ALERT: ALL ${deferredCount} projects deferred in score-update batch — ` +
+          `RPC unavailable, no on-chain updates were submitted; ` +
+          `${deferredCount} update(s) queued in the tx-queue`,
+      );
+      recordCronRun("score-update", "error");
+      endCronTimer();
+      cronJobTotal.inc({ job: "score-update", result: "error" });
     } else {
       if (failureCount > 0 && failureRate >= config.CRON_FAILURE_THRESHOLD) {
         logger.error(
@@ -138,7 +154,12 @@ export async function runHourlyScoreUpdate(): Promise<void> {
             `${failureCount}/${totalProcessed} (${(failureRate * 100).toFixed(1)}%)`,
         );
       }
-      logger.info("[cron] hourly score update complete", { total, successCount, failureCount });
+      logger.info("[cron] hourly score update complete", {
+        total,
+        successCount,
+        failureCount,
+        deferredCount,
+      });
       recordCronRun("score-update", "success");
       endCronTimer();
       cronJobTotal.inc({ job: "score-update", result: "success" });

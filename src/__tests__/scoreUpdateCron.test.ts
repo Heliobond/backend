@@ -55,6 +55,16 @@ jest.mock("../lib/email", () => ({
   sendAlertIfSignificant: jest.fn().mockResolvedValue(0),
 }));
 
+// Run the handler immediately with no cross-run caching. The real
+// `withProjectLock` keeps successful results in a module-level Map for 30s, so
+// without this a later test reuses the previous run's resolved promise and the
+// handler never runs — which made several cases here fail depending on order.
+jest.mock("../lib/request-queue", () => ({
+  withProjectLock: jest.fn(async (_projectId: number, handler: () => Promise<unknown>) =>
+    handler(),
+  ),
+}));
+
 jest.mock("../lib/webhooks", () => ({
   triggerWebhooks: jest.fn(),
 }));
@@ -168,8 +178,14 @@ describe("runHourlyScoreUpdate (cron job execution flow)", () => {
 
     await runHourlyScoreUpdate();
 
+    // A deferred project is queued rather than submitted, so it is not a
+    // per-project failure.
     expect(markFailed).not.toHaveBeenCalled();
-    expect(recordCronRun).toHaveBeenCalledWith("score-update", "success");
+    // Because this run deferred *every* project, nothing landed on-chain, so the
+    // batch is recorded as an error run and the outage alert fires (#713).
+    // Previously this was reported as "success", which meant a total RPC outage
+    // looked like a 100% successful run.
+    expect(recordCronRun).toHaveBeenCalledWith("score-update", "error");
   });
 
   it("invokes recordScoreHistory and triggerWebhooks exactly once per successful update (Issue #531)", async () => {
