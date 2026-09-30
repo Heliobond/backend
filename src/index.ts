@@ -666,12 +666,16 @@ function bootstrap(): void {
     isShuttingDown = true;
 
     const shutdownTimeoutMs = config.SHUTDOWN_TIMEOUT_MS;
-    logger.info(`[${signal}] graceful shutdown initiated (timeout: ${shutdownTimeoutMs}ms)`);
+    const shutdownDeadlineMs = shutdownTimeoutMs * 3;
+    let shutdownStep = "initializing";
+    logger.info(
+      `[${signal}] graceful shutdown initiated (step timeout: ${shutdownTimeoutMs}ms, total timeout: ${shutdownDeadlineMs}ms)`,
+    );
 
     // Order is deliberate: stop producing work (cron scheduling, background
     // timers) *before* draining the resources that work uses. Draining HTTP first
     // let a scheduled job start mid-drain and race the teardown (#693). The whole
-    // sequence is bounded by the `shutdownTimeoutMs` race below.
+    // sequence is bounded by the `shutdownDeadlineMs` race below.
     const steps = createShutdownSteps({
       // 1. Stop cron scheduling so no new job is produced.
       stopCronScheduling: async () => {
@@ -740,13 +744,23 @@ function bootstrap(): void {
       },
     });
 
-    const shutdownPromise = runShutdownSequence(steps);
+    const shutdownPromise = runShutdownSequence(
+      steps.map((step) => ({
+        ...step,
+        run: () => {
+          shutdownStep = step.name;
+          return step.run();
+        },
+      })),
+    );
 
     // Apply overall shutdown timeout — force exit if graceful cleanup takes too long
     const timeoutPromise = new Promise<void>((_, reject) => {
       setTimeout(() => {
-        reject(new Error(`Shutdown timed out after ${shutdownTimeoutMs}ms`));
-      }, shutdownTimeoutMs);
+        reject(
+          new Error(`Shutdown timed out after ${shutdownDeadlineMs}ms during ${shutdownStep}`),
+        );
+      }, shutdownDeadlineMs);
     });
 
     try {
