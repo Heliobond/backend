@@ -32,6 +32,7 @@ import investorRouter from "./routes/investor";
 import investorActivityRouter from "./routes/investorActivity";
 import apiKeysRouter from "./routes/apiKeys";
 import notificationsRouter, { publicNotificationsRouter } from "./routes/notifications";
+import { creatorApplicationsRouter, creatorAdminRouter } from "./routes/creatorApplications";
 import oracleStatusRouter from "./routes/oracle-status";
 import { createHandler } from "graphql-http/lib/use/express";
 import { graphqlSchema, graphqlRoot, createGraphQLContext } from "./graphql/schema";
@@ -368,6 +369,10 @@ v1.use("/status/oracle", publicLimiter, oracleStatusRouter);
 v1.use("/admin/api-keys", ipWhitelist, adminLimiter, requestSigning, apiKeysRouter);
 v1.use("/notifications", publicLimiter, publicNotificationsRouter); // email-link targets (confirm/unsubscribe)
 v1.use("/notifications", publicLimiter, apiKeyAuth, notificationsRouter);
+// Creator onboarding (#771): wallet-authenticated creator routes and
+// bearer-authenticated admin review routes.
+v1.use("/creators", publicLimiter, creatorApplicationsRouter);
+v1.use("/admin/creators", ipWhitelist, adminLimiter, creatorAdminRouter);
 
 // ── Legacy /api paths (deprecated) ──────────────────────────────────────────
 // Kept for backward compatibility; will be removed after 2027-01-01.

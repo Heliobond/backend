@@ -20,6 +20,13 @@ export const openApiSpec = {
         name: "X-User-Id",
         description: "Required for admin and role-management endpoints.",
       },
+      WalletAddress: {
+        type: "apiKey" as const,
+        in: "header",
+        name: "x-wallet-address",
+        description:
+          "Stellar account (G...) authenticating the creator. When WALLET_AUTH_REQUIRE_SIGNATURE=true, also send x-wallet-signature and x-wallet-timestamp.",
+      },
     },
     schemas: {
       Error: {
@@ -79,6 +86,25 @@ export const openApiSpec = {
           id: { type: "string" },
           url: { type: "string" },
           secret: { type: "string" },
+        },
+      },
+      CreatorApplication: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          wallet: { type: "string" },
+          status: {
+            type: "string",
+            enum: ["submitted", "in_review", "approved", "rejected"],
+          },
+          metadata: {
+            type: "object",
+            description:
+              "Validated against src/schemas/creator-application.schema.json (name, location, capacity_kw, documents).",
+          },
+          metadata_hash: { type: "string", nullable: true },
+          metadata_uri: { type: "string", nullable: true },
+          project_id: { type: "integer", nullable: true },
         },
       },
     },
@@ -365,6 +391,114 @@ export const openApiSpec = {
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
         responses: {
           200: { description: "Webhook removed" },
+          404: { description: "Not found" },
+        },
+      },
+    },
+    "/creators/applications": {
+      post: {
+        summary: "Submit a creator application",
+        tags: ["Creators"],
+        security: [{ WalletAddress: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["name", "location", "capacity_kw", "documents"],
+                properties: {
+                  name: { type: "string" },
+                  location: { type: "string" },
+                  capacity_kw: { type: "number" },
+                  documents: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "ipfs://, https:// or ar:// URIs only.",
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          201: {
+            description: "Application submitted",
+            content: {
+              "application/json": { schema: { $ref: "#/components/schemas/CreatorApplication" } },
+            },
+          },
+          400: { description: "Invalid metadata or document URI" },
+          401: { description: "Missing or invalid wallet authentication" },
+        },
+      },
+    },
+    "/creators/applications/{id}/create-project-tx": {
+      get: {
+        summary: "Build an unsigned create_project transaction (#771)",
+        tags: ["Creators"],
+        security: [{ WalletAddress: [] }],
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string" } },
+          { name: "sequence", in: "query", schema: { type: "string" } },
+          { name: "maturity_date", in: "query", schema: { type: "integer" } },
+        ],
+        responses: {
+          200: { description: "Unsigned create_project XDR (never signed server-side)" },
+          403: { description: "Application belongs to another wallet" },
+          409: { description: "Application is not approved yet" },
+        },
+      },
+    },
+    "/admin/creators/applications/{id}": {
+      get: {
+        summary: "Get a creator application",
+        tags: ["Admin", "Creators"],
+        security: [{ UserId: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          200: {
+            description: "Application",
+            content: {
+              "application/json": { schema: { $ref: "#/components/schemas/CreatorApplication" } },
+            },
+          },
+          404: { description: "Not found" },
+        },
+      },
+      patch: {
+        summary: "Advance the creator application review workflow",
+        tags: ["Admin", "Creators"],
+        security: [{ UserId: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["status"],
+                properties: {
+                  status: { type: "string", enum: ["in_review", "approved", "rejected"] },
+                  actor: { type: "string" },
+                  note: { type: "string" },
+                  whitelister: {
+                    type: "string",
+                    description:
+                      "Whitelister G... address; when set the response includes the unsigned set_whitelist XDR.",
+                  },
+                  whitelister_sequence: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description:
+              "Updated application; includes set_whitelist_tx on approval when a whitelister is supplied",
+          },
+          400: { description: "Invalid transition or input" },
           404: { description: "Not found" },
         },
       },

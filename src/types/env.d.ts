@@ -53,6 +53,8 @@ declare namespace NodeJS {
     ADMIN_API_KEY?: string;
     /** Token required to open a /ws connection; falls back to ADMIN_API_KEY. */
     WS_AUTH_TOKEN?: string;
+    /** "true" requires a signed wallet challenge on creator endpoints. Default: false */
+    WALLET_AUTH_REQUIRE_SIGNATURE?: string;
     /** Integer byte threshold above which responses are compressed. Default: 1024 */
     COMPRESSION_THRESHOLD?: string;
     /** Integer gzip level 0–9. Default: 6 */

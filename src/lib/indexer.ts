@@ -4,6 +4,7 @@ import { logger } from "./logger";
 import { pool } from "./db";
 import { config } from "../config";
 import { ApiError } from "../middleware/errors";
+import { linkProjectToApplication } from "./creatorOnboarding";
 
 export type VaultEventType =
   "deposit" | "withdraw" | "WithdrawQueued" | "WithdrawClaimed" | "YieldClaimed";
@@ -236,6 +237,48 @@ function extractVaultEvent(tx: any): Partial<VaultEvent> | null {
   return null;
 }
 
+interface IndexedProjectCreated {
+  projectId: number;
+  metadataHash: string;
+}
+
+/**
+ * Extract a `ProjectCreated` contract event (#771) emitted by `create_project`.
+ * Linking is by `metadata_hash`, which uniquely identifies the approved
+ * application whose metadata was pinned. Returns null for non-matching txs.
+ */
+function extractProjectCreatedEvent(tx: unknown): IndexedProjectCreated | null {
+  const candidates: unknown[] = [];
+  flattenEventCandidates(tx, candidates);
+
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const name = findFirstMatchingValue(candidate, [
+      "type",
+      "eventType",
+      "kind",
+      "action",
+      "method",
+      "name",
+    ]);
+    const normalized = typeof name === "string" ? name.replace(/[^a-z]/gi, "").toLowerCase() : "";
+    if (!normalized.includes("projectcreated")) continue;
+
+    const projectId = toNumber(
+      findFirstMatchingValue(candidate, ["project_id", "projectId", "created_project_id"]),
+    );
+    const hashValue = findFirstMatchingValue(candidate, [
+      "metadata_hash",
+      "metadataHash",
+      "meta_hash",
+    ]);
+    const metadataHash = typeof hashValue === "string" ? hashValue : null;
+    if (projectId === null || !metadataHash) continue;
+    return { projectId, metadataHash };
+  }
+  return null;
+}
+
 /** Persisted event row from the vault_events table. */
 export interface PersistedVaultEvent {
   ledger: number;
@@ -430,6 +473,27 @@ export class EventIndexer {
     try {
       const tx = await client.getTransaction(txHash);
       if (!tx) return;
+
+      // Creator-onboarding: a confirmed create_project links the on-chain
+      // project id back to the approved application (#771).
+      const projectCreated = extractProjectCreatedEvent(tx);
+      if (projectCreated) {
+        try {
+          const linked = linkProjectToApplication({
+            metadataHash: projectCreated.metadataHash,
+            projectId: projectCreated.projectId,
+            txHash,
+            ledger,
+          });
+          if (linked) {
+            logger.info(
+              `[indexer] linked ProjectCreated ${projectCreated.projectId} to application ${linked.id}`,
+            );
+          }
+        } catch (err) {
+          logger.debug("[indexer] project link failed", logger.formatError(err));
+        }
+      }
 
       const parsed = extractVaultEvent(tx);
       if (!parsed) return;
