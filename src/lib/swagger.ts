@@ -35,6 +35,50 @@ export const openApiSpec = {
           name: { type: "string" },
           credit_quality: { type: "number" },
           green_impact: { type: "number" },
+          power_output_kw: { type: "number" },
+          efficiency_pct: { type: "number" },
+          forest_density_pct: { type: "number" },
+          ndvi_score: { type: "number" },
+          timestamp: { type: "integer" },
+        },
+      },
+      ProjectDetail: {
+        type: "object",
+        properties: {
+          power_output_kw: { type: "number" },
+          efficiency_pct: { type: "number" },
+          forest_density_pct: { type: "number" },
+          ndvi_score: { type: "number" },
+          timestamp: { type: "integer" },
+          funding: { type: "number" },
+        },
+      },
+      ProjectWithDetail: {
+        type: "object",
+        required: ["project", "detail", "verifiedMetadata"],
+        properties: {
+          project: { $ref: "#/components/schemas/Project" },
+          detail: { $ref: "#/components/schemas/ProjectDetail" },
+          verifiedMetadata: {
+            type: "boolean",
+            description: "Whether the backend holds metadata for the project.",
+          },
+        },
+      },
+      PaginatedProjectsResponse: {
+        type: "object",
+        required: ["projects", "total", "page", "pageSize", "hasMore"],
+        properties: {
+          projects: { type: "array", items: { $ref: "#/components/schemas/Project" } },
+          total: { type: "integer" },
+          filtered_total: { type: "integer" },
+          page: { type: "integer" },
+          pageSize: { type: "integer" },
+          hasMore: { type: "boolean" },
+          cursor: {
+            type: "integer",
+            description: "Legacy cursor alias: next offset when another page follows.",
+          },
         },
       },
       ScoreHistory: {
@@ -111,21 +155,89 @@ export const openApiSpec = {
     "/projects": {
       get: {
         summary: "List all projects",
+        description:
+          "Paginated list using the frontend's `page`/`pageSize` contract. `limit` is an alias for `pageSize`; `cursor` is a legacy offset alias that still works.",
         tags: ["Projects"],
+        parameters: [
+          {
+            name: "page",
+            in: "query",
+            schema: { type: "integer", minimum: 1, default: 1 },
+            description: "1-based page number",
+          },
+          {
+            name: "pageSize",
+            in: "query",
+            schema: { type: "integer", minimum: 1, maximum: 100, default: 10 },
+            description: "Items per page (max 100)",
+          },
+          {
+            name: "limit",
+            in: "query",
+            schema: { type: "integer", minimum: 1, maximum: 100, default: 10 },
+            description: "Alias for pageSize",
+          },
+          {
+            name: "cursor",
+            in: "query",
+            schema: { type: "integer", minimum: 0 },
+            description: "Legacy offset cursor; applied as an offset when present",
+          },
+          { name: "min_score", in: "query", schema: { type: "number" } },
+          { name: "max_score", in: "query", schema: { type: "number" } },
+          { name: "min_date", in: "query", schema: { type: "number" } },
+          { name: "max_date", in: "query", schema: { type: "number" } },
+          {
+            name: "sort_by",
+            in: "query",
+            schema: {
+              type: "string",
+              enum: [
+                "id",
+                "credit_quality",
+                "green_impact",
+                "power_output_kw",
+                "efficiency_pct",
+                "forest_density_pct",
+                "ndvi_score",
+                "timestamp",
+              ],
+              default: "id",
+            },
+          },
+          {
+            name: "sort_order",
+            in: "query",
+            schema: { type: "string", enum: ["asc", "desc"], default: "asc" },
+          },
+        ],
         responses: {
-          200: { description: "Array of projects" },
+          200: {
+            description: "Paginated projects",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/PaginatedProjectsResponse" },
+              },
+            },
+          },
         },
       },
     },
     "/projects/{id}": {
       get: {
         summary: "Get a single project",
+        description:
+          "Nested project/detail/verifiedMetadata response matching the frontend's `ProjectWithDetail` shape. Unknown or deleted ids return 404.",
         tags: ["Projects"],
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
         responses: {
           200: {
-            description: "Project object",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Project" } } },
+            description: "Project with detail",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/ProjectWithDetail" },
+              },
+            },
           },
           404: {
             description: "Not found",

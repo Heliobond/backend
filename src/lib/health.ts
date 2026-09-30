@@ -8,18 +8,25 @@ import { pool as dbPool } from "./db";
 
 const startedAt = Date.now();
 
-export type CronStatus = "success" | "error";
+export type CronStatus = "success" | "error" | "skipped";
 
 export interface CronRun {
   name: string;
   status: CronStatus;
   at: string; // ISO 8601
+  /** Present when status is "skipped"; e.g. "paused" (#765). */
+  reason?: string;
 }
 
 let lastCronRun: CronRun | null = null;
 
-export function recordCronRun(name: string, status: CronStatus): void {
-  lastCronRun = { name, status, at: new Date().toISOString() };
+export function recordCronRun(name: string, status: CronStatus, reason?: string): void {
+  lastCronRun = {
+    name,
+    status,
+    at: new Date().toISOString(),
+    ...(reason ? { reason } : {}),
+  };
 }
 
 export interface SatelliteHealthReport {
@@ -44,13 +51,12 @@ export interface HealthReport {
 
 export async function getHealth(): Promise<HealthReport> {
   // Check PostgreSQL connectivity (#699)
-  let dbConnected: boolean;
+  let dbConnected = false;
   try {
     await dbPool.query("SELECT 1");
     dbConnected = true;
   } catch {
-    // Log error but don't throw - health check should report status, not fail
-    dbConnected = false;
+    // health check should report status, not fail
   }
 
   return {
@@ -90,13 +96,12 @@ export function getReadiness(): ReadinessReport {
   const rpcCircuitReady = rpcBreaker.getState() !== "OPEN";
 
   // Check PostgreSQL connectivity for readiness (#699)
-  let dbReady: boolean;
+  // Synchronous check not possible, so we rely on pool state
+  let dbReady = false;
   try {
-    // Synchronous check not possible, so we rely on pool state
-    // A more robust approach would cache the last check result
     dbReady = dbPool.totalCount > 0;
   } catch {
-    dbReady = false;
+    // leave false
   }
 
   return {

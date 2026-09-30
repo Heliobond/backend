@@ -89,8 +89,11 @@ export async function updateImpactScore(
       );
 
       // Record signer balance for SLO monitoring
-      const balances = (account as any).balances || [];
-      const nativeBalance = balances.find((b: any) => b.asset_type === "native");
+      interface AccountWithBalances {
+        balances?: Array<{ asset_type: string; balance: string }>;
+      }
+      const balances = (account as AccountWithBalances).balances || [];
+      const nativeBalance = balances.find((b) => b.asset_type === "native");
       if (nativeBalance) {
         const xlmBalance = parseFloat(nativeBalance.balance);
         oracleSignerBalance.set(xlmBalance);
@@ -99,7 +102,7 @@ export async function updateImpactScore(
       const rawSeq =
         typeof account.sequenceNumber === "function"
           ? account.sequenceNumber()
-          : (account as any).sequence;
+          : (account as unknown as { sequence: string }).sequence;
       const fetchedSeq = BigInt(rawSeq);
       if (localSequence !== null && fetchedSeq < localSequence) {
         throw new StaleSequenceError(
@@ -187,6 +190,61 @@ export async function getTotalProjects(): Promise<number> {
     end();
     stellarRpcTotal.inc({ operation: "simulateTransaction", result: "success" });
     return Number(scValToNative(retval));
+  });
+}
+
+/**
+ * Simulate `is_paused()` on the registry contract (#765).
+ *
+ * Every mutating call the cron submits is gated by `require_not_paused` inside
+ * the contract, so a paused registry rejects every `update_impact_score` with
+ * a `Paused` error. Checking upfront skips a whole round of pointless
+ * simulations, retries, and error-log spam during an emergency pause and
+ * prevents the batch from tripping the "ALL projects failed" alert.
+ */
+export async function isRegistryPaused(): Promise<boolean> {
+  return withRpcConnection(async (client) => {
+    const contract = new Contract(REGISTRY_CONTRACT_ID);
+    const dummyAccount = new Account(
+      "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+      "0",
+    );
+
+    const tx = new TransactionBuilder(dummyAccount, { fee: BASE_FEE, networkPassphrase })
+      .addOperation(contract.call("is_paused"))
+      .setTimeout(config.TX_TIMEOUT_SECONDS)
+      .build();
+
+    const end = stellarRpcDuration.startTimer({ operation: "simulateTransaction" });
+
+    let sim: rpc.Api.SimulateTransactionResponse;
+    try {
+      sim = await withRpcRetry(
+        () => client.simulateTransaction(tx),
+        "stellar:simulateTransaction:isPaused",
+      );
+    } catch (err) {
+      end();
+      stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });
+      throw err;
+    }
+
+    if ("error" in sim) {
+      end();
+      stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });
+      throw new Error(sim.error);
+    }
+
+    const retval = sim.result?.retval;
+    if (retval === undefined) {
+      end();
+      stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });
+      throw new Error("is_paused simulation returned no result value");
+    }
+
+    end();
+    stellarRpcTotal.inc({ operation: "simulateTransaction", result: "success" });
+    return Boolean(scValToNative(retval));
   });
 }
 
@@ -343,5 +401,57 @@ export async function getInterestRate(projectId: number): Promise<number> {
     end();
     stellarRpcTotal.inc({ operation: "simulateTransaction", result: "success" });
     return Number(scValToNative(retval));
+  });
+}
+
+/**
+ * Whether `projectId` exists on the registry (#768).
+ *
+ * Simulates the contract's `get_project(id)` getter with a dummy account. The
+ * getter panics with `ProjectNotFound` for ids that were never issued and for
+ * ids whose storage was removed by `delete_project` / `compact_archive`, so a
+ * `false` result lets the projects route return a real `404` instead of
+ * fabricating data for every id up to `MAX_PROJECT_ID`.
+ *
+ * Only the existence signal is needed here; the returned project payload is
+ * intentionally discarded.
+ */
+export async function projectExists(projectId: number): Promise<boolean> {
+  return withRpcConnection(async (client) => {
+    const contract = new Contract(REGISTRY_CONTRACT_ID);
+    const dummyAccount = new Account(
+      "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+      "0",
+    );
+
+    const tx = new TransactionBuilder(dummyAccount, { fee: BASE_FEE, networkPassphrase })
+      .addOperation(contract.call("get_project", nativeToScVal(projectId, { type: "u32" })))
+      .setTimeout(config.TX_TIMEOUT_SECONDS)
+      .build();
+
+    const end = stellarRpcDuration.startTimer({ operation: "simulateTransaction" });
+
+    let sim: rpc.Api.SimulateTransactionResponse;
+    try {
+      sim = await withRpcRetry(
+        () => client.simulateTransaction(tx),
+        "stellar:simulateTransaction:projectExists",
+      );
+    } catch (err) {
+      end();
+      stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });
+      throw err;
+    }
+
+    if ("error" in sim) {
+      end();
+      stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });
+      if (isMissingProjectError(sim.error)) return false;
+      throw new Error(sim.error);
+    }
+
+    end();
+    stellarRpcTotal.inc({ operation: "simulateTransaction", result: "success" });
+    return true;
   });
 }

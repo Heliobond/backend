@@ -11,8 +11,8 @@ const baseConfig: Knex.Config = {
   pool: {
     min: 2,
     max: 10,
-    acquireTimeoutMillis: 30000,
-    idleTimeoutMillis: 60000,
+    acquireTimeoutMillis: Number(process.env.DB_ACQUIRE_TIMEOUT_MS) || 30000,
+    idleTimeoutMillis: Number(process.env.DB_IDLE_TIMEOUT_MS) || 60000,
   },
 };
 
@@ -87,8 +87,8 @@ const config: Record<string, Knex.Config> = {
       ssl: getSslConfig(),
     },
     pool: {
-      min: 5,
-      max: 30,
+      min: Number(process.env.DB_POOL_MIN) || 5,
+      max: Number(process.env.DB_POOL_MAX) || 30,
     },
   },
 };

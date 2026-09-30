@@ -66,6 +66,7 @@ jest.mock("../config", () => ({
 import {
   updateImpactScore,
   getTotalProjects,
+  projectExists,
   RpcDegradedError,
   StaleSequenceError,
   getLocalSequence,
@@ -259,6 +260,43 @@ describe("registry module", () => {
       await expect(getTotalProjects()).rejects.toThrow(
         "total_projects simulation returned no result value",
       );
+    });
+  });
+
+  describe("projectExists (#768)", () => {
+    function withSimulation(response: unknown): void {
+      (withRpcConnection as jest.Mock).mockImplementationOnce(
+        (fn: (client: unknown) => Promise<unknown>) =>
+          fn({
+            getAccount: jest.fn().mockResolvedValue({ sequence: "0" }),
+            simulateTransaction: jest.fn().mockResolvedValue(response),
+          }),
+      );
+    }
+
+    it("returns true when get_project simulates successfully", async () => {
+      withSimulation({ result: { retval: { _value: 1 } } });
+
+      await expect(projectExists(1)).resolves.toBe(true);
+      expect(nativeToScVal).toHaveBeenCalledWith(1, { type: "u32" });
+    });
+
+    it("returns false when the contract panics with ProjectNotFound (#7)", async () => {
+      withSimulation({ error: "HostError: Error(Contract, #7)" });
+
+      await expect(projectExists(999999)).resolves.toBe(false);
+    });
+
+    it("returns false when the contract panics with ProjectArchived (#3)", async () => {
+      withSimulation({ error: "HostError: Error(Contract, #3)" });
+
+      await expect(projectExists(1)).resolves.toBe(false);
+    });
+
+    it("throws for a non-project simulation error", async () => {
+      withSimulation({ error: "simulation failed: contract trapped" });
+
+      await expect(projectExists(1)).rejects.toThrow("simulation failed: contract trapped");
     });
   });
 

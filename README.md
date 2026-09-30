@@ -73,8 +73,8 @@ Full request/response details, validation rules, and error codes are in
 | `GET`  | `/health`                 | —            | Liveness + uptime and last cron run                        |
 | `GET`  | `/v1/iot/solar/:id`       | —            | Simulated solar panel reading for project `id`             |
 | `GET`  | `/v1/iot/satellite/:id`   | —            | Simulated satellite / vegetation reading for project `id`  |
-| `GET`  | `/v1/projects`            | —            | Paginated list of projects with scores (`?limit=&cursor=`) |
-| `GET`  | `/v1/projects/:id`        | —            | Single project detail                                      |
+| `GET`  | `/v1/projects`            | —            | Paginated list of projects (`?page=&pageSize=`; `limit`/`cursor` aliases) |
+| `GET`  | `/v1/projects/:id`        | —            | Nested project detail (`{project, detail, verifiedMetadata}`); `404` if unknown |
 | `GET`  | `/v1/portfolio/:address`  | —            | Indexed deposit/withdraw history for an address            |
 | `POST` | `/v1/admin/update-scores` | Bearer token | Submit impact score update(s) to the Soroban contract      |
 
@@ -92,6 +92,11 @@ exceeded.
   }
 }
 ```
+
+> **Frontend integration:** `NEXT_PUBLIC_API_URL` is the versioned base and
+> **must include `/v1`**, e.g. `http://localhost:3001/v1`. The frontend calls
+> `${NEXT_PUBLIC_API_URL}/projects`, so a base without `/v1` resolves to the
+> deprecated `/api` paths (or `404`).
 
 ### `GET /health`
 

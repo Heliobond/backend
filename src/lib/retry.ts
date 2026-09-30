@@ -36,7 +36,6 @@ const PERMANENT_ERROR_PATTERNS = [
   "tx_insufficient_balance",
   "tx_no_account",
   "tx_insufficient_fee",
-  "contract_error",
   "ADMIN_SECRET_KEY not set",
 ];
 

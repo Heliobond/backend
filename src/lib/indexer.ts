@@ -92,7 +92,7 @@ function findFirstMatchingValue(
   return undefined;
 }
 
-function extractSourceAccount(tx: any): string | null {
+function extractSourceAccount(tx: unknown): string | null {
   const candidate = findFirstMatchingValue(tx, ["source", "sourceAccount", "account", "from"]);
   if (typeof candidate === "string" && candidate.trim()) {
     return candidate.trim();
@@ -177,7 +177,7 @@ function parseVaultEvent(
   };
 }
 
-function extractVaultEvent(tx: any): Partial<VaultEvent> | null {
+function extractVaultEvent(tx: unknown): Partial<VaultEvent> | null {
   const sourceAccount = extractSourceAccount(tx);
   const candidates: unknown[] = [];
 
@@ -195,13 +195,19 @@ function extractVaultEvent(tx: any): Partial<VaultEvent> | null {
     }
   }
 
-  const meta = tx?.resultMetaXdr;
+  interface TxWithResultMetaXdr {
+    resultMetaXdr?: unknown;
+  }
+  const meta = (tx as TxWithResultMetaXdr)?.resultMetaXdr;
   if (meta && typeof meta === "object") {
-    const v1 = (meta as any).v1;
+    interface MetaWithV1 {
+      v1?: () => { events?: unknown[] };
+    }
+    const v1 = (meta as MetaWithV1).v1;
     if (typeof v1 === "function") {
       const result = v1.call(meta);
       if (result && typeof result === "object") {
-        const nested = (result as any).events;
+        const nested = result.events;
         if (Array.isArray(nested)) {
           for (const item of nested) {
             const parsed = parseVaultEvent(item, sourceAccount);
@@ -219,8 +225,11 @@ function extractVaultEvent(tx: any): Partial<VaultEvent> | null {
     }
   }
 
-  if (Array.isArray(tx?.diagnosticEvents)) {
-    for (const item of tx.diagnosticEvents) {
+  interface TxWithDiagnosticEvents {
+    diagnosticEvents?: unknown[];
+  }
+  if (Array.isArray((tx as TxWithDiagnosticEvents)?.diagnosticEvents)) {
+    for (const item of (tx as TxWithDiagnosticEvents).diagnosticEvents!) {
       const parsed = parseVaultEvent(item, sourceAccount);
       if (parsed) {
         return {
@@ -304,6 +313,27 @@ export class EventIndexer {
     return config.VAULT_EVENT_INDEXER_ENABLED === "true";
   }
 
+  /** Configured cap on the number of events retained in the in-memory store. */
+  private get maxEvents(): number {
+    return config.VAULT_EVENT_INDEXER_MAX_EVENTS;
+  }
+
+  /**
+   * Bound the in-memory event store. The store is a cache (the database is the
+   * system of record when persistence is enabled), so once the configured
+   * maximum is exceeded the oldest events are dropped FIFO.
+   *
+   * Duplicate detection at the push sites only scans the retained window; an
+   * event that has already been evicted may therefore be re-appended if it is
+   * seen again. That is acceptable for a bounded cache.
+   */
+  private evictIfNeeded(): void {
+    const overflow = this.store.events.length - this.maxEvents;
+    if (overflow > 0) {
+      this.store.events.splice(0, overflow);
+    }
+  }
+
   private requirePersistence(): void {
     if (!this.persistenceEnabled) {
       throw new ApiError(
@@ -375,10 +405,20 @@ export class EventIndexer {
         // ledger sequence number (e.g. "12345678") is not a valid hash and will
         // never match a real transaction, so the old loop silently discovered
         // nothing. getEvents() is the correct RPC surface for this use-case.
-        const eventsResponse = await (client as any).getEvents({
+        interface GetEventsResponse {
+          events?: unknown[];
+        }
+        const eventsResponse = (await (
+          client as unknown as {
+            getEvents: (params: {
+              startLedger: number;
+              filters: Array<{ type: string }>;
+            }) => Promise<GetEventsResponse>;
+          }
+        ).getEvents({
           startLedger,
           filters: [{ type: "contract" }],
-        });
+        })) as GetEventsResponse;
 
         const rawEvents: unknown[] = Array.isArray(eventsResponse?.events)
           ? eventsResponse.events
@@ -465,6 +505,7 @@ export class EventIndexer {
       const existing = this.store.events.find((e) => e.txHash === txHash);
       if (!existing && (event.type === "deposit" || event.type === "withdraw")) {
         this.store.events.push(event);
+        this.evictIfNeeded();
       }
     } catch (err) {
       logger.debug(`[indexer] could not process tx ${txHash}`, logger.formatError(err));
@@ -553,6 +594,7 @@ export class EventIndexer {
     const existing = this.store.events.find((e) => e.id === event.id);
     if (!existing) {
       this.store.events.push(event);
+      this.evictIfNeeded();
     }
   }
 

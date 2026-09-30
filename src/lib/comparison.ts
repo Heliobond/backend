@@ -113,8 +113,8 @@ export function compareProjects(ids: number[]): ComparisonResult {
     projects,
     metrics: COMPARISON_METRICS,
     summary: {
-      highest_combined: sorted[0]?.id ?? null,
-      lowest_combined: sorted[sorted.length - 1]?.id ?? null,
+      highest_combined: sorted[0]?.combined_score ?? null,
+      lowest_combined: sorted[sorted.length - 1]?.combined_score ?? null,
       avg_credit_quality: avgCq,
       avg_green_impact: avgGi,
       avg_combined: avgComb,

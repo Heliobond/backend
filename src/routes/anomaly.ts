@@ -65,45 +65,4 @@ router.get("/", (_req: Request, res: Response) => {
   res.json(getAnomalyConfig());
 });
 
-/**
- * PUT /v1/anomaly/config
- * Update anomaly detection sensitivity and window settings.
- * Body: { sensitivityZScore?, trendWindowSize?, trendDeviationPct?, minBaseline? }
- * Only the keys present in the body are applied; the rest keep their current values.
- */
-router.put("/config", (req: Request, res: Response) => {
-  const body = (req.body ?? {}) as Record<string, unknown>;
-  const update: Partial<AnomalyConfig> = {};
-  for (const key of [
-    "sensitivityZScore",
-    "trendWindowSize",
-    "trendDeviationPct",
-    "minBaseline",
-  ] as const) {
-    if (body[key] !== undefined) update[key] = body[key] as number;
-  }
-  configureAnomalyDetection(update);
-  res.json({ ok: true, config: getAnomalyConfig() });
-});
-
-/**
- * DELETE /v1/anomaly/history and DELETE /v1/anomaly/history/:id
- * Clear the baseline history for a specific project (or all projects).
- * Two explicit routes because path-to-regexp v8 (Express 5) dropped the `?`
- * suffix that older Express accepted for optional params.
- */
-const clearAnomalyHistory = (req: Request, res: Response, next: NextFunction) => {
-  try {
-    // `/history` has no `:id` param, which means "clear every project".
-    const id = req.params.id ? parseProjectId(req.params.id, "project id") : undefined;
-    clearHistory(id);
-    res.json({ ok: true, cleared: id ?? "all" });
-  } catch (err) {
-    next(err);
-  }
-};
-
-router.delete("/history", clearAnomalyHistory);
-router.delete("/history/:id", clearAnomalyHistory);
-
 export default router;
