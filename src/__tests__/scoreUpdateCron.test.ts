@@ -52,6 +52,18 @@ jest.mock("../lib/tx-queue", () => ({
   enqueue: jest.fn(),
 }));
 
+// The real withProjectLock holds an in-process lock per project, so with every
+// test in this file sharing a process and reusing project ids, later runs found
+// the lock held, skipped the callback, and left every counter at zero. That made
+// the suite order-dependent: three of these tests failed on main for that reason
+// alone, and the deferred-path assertion could not reach the code it was
+// checking. Running the callback directly makes each test deterministic.
+jest.mock("../lib/request-queue", () => ({
+  withProjectLock: async (_projectId: number, fn: () => Promise<void>) => {
+    await fn();
+  },
+}));
+
 jest.mock("../lib/email", () => ({
   sendAlertIfSignificant: jest.fn().mockResolvedValue(0),
 }));
@@ -175,7 +187,10 @@ describe("runHourlyScoreUpdate (cron job execution flow)", () => {
     await runHourlyScoreUpdate();
 
     expect(markFailed).not.toHaveBeenCalled();
-    expect(recordCronRun).toHaveBeenCalledWith("score-update", "success");
+    // Updated in #713: with the RPC down, nothing reached the chain, so the run
+    // is an error rather than a success. This assertion previously expected
+    // "success", which is exactly the masking behaviour the issue describes.
+    expect(recordCronRun).toHaveBeenCalledWith("score-update", "error");
   });
 
   it("invokes recordScoreHistory and triggerWebhooks exactly once per successful update (Issue #531)", async () => {
