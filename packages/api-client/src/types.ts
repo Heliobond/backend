@@ -83,22 +83,50 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** List all projects */
+    /**
+     * List all projects
+     * @description Paginated list using the frontend's `page`/`pageSize` contract. `limit` is an alias for `pageSize`; `cursor` is a legacy offset alias that still works.
+     */
     get: {
       parameters: {
-        query?: never;
+        query?: {
+          /** @description 1-based page number */
+          page?: number;
+          /** @description Items per page (max 100) */
+          pageSize?: number;
+          /** @description Alias for pageSize */
+          limit?: number;
+          /** @description Legacy offset cursor; applied as an offset when present */
+          cursor?: number;
+          min_score?: number;
+          max_score?: number;
+          min_date?: number;
+          max_date?: number;
+          sort_by?:
+            | "id"
+            | "credit_quality"
+            | "green_impact"
+            | "power_output_kw"
+            | "efficiency_pct"
+            | "forest_density_pct"
+            | "ndvi_score"
+            | "timestamp";
+          sort_order?: "asc" | "desc";
+        };
         header?: never;
         path?: never;
         cookie?: never;
       };
       requestBody?: never;
       responses: {
-        /** @description Array of projects */
+        /** @description Paginated projects */
         200: {
           headers: {
             [name: string]: unknown;
           };
-          content?: never;
+          content: {
+            "application/json": components["schemas"]["PaginatedProjectsResponse"];
+          };
         };
       };
     };
@@ -117,7 +145,10 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** Get a single project */
+    /**
+     * Get a single project
+     * @description Nested project/detail/verifiedMetadata response matching the frontend's `ProjectWithDetail` shape. Unknown or deleted ids return 404.
+     */
     get: {
       parameters: {
         query?: never;
@@ -129,13 +160,13 @@ export interface paths {
       };
       requestBody?: never;
       responses: {
-        /** @description Project object */
+        /** @description Project with detail */
         200: {
           headers: {
             [name: string]: unknown;
           };
           content: {
-            "application/json": components["schemas"]["Project"];
+            "application/json": components["schemas"]["ProjectWithDetail"];
           };
         };
         /** @description Not found */
@@ -746,6 +777,35 @@ export interface components {
       name?: string;
       credit_quality?: number;
       green_impact?: number;
+      power_output_kw?: number;
+      efficiency_pct?: number;
+      forest_density_pct?: number;
+      ndvi_score?: number;
+      timestamp?: number;
+    };
+    ProjectDetail: {
+      power_output_kw?: number;
+      efficiency_pct?: number;
+      forest_density_pct?: number;
+      ndvi_score?: number;
+      timestamp?: number;
+      funding?: number;
+    };
+    ProjectWithDetail: {
+      project: components["schemas"]["Project"];
+      detail: components["schemas"]["ProjectDetail"];
+      /** @description Whether the backend holds metadata for the project. */
+      verifiedMetadata: boolean;
+    };
+    PaginatedProjectsResponse: {
+      projects: components["schemas"]["Project"][];
+      total: number;
+      filtered_total?: number;
+      page: number;
+      pageSize: number;
+      hasMore: boolean;
+      /** @description Legacy cursor alias: next offset when another page follows. */
+      cursor?: number;
     };
     ScoreHistory: {
       project_id?: number;

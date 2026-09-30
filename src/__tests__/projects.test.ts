@@ -15,7 +15,10 @@ import express, { Express } from "express";
 import projectsRouter from "../routes/projects";
 import { errorHandler, notFoundHandler } from "../middleware/errors";
 
-jest.mock("../lib/registry", () => ({ getTotalProjects: jest.fn() }));
+jest.mock("../lib/registry", () => ({
+  getTotalProjects: jest.fn(),
+  projectExists: jest.fn(),
+}));
 jest.mock("../lib/scoring", () => ({ computeScores: jest.fn() }));
 jest.mock("../routes/iot", () => ({
   __esModule: true,
@@ -26,11 +29,12 @@ jest.mock("../routes/iot", () => ({
   getHourSeed: jest.fn(),
 }));
 
-import { getTotalProjects } from "../lib/registry";
+import { getTotalProjects, projectExists } from "../lib/registry";
 import { computeScores } from "../lib/scoring";
 import { getSolarData, getSatelliteData, seededRandom } from "../routes/iot";
 
 const mockedTotal = getTotalProjects as jest.Mock;
+const mockedExists = projectExists as jest.Mock;
 const mockedScores = computeScores as jest.Mock;
 const mockedSolar = getSolarData as jest.Mock;
 const mockedSatellite = getSatelliteData as jest.Mock;
@@ -48,6 +52,7 @@ function buildApp(): Express {
 /** Deterministic fixtures: project id N → credit_quality 10N, green_impact N. */
 function primeProjects(count = 3): void {
   mockedTotal.mockResolvedValue(count);
+  mockedExists.mockResolvedValue(true);
   mockedSolar.mockImplementation((id: number) => ({
     power_output_kw: id * 10,
     efficiency_pct: 50 + id,
@@ -142,9 +147,9 @@ describe("GET /v1/projects (#679)", () => {
   it("returns project detail with funding", async () => {
     const res = await request(app).get("/v1/projects/2");
     expect(res.status).toBe(200);
-    expect(res.body.id).toBe(2);
-    expect(res.body.credit_quality).toBe(20);
-    expect(res.body.funding).toBe(500000); // seededRandom mocked to 0.5 * 1_000_000
+    expect(res.body.project.id).toBe(2);
+    expect(res.body.project.credit_quality).toBe(20);
+    expect(res.body.detail.funding).toBe(500000); // seededRandom mocked to 0.5 * 1_000_000
   });
 
   it("rejects a non-numeric project id with 400", async () => {
