@@ -88,7 +88,9 @@ export const openApiSpec = {
       get: {
         summary: "Get solar data for a project",
         tags: ["IoT"],
-        parameters: [{ name: "projectId", in: "path", required: true, schema: { type: "integer" } }],
+        parameters: [
+          { name: "projectId", in: "path", required: true, schema: { type: "integer" } },
+        ],
         responses: {
           200: { description: "Solar metrics" },
         },
@@ -98,7 +100,9 @@ export const openApiSpec = {
       get: {
         summary: "Get satellite data for a project",
         tags: ["IoT"],
-        parameters: [{ name: "projectId", in: "path", required: true, schema: { type: "integer" } }],
+        parameters: [
+          { name: "projectId", in: "path", required: true, schema: { type: "integer" } },
+        ],
         responses: {
           200: { description: "Satellite metrics" },
         },
@@ -119,8 +123,14 @@ export const openApiSpec = {
         tags: ["Projects"],
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
         responses: {
-          200: { description: "Project object", content: { "application/json": { schema: { $ref: "#/components/schemas/Project" } } } },
-          404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          200: {
+            description: "Project object",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/Project" } } },
+          },
+          404: {
+            description: "Not found",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+          },
         },
       },
     },
@@ -130,8 +140,18 @@ export const openApiSpec = {
         tags: ["History"],
         parameters: [
           { name: "id", in: "path", required: true, schema: { type: "integer" } },
-          { name: "from", in: "query", schema: { type: "integer" }, description: "Start timestamp (ms)" },
-          { name: "to", in: "query", schema: { type: "integer" }, description: "End timestamp (ms)" },
+          {
+            name: "from",
+            in: "query",
+            schema: { type: "integer" },
+            description: "Start timestamp (ms)",
+          },
+          {
+            name: "to",
+            in: "query",
+            schema: { type: "integer" },
+            description: "End timestamp (ms)",
+          },
           { name: "format", in: "query", schema: { type: "string", enum: ["json", "csv"] } },
         ],
         responses: {
@@ -145,7 +165,66 @@ export const openApiSpec = {
         tags: ["History"],
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
         responses: {
-          200: { description: "Trend result", content: { "application/json": { schema: { $ref: "#/components/schemas/Trend" } } } },
+          200: {
+            description: "Trend result",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/Trend" } } },
+          },
+        },
+      },
+    },
+    "/projects/{id}/price-history": {
+      get: {
+        summary: "Price and yield chart series for a project (#769)",
+        description:
+          "Returns `PricePoint[]` = `{date, price, yield?}` for the project's chart. Values are derived from the on-chain `get_score_history` timestamps and the current `get_interest_rate`. `yield` is `rate_bps / 100`; `price` is `100 / (1 + yield/100)` (one-period present value). See API.md for the full formula.",
+        tags: ["History"],
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "integer" } },
+          {
+            name: "from",
+            in: "query",
+            schema: { type: "integer" },
+            description: "Start timestamp (unix ms)",
+          },
+          {
+            name: "to",
+            in: "query",
+            schema: { type: "integer" },
+            description: "End timestamp (unix ms)",
+          },
+          {
+            name: "interval",
+            in: "query",
+            schema: { type: "string", enum: ["day", "week"], default: "day" },
+            description: "Bucket size for the series",
+          },
+        ],
+        responses: {
+          200: {
+            description: "PricePoint series in ascending date order",
+            content: {
+              "application/json": {
+                example: {
+                  project_id: 27,
+                  interval: "day",
+                  count: 3,
+                  points: [
+                    { date: "2026-09-28", price: 96.15, yield: 4 },
+                    { date: "2026-09-29", price: 96.15, yield: 4 },
+                    { date: "2026-09-30", price: 96.15, yield: 4 },
+                  ],
+                },
+              },
+            },
+          },
+          400: {
+            description: "Invalid range or interval",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+          },
+          404: {
+            description: "Unknown or archived project",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+          },
         },
       },
     },
@@ -173,7 +252,10 @@ export const openApiSpec = {
         tags: ["Admin", "Batch"],
         security: [{ UserId: [] }],
         responses: {
-          202: { description: "Job accepted", content: { "application/json": { schema: { $ref: "#/components/schemas/BatchJob" } } } },
+          202: {
+            description: "Job accepted",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/BatchJob" } } },
+          },
           401: { description: "Unauthorized" },
         },
       },
@@ -185,7 +267,10 @@ export const openApiSpec = {
         security: [{ UserId: [] }],
         parameters: [{ name: "batchId", in: "path", required: true, schema: { type: "string" } }],
         responses: {
-          200: { description: "Job status", content: { "application/json": { schema: { $ref: "#/components/schemas/BatchJob" } } } },
+          200: {
+            description: "Job status",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/BatchJob" } } },
+          },
           404: { description: "Job not found" },
         },
       },
@@ -255,7 +340,10 @@ export const openApiSpec = {
           },
         },
         responses: {
-          201: { description: "Webhook registered", content: { "application/json": { schema: { $ref: "#/components/schemas/Webhook" } } } },
+          201: {
+            description: "Webhook registered",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/Webhook" } } },
+          },
         },
       },
     },

@@ -1,0 +1,15 @@
+{
+  "type": "ScoreChanged",
+  "contractId": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+  "ledger": 1234567,
+  "topic": [
+    "AAAADwAAAAdTY29yZUNoYW5nZWQ=",
+    "AAAAAwAAABs="
+  ],
+  "value": {
+    "project_id": 27,
+    "credit_quality": 82,
+    "green_impact": 74
+  },
+  "id": "1234567-0"
+}

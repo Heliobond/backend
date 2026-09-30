@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import cron, { ScheduledTask } from "node-cron";
+import * as grpc from "@grpc/grpc-js";
 import { config, initEnv } from "./config";
 import { getTotalProjects } from "./lib/registry";
 import swaggerUi from "swagger-ui-express";
@@ -12,11 +13,13 @@ import rolesRouter from "./routes/roles";
 import batchRouter from "./routes/batch";
 import webhooksRouter from "./routes/webhooks";
 import historyRouter from "./routes/history";
+import priceHistoryRouter from "./routes/priceHistory";
 import panelsRouter from "./routes/panels";
 import metadataRouter from "./routes/metadata";
 import dashboardRouter from "./routes/dashboard";
 import emailRouter from "./routes/email";
 import anomalyRouter from "./routes/anomaly";
+import anomalyAdminRouter from "./routes/anomaly-admin";
 import scoringFormulasRouter from "./routes/scoring-formulas";
 import chainsRouter from "./routes/chains";
 import satelliteSourcesRouter from "./routes/satellite-sources";
@@ -66,6 +69,7 @@ import { checkScheduledRotations } from "./lib/apiKeys";
 import { ipWhitelist } from "./middleware/ipWhitelist";
 import { apiKeyAuth } from "./middleware/apiKeyAuth";
 import { requestSigning } from "./middleware/requestSigning";
+import { requireAdminBearer } from "./middleware/requireAdminBearer";
 import { initApm } from "./lib/apm";
 import { csrfProtection } from "./middleware/csrf";
 import { startSecretRotation, stopSecretRotation, getSecretsStatus } from "./lib/secrets";
@@ -80,6 +84,23 @@ import { createBenchmarkSampleInitializer } from "./lib/benchmarkStartup";
 import { getImpactCertificatePublicKey } from "./lib/impactCertificate";
 
 const env = initEnv();
+
+// ── Process-level error handlers (#694) ──────────────────────────────────────
+// These handlers must be registered early (before any async work) to catch
+// unhandled promise rejections and uncaught exceptions that would otherwise
+// crash the process silently or with only a deprecation warning.
+process.on("unhandledRejection", (reason: unknown, promise: Promise<unknown>) => {
+  logger.error("[unhandledRejection] Unhandled promise rejection detected", {
+    ...logger.formatError(reason),
+    promise: String(promise),
+  });
+  gracefulShutdown("unhandledRejection").catch(() => process.exit(1));
+});
+
+process.on("uncaughtException", (err: Error) => {
+  logger.error("[uncaughtException] Uncaught exception detected", logger.formatError(err));
+  process.exit(1);
+});
 
 // Seed initial admin from env var (RBAC bootstrap)
 const initialAdminUserId = process.env.INITIAL_ADMIN_USER_ID?.trim();
@@ -325,6 +346,7 @@ v1.use("/admin/feature-flags/analytics", ipWhitelist, adminLimiter, requestSigni
 v1.use("/admin/batch", ipWhitelist, adminLimiter, requestSigning, batchRouter);
 v1.use("/projects", publicLimiter, apiKeyAuth, projectsRouter);
 v1.use("/projects/:id/history", publicLimiter, apiKeyAuth, historyRouter);
+v1.use("/projects/:id/price-history", publicLimiter, apiKeyAuth, priceHistoryRouter);
 v1.use("/projects/aggregate", publicLimiter, apiKeyAuth, aggregateRouter);
 v1.use("/portfolio", publicLimiter, apiKeyAuth, portfolioRouter);
 v1.use("/roles", ipWhitelist, adminLimiter, rolesRouter);
@@ -334,15 +356,23 @@ v1.use("/metadata", ipWhitelist, adminLimiter, metadataRouter);
 v1.use("/dashboards", publicLimiter, apiKeyAuth, dashboardRouter);
 v1.use("/email", ipWhitelist, adminLimiter, requestSigning, emailRouter);
 v1.use("/anomaly", publicLimiter, anomalyRouter);
+v1.use(
+  "/anomaly",
+  ipWhitelist,
+  adminLimiter,
+  requireAdminBearer,
+  requestSigning,
+  anomalyAdminRouter,
+);
 v1.use("/scoring/formulas", ipWhitelist, adminLimiter, requestSigning, scoringFormulasRouter);
 v1.use("/chains", publicLimiter, adminLimiter, chainsRouter);
 v1.use("/satellite-sources", ipWhitelist, adminLimiter, requestSigning, satelliteSourcesRouter);
 v1.use("/comparison", publicLimiter, apiKeyAuth, comparisonRouter);
 v1.use("/benchmarking", publicLimiter, apiKeyAuth, benchmarkingRouter);
 v1.use("/financial", publicLimiter, apiKeyAuth, financialRouter);
-v1.use("/forecast", publicLimiter, forecastRouter);
+v1.use("/forecast", publicLimiter, apiKeyAuth, forecastRouter);
 v1.use("/maintenance", publicLimiter, apiKeyAuth, maintenanceRouter);
-v1.use("/investor", publicLimiter, investorRouter);
+v1.use("/investor", publicLimiter, apiKeyAuth, investorRouter);
 v1.use("/investors", publicLimiter, investorActivityRouter);
 v1.use("/status/oracle", publicLimiter, oracleStatusRouter);
 v1.use("/admin/api-keys", ipWhitelist, adminLimiter, requestSigning, apiKeysRouter);
@@ -357,6 +387,7 @@ app.use("/api/admin", ipWhitelist, adminLimiter, adminRouter);
 app.use("/api/admin/batch", ipWhitelist, adminLimiter, batchRouter);
 app.use("/api/projects", publicLimiter, apiKeyAuth, projectsRouter);
 app.use("/api/projects/:id/history", publicLimiter, apiKeyAuth, historyRouter);
+app.use("/api/projects/:id/price-history", publicLimiter, apiKeyAuth, priceHistoryRouter);
 app.use("/api/projects/aggregate", publicLimiter, apiKeyAuth, aggregateRouter);
 app.use("/api/portfolio", publicLimiter, apiKeyAuth, portfolioRouter);
 app.use("/api/roles", ipWhitelist, adminLimiter, rolesRouter);
@@ -494,20 +525,53 @@ const initializeBenchmarkSamples = createBenchmarkSampleInitializer({
   warn: logger.warn,
 });
 
-const serverPromise = initializeBenchmarkSamples().then((sampleSize) => {
+// ── Coordinated server startup (#692) ────────────────────────────────────────
+// Start both gRPC and HTTP servers in a coordinated way so that if either fails
+// to bind, the other is properly cleaned up. This prevents half-initialized state
+// where gRPC is running but HTTP isn't (or vice versa).
+let grpcServer: grpc.Server | null = null;
+
+const serverPromise = initializeBenchmarkSamples().then(async (sampleSize) => {
   logger.info("[startup] benchmark samples initialized", { sample_size: sampleSize });
 
-  const server = app.listen(PORT, () => {
-    logger.info(`Heliobond backend listening on port ${PORT}`);
+  // First, start HTTP server
+  const httpServer = await new Promise<any>((resolve, reject) => {
+    const server = app.listen(PORT, () => {
+      logger.info(`[startup] HTTP server listening on port ${PORT}`);
+      resolve(server);
+    });
+    server.on("error", (err: NodeJS.ErrnoException) => {
+      handleListenError(err, PORT);
+      reject(err);
+    });
   });
 
-  // Bind failures (EADDRINUSE, EACCES, …) surface here instead of as an uncaught
-  // exception with a raw stack trace. Exits 1 so supervisors treat it as a failure.
-  server.on("error", (err: NodeJS.ErrnoException) => handleListenError(err, PORT));
+  // Then start gRPC server
+  try {
+    grpcServer = await new Promise<grpc.Server>((resolve, reject) => {
+      const server = startGrpcServer(50051, (err, port) => {
+        logger.error("[startup] gRPC server bind failed", {
+          ...logger.formatError(err),
+          port,
+        });
+        // Clean up HTTP server if gRPC fails
+        httpServer.close(() => {
+          logger.info("[startup] HTTP server closed due to gRPC bind failure");
+        });
+        reject(err);
+      });
+      // Give gRPC server a moment to bind before considering it successful
+      setTimeout(() => resolve(server), 100);
+    });
+    logger.info("[startup] gRPC server started successfully");
+  } catch (err) {
+    logger.error("[startup] coordinated startup failed, exiting");
+    process.exit(1);
+  }
 
   // Real-time score updates over WebSocket (ws://<host>/ws)
-  attachWebSocketServer(server);
-  return server;
+  attachWebSocketServer(httpServer);
+  return httpServer;
 });
 
 // GraphQL endpoint and playground setup
@@ -556,9 +620,6 @@ app.get("/graphql-playground", (req, res) => {
   `);
 });
 
-// Start high-performance gRPC server
-const grpcServer = startGrpcServer(50051);
-
 // Periodically clear cached secrets so a rotated/compromised upstream
 // secret doesn't stay cached indefinitely (gated on SECRETS_ROTATION_ENABLED).
 startSecretRotation();
@@ -604,23 +665,25 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
     // 5. Gracefully stop the gRPC server, letting in-flight/streaming RPCs
     // (e.g. StreamProjectScores) drain instead of being killed mid-stream.
-    logger.info("[shutdown] draining gRPC server…");
-    await new Promise<void>((resolve) => {
-      const forceTimer = setTimeout(() => {
-        logger.warn("[shutdown] gRPC drain timed out, forcing shutdown");
-        grpcServer.forceShutdown();
-        resolve();
-      }, shutdownTimeoutMs);
-      grpcServer.tryShutdown((err) => {
-        clearTimeout(forceTimer);
-        if (err) {
-          logger.error("[shutdown] gRPC shutdown error", { error: err.message });
-        } else {
-          logger.info("[shutdown] gRPC server stopped");
-        }
-        resolve();
+    if (grpcServer) {
+      logger.info("[shutdown] draining gRPC server…");
+      await new Promise<void>((resolve) => {
+        const forceTimer = setTimeout(() => {
+          logger.warn("[shutdown] gRPC drain timed out, forcing shutdown");
+          grpcServer!.forceShutdown();
+          resolve();
+        }, shutdownTimeoutMs);
+        grpcServer!.tryShutdown((err) => {
+          clearTimeout(forceTimer);
+          if (err) {
+            logger.error("[shutdown] gRPC shutdown error", { error: err.message });
+          } else {
+            logger.info("[shutdown] gRPC server stopped");
+          }
+          resolve();
+        });
       });
-    });
+    }
 
     logger.info("[shutdown] clean exit");
     process.exit(0);

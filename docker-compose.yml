@@ -14,12 +14,11 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3001
-      - ADMIN_SECRET_KEY=${ADMIN_SECRET_KEY}
       - PROJECT_REGISTRY_CONTRACT_ID=${PROJECT_REGISTRY_CONTRACT_ID}
       # Keep the V8 heap ceiling under the container memory limit below (#225).
       - NODE_OPTIONS=--max-old-space-size=384
-    volumes:
-      - ./src:/app/src:ro
+    # Production images contain the compiled application; never bind-mount
+    # the host source tree into this service.
     restart: unless-stopped
     # Resource limits (#225). Compose v2 honours deploy.resources outside swarm,
     # so these apply to a plain `docker compose up`.

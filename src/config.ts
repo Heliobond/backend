@@ -1,4 +1,5 @@
 import dotenv from "dotenv";
+import { logger } from "./lib/logger";
 
 dotenv.config();
 
@@ -22,6 +23,22 @@ function numEnv(name: string, fallback: number): number {
   const parsed = parseInt(raw, 10);
   if (isNaN(parsed)) {
     throw new Error(`Environment variable ${name} must be a number, got: "${raw}"`);
+  }
+  return parsed;
+}
+
+/**
+ * Read a strictly-positive integer env var used as a capacity bound.
+ * A missing, non-numeric or non-positive value falls back to `fallback` with a
+ * warning, so a bad value can never disable the bound it configures.
+ */
+function positiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = parseInt(raw, 10);
+  if (Number.isNaN(parsed) || parsed < 1) {
+    logger.warn(`Invalid ${name}, falling back to default`, { [name]: raw, default: fallback });
+    return fallback;
   }
   return parsed;
 }
@@ -90,7 +107,7 @@ function buildConfig() {
     /** Database connection */
     DB_HOST: optionalEnv("DB_HOST", "localhost"),
     DB_PORT: numEnv("DB_PORT", 5432),
-    DB_NAME: optionalEnv("DB_NAME", ""),
+    DB_NAME: optionalEnv("DB_NAME", "heliobond_dev"),
     DB_USER: optionalEnv("DB_USER", "postgres"),
     DB_PASSWORD: optionalEnv("DB_PASSWORD", ""),
 
@@ -172,6 +189,7 @@ function buildConfig() {
     /** Vault event indexer */
     VAULT_EVENT_INDEXER_START_LEDGER: numEnv("VAULT_EVENT_INDEXER_START_LEDGER", 0),
     VAULT_EVENT_INDEXER_ENABLED: optionalEnv("VAULT_EVENT_INDEXER_ENABLED", "false"),
+    VAULT_EVENT_INDEXER_MAX_EVENTS: positiveIntEnv("VAULT_EVENT_INDEXER_MAX_EVENTS", 1000),
   } as const;
 }
 

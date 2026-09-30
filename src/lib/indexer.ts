@@ -4,9 +4,6 @@ import { logger } from "./logger";
 import { pool } from "./db";
 import { config } from "../config";
 import { ApiError } from "../middleware/errors";
-import dotenv from "dotenv";
-
-dotenv.config();
 
 export type VaultEventType =
   "deposit" | "withdraw" | "WithdrawQueued" | "WithdrawClaimed" | "YieldClaimed";
@@ -307,6 +304,27 @@ export class EventIndexer {
     return config.VAULT_EVENT_INDEXER_ENABLED === "true";
   }
 
+  /** Configured cap on the number of events retained in the in-memory store. */
+  private get maxEvents(): number {
+    return config.VAULT_EVENT_INDEXER_MAX_EVENTS;
+  }
+
+  /**
+   * Bound the in-memory event store. The store is a cache (the database is the
+   * system of record when persistence is enabled), so once the configured
+   * maximum is exceeded the oldest events are dropped FIFO.
+   *
+   * Duplicate detection at the push sites only scans the retained window; an
+   * event that has already been evicted may therefore be re-appended if it is
+   * seen again. That is acceptable for a bounded cache.
+   */
+  private evictIfNeeded(): void {
+    const overflow = this.store.events.length - this.maxEvents;
+    if (overflow > 0) {
+      this.store.events.splice(0, overflow);
+    }
+  }
+
   private requirePersistence(): void {
     if (!this.persistenceEnabled) {
       throw new ApiError(
@@ -468,6 +486,7 @@ export class EventIndexer {
       const existing = this.store.events.find((e) => e.txHash === txHash);
       if (!existing && (event.type === "deposit" || event.type === "withdraw")) {
         this.store.events.push(event);
+        this.evictIfNeeded();
       }
     } catch (err) {
       logger.debug(`[indexer] could not process tx ${txHash}`, logger.formatError(err));
@@ -556,6 +575,7 @@ export class EventIndexer {
     const existing = this.store.events.find((e) => e.id === event.id);
     if (!existing) {
       this.store.events.push(event);
+      this.evictIfNeeded();
     }
   }
 

@@ -44,6 +44,9 @@ export class MetadataValidationError extends Error {
 const store = new Map<number, ProjectMetadata>();
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+export const MAX_METADATA_NAME_LENGTH = 255;
+export const MAX_CUSTOM_FIELDS = 50;
+export const MAX_CUSTOM_SERIALIZED_BYTES = 8 * 1024;
 
 function validateLocation(raw: unknown): GeoLocation {
   if (typeof raw !== "object" || raw === null) {
@@ -74,12 +77,21 @@ function validateCustom(raw: unknown): Record<string, string | number | boolean>
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new MetadataValidationError("custom must be an object of scalar values");
   }
+  const entries = Object.entries(raw);
+  if (entries.length > MAX_CUSTOM_FIELDS) {
+    throw new MetadataValidationError(`custom must contain no more than ${MAX_CUSTOM_FIELDS} fields`);
+  }
   const out: Record<string, string | number | boolean> = {};
-  for (const [key, value] of Object.entries(raw)) {
+  for (const [key, value] of entries) {
     if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
       throw new MetadataValidationError(`custom.${key} must be a string, number or boolean`);
     }
     out[key] = value;
+  }
+  if (Buffer.byteLength(JSON.stringify(out), "utf8") > MAX_CUSTOM_SERIALIZED_BYTES) {
+    throw new MetadataValidationError(
+      `custom values must be no larger than ${MAX_CUSTOM_SERIALIZED_BYTES} bytes in total`,
+    );
   }
   return out;
 }
@@ -90,6 +102,9 @@ export function validateMetadata(input: MetadataInput): Omit<ProjectMetadata, "p
 
   if (typeof name !== "string" || name.trim().length === 0) {
     throw new MetadataValidationError("name must be a non-empty string");
+  }
+  if (name.trim().length > MAX_METADATA_NAME_LENGTH) {
+    throw new MetadataValidationError(`name must be no longer than ${MAX_METADATA_NAME_LENGTH} characters`);
   }
   if (typeof description !== "string") {
     throw new MetadataValidationError("description must be a string");

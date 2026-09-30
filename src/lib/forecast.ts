@@ -109,14 +109,17 @@ function round(n: number, d = 4): number {
 }
 
 function mean(values: number[]): number {
+  if (values.length === 0) return 0;
   return values.reduce((s, v) => s + v, 0) / values.length;
 }
 
 function stdDev(values: number[], avg: number): number {
+  if (values.length === 0) return 0;
   return Math.sqrt(values.reduce((s, v) => s + (v - avg) ** 2, 0) / values.length);
 }
 
 function last(values: number[]): number {
+  if (values.length === 0) return 0;
   return values[values.length - 1];
 }
 

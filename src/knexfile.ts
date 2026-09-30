@@ -24,10 +24,15 @@ const baseConfig: Knex.Config = {
 export function getSslConfig(): { rejectUnauthorized: true; ca?: string } {
   const caPath = process.env.DB_SSL_CA_PATH || process.env.DB_SSL_CA || process.env.DATABASE_CA;
   if (caPath) {
-    return {
-      ca: fs.readFileSync(caPath, "utf8"),
-      rejectUnauthorized: true,
-    };
+    try {
+      return {
+        ca: fs.readFileSync(caPath, "utf8"),
+        rejectUnauthorized: true,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to read SSL CA file at ${caPath}: ${message}`, { cause: error });
+    }
   }
   return { rejectUnauthorized: true };
 }

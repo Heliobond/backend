@@ -336,6 +336,53 @@ Evaluates score direction (`improving`, `declining`, `stable`) over time.
 }
 ```
 
+### `GET /v1/projects/:id/price-history` (#769)
+
+Powers the frontend's price/yield chart (`PricePoint[] = {date, price, yield?}`).
+Values are derived from real on-chain state:
+
+- `date`: ISO date string (`YYYY-MM-DD`). Daily buckets by default; weekly
+  buckets are aligned to the Monday of the containing ISO week (UTC).
+- `yield`: percentage yield, computed as `rate_bps / 100`. `rate_bps` comes
+  from the registry's `get_interest_rate(project_id)`.
+- `price`: one-period present value of a par-100 bond at that yield:
+  `price = 100 / (1 + yield / 100)`. Rounded to two decimal places.
+
+Timestamps for the series come from `get_score_history(project_id)` (a 50-entry
+ring buffer on the contract). Historical rate is not yet indexed from the
+`RateUpdated` / `ScoreChanged` events (paired backend work), so every point
+currently carries the CURRENT yield and price. When the event indexer lands
+the response shape stays the same and only the per-entry rate lookup changes.
+
+| Param      | In    | Type    | Rules                                                     |
+| :--------- | :---- | :------ | :-------------------------------------------------------- |
+| `id`       | path  | int     | Project id (`>= 1`)                                       |
+| `from`     | query | int     | Start timestamp (unix ms). Optional.                      |
+| `to`       | query | int     | End timestamp (unix ms). Must be `>= from`.               |
+| `interval` | query | string  | `day` (default) or `week`                                 |
+
+Responses:
+
+- `200`: `{project_id, interval, count, points}` with `points` in ascending
+  date order. Sets `Cache-Control: public, max-age=60`.
+- `400`: `bad_request` when `from > to` or `interval` is not `day` / `week`.
+- `404`: `not_found` when the project is unknown or archived on the registry.
+
+**Response `200`**
+
+```json
+{
+  "project_id": 27,
+  "interval": "day",
+  "count": 3,
+  "points": [
+    { "date": "2026-09-28", "price": 96.15, "yield": 4 },
+    { "date": "2026-09-29", "price": 96.15, "yield": 4 },
+    { "date": "2026-09-30", "price": 96.15, "yield": 4 }
+  ]
+}
+```
+
 ### `GET /v1/projects/aggregate`
 
 Portfolio-level aggregated impact and credit quality metrics across projects.
@@ -1226,9 +1273,58 @@ Feature flag management and evaluation context analytics.
 
 ## 20. WebSocket Real-Time Updates
 
-The WebSocket endpoint provides real-time binary score updates with low latency and minimal bandwidth usage.
+Two WebSocket feeds are exposed, targeting different consumers:
 
-### Connection
+| Path         | Auth   | Frames         | Intended consumer                                   |
+| ------------ | ------ | -------------- | --------------------------------------------------- |
+| `/ws`        | Bearer | Binary (score) | Internal / server-to-server admin subscribers.       |
+| `/ws/events` | None   | JSON (vault)   | Browser tabs (the `VaultEventStream` in the app UI). |
+
+Both share the same HTTP server; the upgrade handler routes by URL pathname.
+
+### `/ws/events`: browser vault event stream (#767)
+
+Browsers cannot set headers on a `WebSocket`, so this feed accepts a bare
+`new WebSocket(url)` with **no** headers and **no** subscribe frame. The
+frontend's `VaultEventStream` is the canonical consumer.
+
+- **Endpoint**: `ws://localhost:3001/ws/events` (dev) or
+  `wss://your-domain.com/ws/events` (production).
+- **Auth**: none, this endpoint serves public chain data. Follow-up
+  work (#655) may layer an optional `Sec-WebSocket-Protocol` token.
+- **Optional filter**: `?contract=<contractId>`, only events whose
+  `contractId` field matches are delivered to that client. Omit to
+  receive every broadcast.
+- **Frame shape**: the fixture at
+  `src/__tests__/fixtures/vault-event.json` is the shared contract with
+  the frontend:
+
+  ```json
+  {
+    "type": "ScoreChanged",
+    "contractId": "CDLZ...CYSC",
+    "ledger": 1234567,
+    "topic": ["AAAA...", "AAAA..."],
+    "value": { "project_id": 27, "credit_quality": 82, "green_impact": 74 },
+    "id": "1234567-0"
+  }
+  ```
+
+- **Connection limits**: `WS_EVENTS_MAX_PER_IP` (default 8) concurrent
+  sockets per source IP. The 9th connection is closed with code
+  `1013 too many connections from this IP`.
+- **Heartbeat**: the server sends a WebSocket `ping` every 30s; sockets
+  that fail to `pong` within 60s are terminated. Browser `WebSocket`
+  answers pings automatically.
+- **Producers**: any backend module can push an event via
+  `broadcastVaultEvent(evt)` from `src/lib/vaultEvents.ts`. The full
+  end-to-end wiring from a Soroban indexer is tracked in the paired
+  issue referenced from #767.
+
+### `/ws`: authenticated binary score-update feed
+
+Unchanged from before #767. Provides real-time binary score updates with
+low latency and minimal bandwidth usage.
 
 - **Endpoint**: `ws://localhost:3001/ws` (dev) or `wss://your-domain.com/ws` (production)
 - **Protocol**: Binary frames for score updates, JSON for control messages

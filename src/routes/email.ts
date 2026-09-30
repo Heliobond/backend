@@ -86,14 +86,43 @@ router.put("/templates", (req: Request, res: Response) => {
   res.json(upsertTemplate({ name, subject, body }));
 });
 
+function isValidScoreChange(change: unknown): change is { project_id: number; credit_quality_delta: number; green_impact_delta: number } {
+  return (
+    typeof change === "object" &&
+    change !== null &&
+    "project_id" in change &&
+    "credit_quality_delta" in change &&
+    "green_impact_delta" in change &&
+    typeof (change as any).project_id === "number" &&
+    typeof (change as any).credit_quality_delta === "number" &&
+    typeof (change as any).green_impact_delta === "number"
+  );
+}
+
 /** POST /email/digest — trigger a digest send. Body: { frequency, changes? } */
 router.post("/digest", async (req: Request, res: Response, next: NextFunction) => {
   const { frequency, changes } = req.body as { frequency?: unknown; changes?: unknown };
   if (frequency !== "daily" && frequency !== "weekly") {
     throw badRequest("frequency must be 'daily' or 'weekly'");
   }
+  
+  // Validate changes array
+  if (changes !== undefined && !Array.isArray(changes)) {
+    throw badRequest("changes must be an array");
+  }
+  
+  const validatedChanges = Array.isArray(changes)
+    ? changes.filter((c) => {
+        if (!isValidScoreChange(c)) {
+          logger.warn("[email] invalid change object in digest request", { change: c });
+          return false;
+        }
+        return true;
+      })
+    : [];
+  
   try {
-    const sent = await sendDigest(frequency, Array.isArray(changes) ? changes : []);
+    const sent = await sendDigest(frequency, validatedChanges);
     res.json({ frequency, sent });
   } catch (error) {
     logger.error("[email] digest error", logger.formatError(error));

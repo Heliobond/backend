@@ -121,7 +121,11 @@ function streamProjectScores(call: grpc.ServerWritableStream<any, any>) {
       const details = getProjectDetails(update.project_id);
       call.write(details);
     } catch (err) {
-      console.error("[gRPC Stream] failed to send project details:", err);
+      logger.error("[gRPC Stream] failed to send project details", {
+        stream_type: "streamProjectScores",
+        project_id: update.project_id,
+        ...logger.formatError(err),
+      });
     }
   };
 
@@ -133,7 +137,12 @@ function streamProjectScores(call: grpc.ServerWritableStream<any, any>) {
   call.on("close", () => {
     scoreEvents.off(SCORE_UPDATE_EVENT, listener);
   });
-  call.on("error", () => {
+  call.on("error", (err) => {
+    logger.error("[gRPC Stream] stream error", {
+      stream_type: "streamProjectScores",
+      error_code: (err as grpc.ServiceError).code,
+      ...logger.formatError(err),
+    });
     scoreEvents.off(SCORE_UPDATE_EVENT, listener);
   });
 }
@@ -148,11 +157,17 @@ function chatProjectScores(call: grpc.ServerDuplexStream<any, any>) {
     return;
   }
 
-  call.on("error", () => {});
+  call.on("error", (err) => {
+    logger.error("[gRPC Chat] stream error", {
+      stream_type: "chatProjectScores",
+      error_code: (err as grpc.ServiceError).code,
+      ...logger.formatError(err),
+    });
+  });
 
   call.on("data", async (request) => {
+    const { project_id } = request;
     try {
-      const { project_id } = request;
       const total = await getTotalProjects();
       if (project_id < 1 || project_id > total) {
         call.write({
@@ -167,7 +182,11 @@ function chatProjectScores(call: grpc.ServerDuplexStream<any, any>) {
       const details = getProjectDetails(project_id);
       call.write(details);
     } catch (err) {
-      console.error("[gRPC Chat] data processing error:", err);
+      logger.error("[gRPC Chat] data processing error", {
+        stream_type: "chatProjectScores",
+        project_id: project_id,
+        ...logger.formatError(err),
+      });
     }
   });
 

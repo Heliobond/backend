@@ -53,6 +53,14 @@ describe("project metadata routes", () => {
       .expect(400);
   });
 
+  it("rejects oversized names and custom field payloads", async () => {
+    await request(app).put("/metadata/1").send({ ...valid, name: "x".repeat(256) }).expect(400);
+    await request(app)
+      .put("/metadata/1")
+      .send({ ...valid, custom: Object.fromEntries(Array.from({ length: 51 }, (_, i) => [`k${i}`, i])) })
+      .expect(400);
+  });
+
   it("PATCH /metadata/:id — merges custom fields", async () => {
     await request(app).put("/metadata/3").send(valid).expect(200);
     const res = await request(app).patch("/metadata/3").send({ custom: { inverter: "SMA" } }).expect(200);

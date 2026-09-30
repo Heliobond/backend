@@ -77,16 +77,16 @@ export function clearApiKeys(): void {
 
 /**
  * Check if a role has permission for a required role.
- * - admin:write has permissions for both admin:read and admin:write
+ * - admin:write has permissions for every resource role
  * - admin:read has permissions only for admin:read
  * - iot:read has permissions only for iot:read
  */
 export function hasRolePermission(userRole: ApiKeyRole | undefined, requiredRole: ApiKeyRole): boolean {
     if (!userRole) return false;
 
-    // admin:write can do everything
+    // admin:write is the unrestricted administrative role.
     if (userRole === "admin:write") {
-        return requiredRole === "admin:read" || requiredRole === "admin:write";
+        return true;
     }
 
     // Exact role match required for all other roles

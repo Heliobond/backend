@@ -51,7 +51,9 @@ async function getPortfolioData() {
     // Expected output based on capacity factor
     const expected_output = solar.max_power_kw * 24 * 365 * 0.2; // 20% capacity factor
     const actual_output = solar.power_output_kw * 24 * 365 * 0.2;
-    const actual_vs_expected_ratio = Math.min(1.2, Math.max(0.5, actual_output / expected_output));
+    const actual_vs_expected_ratio = expected_output > 0 
+      ? Math.min(1.2, Math.max(0.5, actual_output / expected_output))
+      : 0;
 
     return {
       id,

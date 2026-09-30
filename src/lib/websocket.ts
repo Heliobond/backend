@@ -1,6 +1,9 @@
 import type { Server as HttpServer, IncomingMessage } from "http";
+import { URL } from "url";
 import { WebSocketServer, WebSocket } from "ws";
 import { timingSafeCompare } from "./timing-safe";
+import { vaultEventEmitter, VAULT_EVENT, type VaultEvent } from "./vaultEvents";
+import { logger } from "./logger";
 
 export interface ScoreUpdate {
   project_id: number;
@@ -115,20 +118,218 @@ function handleMessage(ws: WebSocket, data: unknown): void {
   );
 }
 
+// ── Public browser event stream (#767) ───────────────────────────────────────
+//
+// The frontend opens `new WebSocket(url + "/ws/events")` with no headers,
+// so this endpoint MUST NOT require the `Authorization: Bearer` gate used
+// by the admin `/ws` binary feed above. It streams JSON `VaultEvent`
+// frames (see `./vaultEvents.ts`) and applies per-IP connection limits +
+// a heartbeat so browser tabs stuck behind sleep or NAT timeout are
+// cleaned up.
+//
+// Both servers share the same underlying HTTP upgrade event to avoid
+// path-collision issues that arise when two `WebSocketServer`s both
+// register their own `upgrade` listener. We route by URL pathname
+// centrally in `attachWebSocketServer`.
+
+interface EventsClientState {
+  ip: string;
+  /** Contract filter set via `?contract=<id>` on the WebSocket URL. */
+  contractId: string | null;
+  /** Last time the client answered our ping, used to drop stale sockets. */
+  lastPongAt: number;
+}
+
+const eventsClients = new Map<WebSocket, EventsClientState>();
+const eventsIpCounts = new Map<string, number>();
+let eventsWss: WebSocketServer | null = null;
+let eventsHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let vaultEventListener: ((evt: VaultEvent) => void) | null = null;
+
+const WS_EVENTS_PATH = "/ws/events";
+const WS_EVENTS_MAX_PER_IP_DEFAULT = 8;
+const WS_EVENTS_HEARTBEAT_MS = 30_000;
+const WS_EVENTS_PONG_TIMEOUT_MS = 60_000;
+
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function ipFromRequest(req: IncomingMessage): string {
+  const fwd = req.headers["x-forwarded-for"];
+  if (typeof fwd === "string" && fwd.length > 0) {
+    const first = fwd.split(",")[0].trim();
+    if (first) return first;
+  }
+  return req.socket.remoteAddress ?? "unknown";
+}
+
+function contractFromRequest(req: IncomingMessage): string | null {
+  if (!req.url) return null;
+  try {
+    const parsed = new URL(req.url, "http://placeholder.local");
+    const value = parsed.searchParams.get("contract");
+    return value && value.length > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function attachEventsListener(): void {
+  if (vaultEventListener) return;
+  vaultEventListener = (evt: VaultEvent): void => {
+    if (!eventsWss) return;
+    const frame = JSON.stringify(evt);
+    for (const [ws, state] of eventsClients) {
+      if (ws.readyState !== WebSocket.OPEN) continue;
+      if (state.contractId !== null && state.contractId !== evt.contractId) continue;
+      ws.send(frame);
+    }
+  };
+  vaultEventEmitter.on(VAULT_EVENT, vaultEventListener);
+}
+
+function startHeartbeat(): void {
+  if (eventsHeartbeatTimer) return;
+  eventsHeartbeatTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [ws, state] of eventsClients) {
+      if (ws.readyState !== WebSocket.OPEN) continue;
+      if (now - state.lastPongAt > WS_EVENTS_PONG_TIMEOUT_MS) {
+        try {
+          ws.terminate();
+        } catch {
+          // ignore, socket may already be closing
+        }
+        continue;
+      }
+      try {
+        ws.ping();
+      } catch {
+        // ignore transient send errors; the next tick will re-check state
+      }
+    }
+  }, WS_EVENTS_HEARTBEAT_MS);
+  // Do not block process exit on the heartbeat.
+  eventsHeartbeatTimer.unref?.();
+}
+
 /**
- * Attach a WebSocket server to an existing HTTP server. Clients connect at
- * `/ws`, authenticate on upgrade, then send JSON control frames to manage
- * their subscriptions and receive binary score-update frames.
+ * Attach the browser-facing vault event stream. Idempotent: safe to call
+ * more than once, but only the first call actually wires anything up.
+ * Callers do not need to invoke this directly if they use
+ * `attachWebSocketServer` below, which sets both feeds up together.
+ */
+export function attachEventsWebSocketServer(server: HttpServer): WebSocketServer {
+  if (eventsWss) return eventsWss;
+
+  const maxPerIp = envInt("WS_EVENTS_MAX_PER_IP", WS_EVENTS_MAX_PER_IP_DEFAULT);
+
+  eventsWss = new WebSocketServer({ noServer: true });
+
+  eventsWss.on("connection", (ws, req) => {
+    const ip = ipFromRequest(req);
+    const currentCount = eventsIpCounts.get(ip) ?? 0;
+    if (currentCount >= maxPerIp) {
+      try {
+        ws.close(1013, "too many connections from this IP");
+      } catch {
+        // ignore
+      }
+      return;
+    }
+    eventsIpCounts.set(ip, currentCount + 1);
+    eventsClients.set(ws, {
+      ip,
+      contractId: contractFromRequest(req),
+      lastPongAt: Date.now(),
+    });
+
+    ws.on("pong", () => {
+      const state = eventsClients.get(ws);
+      if (state) state.lastPongAt = Date.now();
+    });
+    const cleanup = () => {
+      if (!eventsClients.has(ws)) return;
+      eventsClients.delete(ws);
+      const next = (eventsIpCounts.get(ip) ?? 1) - 1;
+      if (next <= 0) eventsIpCounts.delete(ip);
+      else eventsIpCounts.set(ip, next);
+    };
+    ws.on("close", cleanup);
+    ws.on("error", cleanup);
+  });
+
+  attachEventsListener();
+  startHeartbeat();
+
+  return eventsWss;
+}
+
+/**
+ * Test-only reset hook: terminates every open WebSocket, clears in-memory
+ * client state, stops the heartbeat, unregisters the vault listener, and
+ * closes both `WebSocketServer` instances so jest / bun test can exit the
+ * event loop cleanly between test files.
+ */
+export function _resetEventsServerForTests(): void {
+  for (const ws of eventsClients.keys()) {
+    try {
+      ws.terminate();
+    } catch {
+      // ignore
+    }
+  }
+  eventsClients.clear();
+  eventsIpCounts.clear();
+  if (eventsHeartbeatTimer) {
+    clearInterval(eventsHeartbeatTimer);
+    eventsHeartbeatTimer = null;
+  }
+  if (vaultEventListener) {
+    vaultEventEmitter.off(VAULT_EVENT, vaultEventListener);
+    vaultEventListener = null;
+  }
+  if (eventsWss) {
+    try {
+      eventsWss.close();
+    } catch {
+      // ignore
+    }
+    eventsWss = null;
+  }
+  for (const ws of clients.keys()) {
+    try {
+      ws.terminate();
+    } catch {
+      // ignore
+    }
+  }
+  clients.clear();
+  if (wss) {
+    try {
+      wss.close();
+    } catch {
+      // ignore
+    }
+    wss = null;
+  }
+}
+
+/**
+ * Attach both WebSocket feeds to an existing HTTP server:
+ *
+ * - `/ws`: authenticated binary score-update stream (unchanged).
+ * - `/ws/events`: public JSON vault event stream for browser clients.
+ *
+ * The server's `upgrade` event is dispatched by URL pathname so both feeds
+ * can coexist without one server's registration clobbering the other's.
  */
 export function attachWebSocketServer(server: HttpServer): WebSocketServer {
-  wss = new WebSocketServer({
-    server,
-    path: "/ws",
-    verifyClient: (info, cb) => {
-      if (authenticate(info.req)) return cb(true);
-      cb(false, 1008, "Unauthorized");
-    },
-  });
+  wss = new WebSocketServer({ noServer: true });
 
   wss.on("connection", (ws) => {
     clients.set(ws, { subscriptions: new Set(), all: false });
@@ -137,6 +338,43 @@ export function attachWebSocketServer(server: HttpServer): WebSocketServer {
     ws.on("error", () => clients.delete(ws));
   });
 
+  const events = attachEventsWebSocketServer(server);
+
+  server.on("upgrade", (req, socket, head) => {
+    let pathname: string;
+    try {
+      pathname = new URL(req.url ?? "/", "http://placeholder.local").pathname;
+    } catch {
+      socket.destroy();
+      return;
+    }
+    if (pathname === WS_EVENTS_PATH) {
+      events.handleUpgrade(req, socket, head, (ws) => {
+        events.emit("connection", ws, req);
+      });
+      return;
+    }
+    if (pathname === "/ws") {
+      if (!authenticate(req)) {
+        // Emit a proper HTTP 401 rather than a bare socket close so
+        // debugging clients see something actionable.
+        socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+      wss!.handleUpgrade(req, socket, head, (ws) => {
+        wss!.emit("connection", ws, req);
+      });
+      return;
+    }
+    // Not a WebSocket path we serve; let another listener handle it, or
+    // close if nobody else does.
+    if (server.listenerCount("upgrade") <= 1) {
+      socket.destroy();
+    }
+  });
+
+  logger.info(`[websocket] admin binary feed on /ws, public JSON event feed on ${WS_EVENTS_PATH}`);
   return wss;
 }
 
@@ -150,7 +388,13 @@ export function broadcastScoreUpdate(update: ScoreUpdate): void {
   for (const [ws, state] of clients) {
     if (ws.readyState !== WebSocket.OPEN) continue;
     if (state.all || state.subscriptions.has(update.project_id)) {
-      ws.send(frame);
+      try {
+        ws.send(frame);
+      } catch (error) {
+        // Socket was closed between readyState check and send — clean up
+        ws.close();
+        clients.delete(ws);
+      }
     }
   }
 }

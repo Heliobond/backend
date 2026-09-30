@@ -1,5 +1,4 @@
 import { config, validateRequiredEnv, initEnv } from "../config";
-import { initEnv as initLibEnv } from "../lib/env";
 
 describe("Environment Config Module (Issue #272)", () => {
   const originalEnv = { ...process.env };
@@ -68,10 +67,13 @@ describe("Environment Config Module (Issue #272)", () => {
       expect(freshConfig.FRONTEND_URL).toBe("http://localhost:3000");
     });
 
-    it("lib/env initEnv returns default port and frontend url", () => {
-      const libEnv = initLibEnv();
-      expect(libEnv.PORT).toBeDefined();
-      expect(libEnv.FRONTEND_URL).toBeDefined();
+    it("config initEnv returns default port and frontend url", () => {
+      process.env.ADMIN_SECRET_KEY = "test-secret-key";
+      process.env.PROJECT_REGISTRY_CONTRACT_ID = "C1234567890";
+
+      const configEnv = initEnv();
+      expect(configEnv.PORT).toBeDefined();
+      expect(configEnv.FRONTEND_URL).toBeDefined();
     });
   });
 });

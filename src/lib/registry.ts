@@ -7,6 +7,7 @@ import {
   rpc,
   Account,
 } from "@stellar/stellar-sdk";
+import { parseContractError } from "./contractErrors";
 import {
   withRpcConnection,
   networkPassphrase,
@@ -181,6 +182,162 @@ export async function getTotalProjects(): Promise<number> {
       end();
       stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });
       throw new Error("total_projects simulation returned no result value");
+    }
+
+    end();
+    stellarRpcTotal.inc({ operation: "simulateTransaction", result: "success" });
+    return Number(scValToNative(retval));
+  });
+}
+
+/**
+ * A single entry from the contract's score ring buffer (#769).
+ * Timestamps are ledger unix seconds; the `date` field is populated in the
+ * route layer where we shape the on-chain data into `PricePoint` records.
+ */
+export interface OnChainScoreHistoryEntry {
+  timestamp: number;
+  credit_quality: number;
+  green_impact: number;
+}
+
+/**
+ * Thrown when a contract read returned `ProjectNotFound` or `ProjectArchived`
+ * (#769). Callers convert this to a 404 without leaking Soroban error strings
+ * or stack traces.
+ */
+export class ProjectNotFoundError extends Error {
+  constructor(projectId: number) {
+    super(`Project ${projectId} not found or archived`);
+    this.name = "ProjectNotFoundError";
+  }
+}
+
+function isMissingProjectError(err: unknown): boolean {
+  const decoded = parseContractError(err, "registry");
+  return (
+    decoded !== null && (decoded.name === "ProjectNotFound" || decoded.name === "ProjectArchived")
+  );
+}
+
+/**
+ * Read `get_score_history(id)` from the registry (#769).
+ *
+ * Simulates the getter with a dummy account (no signature required). Returns
+ * the raw entries in the order the contract stored them; the caller is
+ * responsible for sorting, bucketing, and range filtering.
+ */
+export async function getScoreHistory(projectId: number): Promise<OnChainScoreHistoryEntry[]> {
+  return withRpcConnection(async (client) => {
+    const contract = new Contract(REGISTRY_CONTRACT_ID);
+    const dummyAccount = new Account(
+      "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+      "0",
+    );
+
+    const tx = new TransactionBuilder(dummyAccount, { fee: BASE_FEE, networkPassphrase })
+      .addOperation(contract.call("get_score_history", nativeToScVal(projectId, { type: "u32" })))
+      .setTimeout(config.TX_TIMEOUT_SECONDS)
+      .build();
+
+    const end = stellarRpcDuration.startTimer({ operation: "simulateTransaction" });
+
+    let sim: rpc.Api.SimulateTransactionResponse;
+    try {
+      sim = await withRpcRetry(
+        () => client.simulateTransaction(tx),
+        "stellar:simulateTransaction:getScoreHistory",
+      );
+    } catch (err) {
+      end();
+      stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });
+      throw err;
+    }
+
+    if ("error" in sim) {
+      end();
+      stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });
+      if (isMissingProjectError(sim.error)) {
+        throw new ProjectNotFoundError(projectId);
+      }
+      throw new Error(sim.error);
+    }
+
+    const retval = sim.result?.retval;
+    if (retval === undefined) {
+      end();
+      stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });
+      throw new Error("get_score_history simulation returned no result value");
+    }
+
+    end();
+    stellarRpcTotal.inc({ operation: "simulateTransaction", result: "success" });
+
+    const raw = scValToNative(retval);
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((entry): OnChainScoreHistoryEntry | null => {
+        if (typeof entry !== "object" || entry === null) return null;
+        const e = entry as Record<string, unknown>;
+        const timestamp =
+          typeof e.timestamp === "bigint" ? Number(e.timestamp) : Number(e.timestamp);
+        const cq = Number(e.credit_quality);
+        const gi = Number(e.green_impact);
+        if (!Number.isFinite(timestamp) || !Number.isFinite(cq) || !Number.isFinite(gi))
+          return null;
+        return { timestamp, credit_quality: cq, green_impact: gi };
+      })
+      .filter((e): e is OnChainScoreHistoryEntry => e !== null);
+  });
+}
+
+/**
+ * Read the current `get_interest_rate(id)` from the registry (#769).
+ *
+ * Returns the interest rate in basis points (`rate_bps`). Converted to a
+ * percentage yield in the price-history route.
+ */
+export async function getInterestRate(projectId: number): Promise<number> {
+  return withRpcConnection(async (client) => {
+    const contract = new Contract(REGISTRY_CONTRACT_ID);
+    const dummyAccount = new Account(
+      "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+      "0",
+    );
+
+    const tx = new TransactionBuilder(dummyAccount, { fee: BASE_FEE, networkPassphrase })
+      .addOperation(contract.call("get_interest_rate", nativeToScVal(projectId, { type: "u32" })))
+      .setTimeout(config.TX_TIMEOUT_SECONDS)
+      .build();
+
+    const end = stellarRpcDuration.startTimer({ operation: "simulateTransaction" });
+
+    let sim: rpc.Api.SimulateTransactionResponse;
+    try {
+      sim = await withRpcRetry(
+        () => client.simulateTransaction(tx),
+        "stellar:simulateTransaction:getInterestRate",
+      );
+    } catch (err) {
+      end();
+      stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });
+      throw err;
+    }
+
+    if ("error" in sim) {
+      end();
+      stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });
+      if (isMissingProjectError(sim.error)) {
+        throw new ProjectNotFoundError(projectId);
+      }
+      throw new Error(sim.error);
+    }
+
+    const retval = sim.result?.retval;
+    if (retval === undefined) {
+      end();
+      stellarRpcTotal.inc({ operation: "simulateTransaction", result: "failure" });
+      throw new Error("get_interest_rate simulation returned no result value");
     }
 
     end();
