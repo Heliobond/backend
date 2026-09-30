@@ -7,6 +7,17 @@ const CSRF_TOKEN_LENGTH = 32;
 const CSRF_TOKEN_EXPIRY_MS = 60 * 60 * 1000;
 const SESSION_COOKIE_NAME = "CSRF-SESSION";
 
+// Machine-to-machine POSTs that carry no cookies or session, so there is
+// nothing for CSRF to protect. Browser telemetry beacons use
+// `navigator.sendBeacon`, which cannot set the custom CSRF header the
+// double-submit check requires.
+const CSRF_EXEMPT_PATHS = new Set<string>(["/v1/telemetry", "/api/telemetry"]);
+
+function isCsrfExemptPath(path: string): boolean {
+  const normalized = path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
+  return CSRF_EXEMPT_PATHS.has(normalized);
+}
+
 interface CsrfTokenEntry {
   token: string;
   createdAt: number;
@@ -88,6 +99,11 @@ export function setCsrfCookie(req: Request, res: Response): void {
 }
 
 export function csrfProtection(req: Request, res: Response, next: NextFunction): void {
+  if (isCsrfExemptPath(req.path)) {
+    next();
+    return;
+  }
+
   const method = req.method.toUpperCase();
   if (method === "GET" || method === "HEAD" || method === "OPTIONS") {
     setCsrfCookie(req, res);

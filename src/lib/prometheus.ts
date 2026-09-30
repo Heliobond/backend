@@ -61,6 +61,16 @@ export const cronJobTotal = new client.Counter({
   registers: [register],
 });
 
+// Projects skipped by the cron before submitting, labelled by reason
+// (paused, archived, deleted, unchanged) so the "ALL projects failed" alert
+// stays quiet during expected states (#765).
+export const cronProjectsSkipped = new client.Counter({
+  name: "cron_projects_skipped_total",
+  help: "Projects the cron skipped before submitting, labelled by reason",
+  labelNames: ["job", "reason"] as const,
+  registers: [register],
+});
+
 // ── Transaction metrics ─────────────────────────────────────────────────────
 export const txSubmissionTotal = new client.Counter({
   name: "stellar_tx_submissions_total",
@@ -102,6 +112,25 @@ export const oracleSubmitLatency = new client.Histogram({
   help: "Time from transaction submission to confirmation",
   labelNames: ["result"] as const,
   buckets: [0.5, 1, 2, 5, 10, 15, 30, 60],
+  registers: [register],
+});
+
+// ── Frontend telemetry (#770) ───────────────────────────────────────────────
+// Ingested by `POST /v1/telemetry`. Labels are restricted to the validated
+// schema fields so a report can never smuggle PII (or unbounded cardinality)
+// into the time series.
+export const frontendErrorsTotal = new client.Counter({
+  name: "frontend_errors_total",
+  help: "Frontend error reports by kind and decoded Soroban contract error name",
+  labelNames: ["kind", "contract_error_name"] as const,
+  registers: [register],
+});
+
+export const frontendWebVital = new client.Histogram({
+  name: "frontend_web_vital",
+  help: "Frontend Web Vitals measurements by metric name and rating",
+  labelNames: ["name", "rating"] as const,
+  buckets: [50, 100, 200, 500, 1000, 2000, 3000, 5000, 10000, 30000],
   registers: [register],
 });
 

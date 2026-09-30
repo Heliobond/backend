@@ -83,22 +83,50 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** List all projects */
+    /**
+     * List all projects
+     * @description Paginated list using the frontend's `page`/`pageSize` contract. `limit` is an alias for `pageSize`; `cursor` is a legacy offset alias that still works.
+     */
     get: {
       parameters: {
-        query?: never;
+        query?: {
+          /** @description 1-based page number */
+          page?: number;
+          /** @description Items per page (max 100) */
+          pageSize?: number;
+          /** @description Alias for pageSize */
+          limit?: number;
+          /** @description Legacy offset cursor; applied as an offset when present */
+          cursor?: number;
+          min_score?: number;
+          max_score?: number;
+          min_date?: number;
+          max_date?: number;
+          sort_by?:
+            | "id"
+            | "credit_quality"
+            | "green_impact"
+            | "power_output_kw"
+            | "efficiency_pct"
+            | "forest_density_pct"
+            | "ndvi_score"
+            | "timestamp";
+          sort_order?: "asc" | "desc";
+        };
         header?: never;
         path?: never;
         cookie?: never;
       };
       requestBody?: never;
       responses: {
-        /** @description Array of projects */
+        /** @description Paginated projects */
         200: {
           headers: {
             [name: string]: unknown;
           };
-          content?: never;
+          content: {
+            "application/json": components["schemas"]["PaginatedProjectsResponse"];
+          };
         };
       };
     };
@@ -117,7 +145,10 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** Get a single project */
+    /**
+     * Get a single project
+     * @description Nested project/detail/verifiedMetadata response matching the frontend's `ProjectWithDetail` shape. Unknown or deleted ids return 404.
+     */
     get: {
       parameters: {
         query?: never;
@@ -129,13 +160,13 @@ export interface paths {
       };
       requestBody?: never;
       responses: {
-        /** @description Project object */
+        /** @description Project with detail */
         200: {
           headers: {
             [name: string]: unknown;
           };
           content: {
-            "application/json": components["schemas"]["Project"];
+            "application/json": components["schemas"]["ProjectWithDetail"];
           };
         };
         /** @description Not found */
@@ -225,6 +256,96 @@ export interface paths {
           };
           content: {
             "application/json": components["schemas"]["Trend"];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/projects/{id}/price-history": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Price and yield chart series for a project (#769)
+     * @description Returns `PricePoint[]` = `{date, price, yield?}` for the project's chart. Values are derived from the on-chain `get_score_history` timestamps and the current `get_interest_rate`. `yield` is `rate_bps / 100`; `price` is `100 / (1 + yield/100)` (one-period present value). See API.md for the full formula.
+     */
+    get: {
+      parameters: {
+        query?: {
+          /** @description Start timestamp (unix ms) */
+          from?: number;
+          /** @description End timestamp (unix ms) */
+          to?: number;
+          /** @description Bucket size for the series */
+          interval?: "day" | "week";
+        };
+        header?: never;
+        path: {
+          id: number;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description PricePoint series in ascending date order */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            /**
+             * @example {
+             *       "project_id": 27,
+             *       "interval": "day",
+             *       "count": 3,
+             *       "points": [
+             *         {
+             *           "date": "2026-09-28",
+             *           "price": 96.15,
+             *           "yield": 4
+             *         },
+             *         {
+             *           "date": "2026-09-29",
+             *           "price": 96.15,
+             *           "yield": 4
+             *         },
+             *         {
+             *           "date": "2026-09-30",
+             *           "price": 96.15,
+             *           "yield": 4
+             *         }
+             *       ]
+             *     }
+             */
+            "application/json": unknown;
+          };
+        };
+        /** @description Invalid range or interval */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            "application/json": components["schemas"]["Error"];
+          };
+        };
+        /** @description Unknown or archived project */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            "application/json": components["schemas"]["Error"];
           };
         };
       };
@@ -644,6 +765,210 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/creators/applications": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Submit a creator application */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          "application/json": {
+            name: string;
+            location: string;
+            capacity_kw: number;
+            /** @description ipfs://, https:// or ar:// URIs only. */
+            documents: string[];
+          };
+        };
+      };
+      responses: {
+        /** @description Application submitted */
+        201: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            "application/json": components["schemas"]["CreatorApplication"];
+          };
+        };
+        /** @description Invalid metadata or document URI */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Missing or invalid wallet authentication */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/creators/applications/{id}/create-project-tx": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Build an unsigned create_project transaction (#771) */
+    get: {
+      parameters: {
+        query?: {
+          sequence?: string;
+          maturity_date?: number;
+        };
+        header?: never;
+        path: {
+          id: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Unsigned create_project XDR (never signed server-side) */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Application belongs to another wallet */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Application is not approved yet */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/admin/creators/applications/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get a creator application */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          id: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Application */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            "application/json": components["schemas"]["CreatorApplication"];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /** Advance the creator application review workflow */
+    patch: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          id: string;
+        };
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          "application/json": {
+            /** @enum {string} */
+            status: "in_review" | "approved" | "rejected";
+            actor?: string;
+            note?: string;
+            /** @description Whitelister G... address; when set the response includes the unsigned set_whitelist XDR. */
+            whitelister?: string;
+            whitelister_sequence?: string;
+          };
+        };
+      };
+      responses: {
+        /** @description Updated application; includes set_whitelist_tx on approval when a whitelister is supplied */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Invalid transition or input */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -656,6 +981,35 @@ export interface components {
       name?: string;
       credit_quality?: number;
       green_impact?: number;
+      power_output_kw?: number;
+      efficiency_pct?: number;
+      forest_density_pct?: number;
+      ndvi_score?: number;
+      timestamp?: number;
+    };
+    ProjectDetail: {
+      power_output_kw?: number;
+      efficiency_pct?: number;
+      forest_density_pct?: number;
+      ndvi_score?: number;
+      timestamp?: number;
+      funding?: number;
+    };
+    ProjectWithDetail: {
+      project: components["schemas"]["Project"];
+      detail: components["schemas"]["ProjectDetail"];
+      /** @description Whether the backend holds metadata for the project. */
+      verifiedMetadata: boolean;
+    };
+    PaginatedProjectsResponse: {
+      projects: components["schemas"]["Project"][];
+      total: number;
+      filtered_total?: number;
+      page: number;
+      pageSize: number;
+      hasMore: boolean;
+      /** @description Legacy cursor alias: next offset when another page follows. */
+      cursor?: number;
     };
     ScoreHistory: {
       project_id?: number;
@@ -689,6 +1043,17 @@ export interface components {
       id?: string;
       url?: string;
       secret?: string;
+    };
+    CreatorApplication: {
+      id?: string;
+      wallet?: string;
+      /** @enum {string} */
+      status?: "submitted" | "in_review" | "approved" | "rejected";
+      /** @description Validated against src/schemas/creator-application.schema.json (name, location, capacity_kw, documents). */
+      metadata?: Record<string, never>;
+      metadata_hash?: string | null;
+      metadata_uri?: string | null;
+      project_id?: number | null;
     };
   };
   responses: never;
