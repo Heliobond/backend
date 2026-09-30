@@ -81,50 +81,13 @@ import { initBenchmarkSamples } from "./lib/benchmarking";
 import { createBenchmarkSampleInitializer } from "./lib/benchmarkStartup";
 import { getImpactCertificatePublicKey } from "./lib/impactCertificate";
 
-const env = initEnv();
-
-// ── Process-level error handlers (#694) ──────────────────────────────────────
-// These handlers must be registered early (before any async work) to catch
-// unhandled promise rejections and uncaught exceptions that would otherwise
-// crash the process silently or with only a deprecation warning.
-process.on("unhandledRejection", (reason: unknown, promise: Promise<unknown>) => {
-  logger.error("[unhandledRejection] Unhandled promise rejection detected", {
-    ...logger.formatError(reason),
-    promise: String(promise),
-  });
-  gracefulShutdown("unhandledRejection").catch(() => process.exit(1));
-});
-
-process.on("uncaughtException", (err: Error) => {
-  logger.error("[uncaughtException] Uncaught exception detected", logger.formatError(err));
-  process.exit(1);
-});
-
-// Seed initial admin from env var (RBAC bootstrap)
-const initialAdminUserId = process.env.INITIAL_ADMIN_USER_ID?.trim();
-if (initialAdminUserId) {
-  assignRole(initialAdminUserId, "admin");
-}
-
-// Initialize APM in background — errors are logged but don't block startup
-initApm().catch((err: Error) => {
-  console.error("[startup] APM initialization failed:", err.message);
-});
-
-if (!process.env.ADMIN_API_KEY) {
-  console.warn(
-    "[startup] WARNING: ADMIN_API_KEY is not set. Admin endpoints will return 500 errors.",
-  );
-}
-
-if (!process.env.REQUEST_SIGNING_SECRET) {
-  logger.warn(
-    "[startup] WARNING: REQUEST_SIGNING_SECRET is not set. Admin endpoints will not verify request signatures.",
-  );
-}
+// Startup side effects (env validation, process handlers, APM, cron jobs,
+// HTTP/gRPC binding) live in `bootstrap()` at the bottom of this file and run
+// only outside a test runner. Importing `app` (e.g. from tests) therefore
+// constructs the real Express app without binding any port.
 
 const app = express();
-const PORT = env.PORT;
+const PORT = config.PORT;
 
 function parseTimeoutMs(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
@@ -194,7 +157,7 @@ function validateCorsOrigin(origin: string | undefined): string | undefined {
   return origin;
 }
 
-const corsOrigin = validateCorsOrigin(env.FRONTEND_URL);
+const corsOrigin = validateCorsOrigin(config.FRONTEND_URL);
 
 // Timezone for all cron schedules. Defaults to UTC so behaviour is identical
 // across servers regardless of OS locale. Override with e.g. CRON_TIMEZONE=America/New_York.
@@ -214,7 +177,7 @@ app.use(
 app.use(requestTimeout(REQUEST_TIMEOUT_MS));
 app.use("/v1/admin", requestTimeout(ADMIN_REQUEST_TIMEOUT_MS));
 app.use("/api/admin", requestTimeout(ADMIN_REQUEST_TIMEOUT_MS));
-app.use(express.json({ limit: env.BODY_SIZE_LIMIT }));
+app.use(express.json({ limit: config.BODY_SIZE_LIMIT }));
 app.use(sanitizeInputs);
 app.use(csrfProtection);
 app.use(requestLogger);
@@ -342,10 +305,14 @@ v1.use(acceptVersion);
 v1.use("/iot", publicLimiter, apiKeyAuth, iotRouter);
 v1.use("/admin/feature-flags/analytics", ipWhitelist, adminLimiter, requestSigning, adminRouter);
 v1.use("/admin/batch", ipWhitelist, adminLimiter, requestSigning, batchRouter);
-v1.use("/projects", publicLimiter, apiKeyAuth, projectsRouter);
+// Project sub-routes and the literal `/aggregate` path must be registered
+// before the general `/projects` mount below. Otherwise `/projects/aggregate`
+// is captured by `projectsRouter`'s `/:id` route (id="aggregate"), which
+// `parseProjectId` rejects with 400 (#760).
+v1.use("/projects/aggregate", publicLimiter, apiKeyAuth, aggregateRouter);
 v1.use("/projects/:id/history", publicLimiter, apiKeyAuth, historyRouter);
 v1.use("/projects/:id/price-history", publicLimiter, apiKeyAuth, priceHistoryRouter);
-v1.use("/projects/aggregate", publicLimiter, apiKeyAuth, aggregateRouter);
+v1.use("/projects", publicLimiter, apiKeyAuth, projectsRouter);
 v1.use("/portfolio", publicLimiter, apiKeyAuth, portfolioRouter);
 v1.use("/roles", ipWhitelist, adminLimiter, rolesRouter);
 v1.use("/webhooks", ipWhitelist, adminLimiter, requestSigning, webhooksRouter);
@@ -369,16 +336,20 @@ v1.use("/admin/api-keys", ipWhitelist, adminLimiter, requestSigning, apiKeysRout
 v1.use("/notifications", publicLimiter, publicNotificationsRouter); // email-link targets (confirm/unsubscribe)
 v1.use("/notifications", publicLimiter, apiKeyAuth, notificationsRouter);
 
+// Mount the versioned router. Without this every `/v1/*` route registered above
+// is unreachable (the request falls through to the JSON 404 handler).
+app.use("/v1", v1);
+
 // ── Legacy /api paths (deprecated) ──────────────────────────────────────────
 // Kept for backward compatibility; will be removed after 2027-01-01.
 app.use("/api", legacyApiUsage(), deprecationHeaders, versionHeaders);
 app.use("/api/iot", publicLimiter, apiKeyAuth, iotRouter);
 app.use("/api/admin", ipWhitelist, adminLimiter, adminRouter);
 app.use("/api/admin/batch", ipWhitelist, adminLimiter, batchRouter);
-app.use("/api/projects", publicLimiter, apiKeyAuth, projectsRouter);
+app.use("/api/projects/aggregate", publicLimiter, apiKeyAuth, aggregateRouter);
 app.use("/api/projects/:id/history", publicLimiter, apiKeyAuth, historyRouter);
 app.use("/api/projects/:id/price-history", publicLimiter, apiKeyAuth, priceHistoryRouter);
-app.use("/api/projects/aggregate", publicLimiter, apiKeyAuth, aggregateRouter);
+app.use("/api/projects", publicLimiter, apiKeyAuth, projectsRouter);
 app.use("/api/portfolio", publicLimiter, apiKeyAuth, portfolioRouter);
 app.use("/api/roles", ipWhitelist, adminLimiter, rolesRouter);
 app.use("/api/webhooks", ipWhitelist, adminLimiter, webhooksRouter);
@@ -399,194 +370,245 @@ app.use("/api/admin/api-keys", ipWhitelist, adminLimiter, apiKeysRouter);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-// ── Cron: index contract events every 5 minutes ──────────────────────────────
-// `cronTasks` and `scheduleCron` are declared here (not at the bottom of the
-// file) because the first scheduleCron call below pushes into the array — a
-// const declared later would still be in its temporal dead zone here.
-const cronTasks: ScheduledTask[] = [];
+export { app };
 
-function scheduleCron(
-  expression: string,
-  fn: () => void | Promise<void>,
-  opts?: { timezone?: string },
-): void {
-  const task = cron.schedule(expression, fn, opts);
-  cronTasks.push(task);
-}
+/**
+ * Register process-level handlers, validate the environment, and bind the
+ * HTTP/gRPC servers. Invoked on startup outside a test runner (see the bottom
+ * of the file), so importing `app` from tests constructs the real Express app
+ * without side effects such as opening sockets or scheduling cron jobs.
+ */
+function bootstrap(): void {
+  initEnv();
 
-scheduleCron(
-  "*/5 * * * *",
-  async () => {
-    if (isShuttingDown) return;
-    try {
-      logger.info("[cron] indexing new events");
-      await indexer.poll();
-      recordCronRun("indexer", "success");
-    } catch (err) {
-      if (!isErrorRateLimited("cron:indexer")) {
-        logger.error("[cron] indexer poll failed", logger.formatError(err));
-      }
-      recordCronRun("indexer", "error");
-    }
-  },
-  { timezone: CRON_TIMEZONE },
-);
-
-// ── Cron: hourly score update ────────────────────────────────────────────────
-// Guards against overlapping runs: with many projects and sequential Soroban
-// transactions, a run can take longer than the 1-hour schedule interval. Without
-// this lock, an overlapping invocation could submit duplicate on-chain updates.
-let isScoreUpdateRunning = false;
-
-scheduleCron(
-  "0 * * * *",
-  async () => {
-    if (isShuttingDown) return;
-    if (isScoreUpdateRunning) {
-      logger.warn("[cron] hourly score update already in progress, skipping this run");
-      return;
-    }
-    isScoreUpdateRunning = true;
-    try {
-      await runHourlyScoreUpdate();
-    } finally {
-      isScoreUpdateRunning = false;
-    }
-  },
-  { timezone: CRON_TIMEZONE },
-);
-
-// ── Cron: retry queued transactions every 5 minutes ──────────────────────────
-scheduleCron(
-  "*/5 * * * *",
-  async () => {
-    if (isShuttingDown) return;
-    await runTxQueueRetry();
-  },
-  { timezone: CRON_TIMEZONE },
-);
-
-// ── Cron: alert on extended RPC outage (every 5 minutes) ────────────────────
-scheduleCron(
-  "*/5 * * * *",
-  async () => {
-    if (isShuttingDown) return;
-    if (isRpcOutageExtended(300_000)) {
-      const status = getRpcStatus();
-      logger.error(
-        `[alert] Stellar RPC outage detected: ` +
-          `consecutiveFailures=${status.consecutiveFailures}, ` +
-          `outageDurationMs=${status.outageDurationMs}, ` +
-          `lastSuccessAgoMs=${status.lastSuccessAgoMs}`,
-      );
-    }
-  },
-  { timezone: CRON_TIMEZONE },
-);
-
-// ── Cron: check API key rotations every hour ────────────────────────────────
-scheduleCron(
-  "0 * * * *",
-  () => {
-    if (isShuttingDown) return;
-    try {
-      const rotated = checkScheduledRotations();
-      if (rotated.length > 0) {
-        logger.info("[cron] API key rotations executed", {
-          count: rotated.length,
-          key_ids: rotated.map((k) => k.id),
-        });
-      }
-    } catch (err) {
-      if (!isErrorRateLimited("cron:api-key-rotation")) {
-        logger.error("[cron] API key rotation check failed", {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-      recordCronRun("api-key-rotation", "error");
-    }
-  },
-  { timezone: CRON_TIMEZONE },
-);
-
-const initializeBenchmarkSamples = createBenchmarkSampleInitializer({
-  getTotalProjects,
-  seedSamples: initBenchmarkSamples,
-  warn: logger.warn,
-});
-
-// ── Coordinated server startup (#692) ────────────────────────────────────────
-// Start both gRPC and HTTP servers in a coordinated way so that if either fails
-// to bind, the other is properly cleaned up. This prevents half-initialized state
-// where gRPC is running but HTTP isn't (or vice versa).
-let grpcServer: grpc.Server | null = null;
-
-const serverPromise = initializeBenchmarkSamples().then(async (sampleSize) => {
-  logger.info("[startup] benchmark samples initialized", { sample_size: sampleSize });
-
-  // First, start HTTP server
-  const httpServer = await new Promise<any>((resolve, reject) => {
-    const server = app.listen(PORT, () => {
-      logger.info(`[startup] HTTP server listening on port ${PORT}`);
-      resolve(server);
+  // ── Process-level error handlers (#694) ──────────────────────────────────────
+  // These handlers must be registered early (before any async work) to catch
+  // unhandled promise rejections and uncaught exceptions that would otherwise
+  // crash the process silently or with only a deprecation warning.
+  process.on("unhandledRejection", (reason: unknown, promise: Promise<unknown>) => {
+    logger.error("[unhandledRejection] Unhandled promise rejection detected", {
+      ...logger.formatError(reason),
+      promise: String(promise),
     });
-    server.on("error", (err: NodeJS.ErrnoException) => {
-      logger.error("[startup] HTTP server bind failed", logger.formatError(err));
-      reject(err);
-    });
+    gracefulShutdown("unhandledRejection").catch(() => process.exit(1));
   });
 
-  // Then start gRPC server
-  try {
-    grpcServer = await new Promise<grpc.Server>((resolve, reject) => {
-      const server = startGrpcServer(50051, (err, port) => {
-        logger.error("[startup] gRPC server bind failed", {
-          ...logger.formatError(err),
-          port,
-        });
-        // Clean up HTTP server if gRPC fails
-        httpServer.close(() => {
-          logger.info("[startup] HTTP server closed due to gRPC bind failure");
-        });
-        reject(err);
-      });
-      // Give gRPC server a moment to bind before considering it successful
-      setTimeout(() => resolve(server), 100);
-    });
-    logger.info("[startup] gRPC server started successfully");
-  } catch (err) {
-    logger.error("[startup] coordinated startup failed, exiting");
+  process.on("uncaughtException", (err: Error) => {
+    logger.error("[uncaughtException] Uncaught exception detected", logger.formatError(err));
     process.exit(1);
+  });
+
+  // Seed initial admin from env var (RBAC bootstrap)
+  const initialAdminUserId = process.env.INITIAL_ADMIN_USER_ID?.trim();
+  if (initialAdminUserId) {
+    assignRole(initialAdminUserId, "admin");
   }
 
-  // Real-time score updates over WebSocket (ws://<host>/ws)
-  attachWebSocketServer(httpServer);
-  return httpServer;
-});
+  // Initialize APM in background — errors are logged but don't block startup
+  initApm().catch((err: Error) => {
+    console.error("[startup] APM initialization failed:", err.message);
+  });
 
-// GraphQL endpoint and playground setup
-app.all(
-  "/graphql",
-  createHandler({
-    schema: graphqlSchema,
-    rootValue: graphqlRoot,
-    context: (req: any) => createGraphQLContext(req.raw) as any,
-  }),
-);
+  if (!process.env.ADMIN_API_KEY) {
+    console.warn(
+      "[startup] WARNING: ADMIN_API_KEY is not set. Admin endpoints will return 500 errors.",
+    );
+  }
 
-app.get("/graphql-playground", (req, res) => {
-  // Generate a nonce for inline script CSP
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const nonce = require("crypto").randomBytes(16).toString("hex");
+  if (!process.env.REQUEST_SIGNING_SECRET) {
+    logger.warn(
+      "[startup] WARNING: REQUEST_SIGNING_SECRET is not set. Admin endpoints will not verify request signatures.",
+    );
+  }
 
-  res.setHeader("Content-Type", "text/html");
-  // Override CSP to allow inline script with nonce
-  res.setHeader(
-    "Content-Security-Policy",
-    `default-src 'self'; script-src 'self' https://unpkg.com 'nonce-${nonce}'; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; connect-src 'self'`,
+  // ── Cron: index contract events every 5 minutes ──────────────────────────────
+  // `cronTasks` and `scheduleCron` are declared here (not at the bottom of the
+  // file) because the first scheduleCron call below pushes into the array — a
+  // const declared later would still be in its temporal dead zone here.
+  const cronTasks: ScheduledTask[] = [];
+
+  function scheduleCron(
+    expression: string,
+    fn: () => void | Promise<void>,
+    opts?: { timezone?: string },
+  ): void {
+    const task = cron.schedule(expression, fn, opts);
+    cronTasks.push(task);
+  }
+
+  scheduleCron(
+    "*/5 * * * *",
+    async () => {
+      if (isShuttingDown) return;
+      try {
+        logger.info("[cron] indexing new events");
+        await indexer.poll();
+        recordCronRun("indexer", "success");
+      } catch (err) {
+        if (!isErrorRateLimited("cron:indexer")) {
+          logger.error("[cron] indexer poll failed", logger.formatError(err));
+        }
+        recordCronRun("indexer", "error");
+      }
+    },
+    { timezone: CRON_TIMEZONE },
   );
 
-  res.send(`
+  // ── Cron: hourly score update ────────────────────────────────────────────────
+  // Guards against overlapping runs: with many projects and sequential Soroban
+  // transactions, a run can take longer than the 1-hour schedule interval. Without
+  // this lock, an overlapping invocation could submit duplicate on-chain updates.
+  let isScoreUpdateRunning = false;
+
+  scheduleCron(
+    "0 * * * *",
+    async () => {
+      if (isShuttingDown) return;
+      if (isScoreUpdateRunning) {
+        logger.warn("[cron] hourly score update already in progress, skipping this run");
+        return;
+      }
+      isScoreUpdateRunning = true;
+      try {
+        await runHourlyScoreUpdate();
+      } finally {
+        isScoreUpdateRunning = false;
+      }
+    },
+    { timezone: CRON_TIMEZONE },
+  );
+
+  // ── Cron: retry queued transactions every 5 minutes ──────────────────────────
+  scheduleCron(
+    "*/5 * * * *",
+    async () => {
+      if (isShuttingDown) return;
+      await runTxQueueRetry();
+    },
+    { timezone: CRON_TIMEZONE },
+  );
+
+  // ── Cron: alert on extended RPC outage (every 5 minutes) ────────────────────
+  scheduleCron(
+    "*/5 * * * *",
+    async () => {
+      if (isShuttingDown) return;
+      if (isRpcOutageExtended(300_000)) {
+        const status = getRpcStatus();
+        logger.error(
+          `[alert] Stellar RPC outage detected: ` +
+            `consecutiveFailures=${status.consecutiveFailures}, ` +
+            `outageDurationMs=${status.outageDurationMs}, ` +
+            `lastSuccessAgoMs=${status.lastSuccessAgoMs}`,
+        );
+      }
+    },
+    { timezone: CRON_TIMEZONE },
+  );
+
+  // ── Cron: check API key rotations every hour ────────────────────────────────
+  scheduleCron(
+    "0 * * * *",
+    () => {
+      if (isShuttingDown) return;
+      try {
+        const rotated = checkScheduledRotations();
+        if (rotated.length > 0) {
+          logger.info("[cron] API key rotations executed", {
+            count: rotated.length,
+            key_ids: rotated.map((k) => k.id),
+          });
+        }
+      } catch (err) {
+        if (!isErrorRateLimited("cron:api-key-rotation")) {
+          logger.error("[cron] API key rotation check failed", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+        recordCronRun("api-key-rotation", "error");
+      }
+    },
+    { timezone: CRON_TIMEZONE },
+  );
+
+  const initializeBenchmarkSamples = createBenchmarkSampleInitializer({
+    getTotalProjects,
+    seedSamples: initBenchmarkSamples,
+    warn: logger.warn,
+  });
+
+  // ── Coordinated server startup (#692) ────────────────────────────────────────
+  // Start both gRPC and HTTP servers in a coordinated way so that if either fails
+  // to bind, the other is properly cleaned up. This prevents half-initialized state
+  // where gRPC is running but HTTP isn't (or vice versa).
+  let grpcServer: grpc.Server | null = null;
+
+  const serverPromise = initializeBenchmarkSamples().then(async (sampleSize) => {
+    logger.info("[startup] benchmark samples initialized", { sample_size: sampleSize });
+
+    // First, start HTTP server
+    const httpServer = await new Promise<any>((resolve, reject) => {
+      const server = app.listen(PORT, () => {
+        logger.info(`[startup] HTTP server listening on port ${PORT}`);
+        resolve(server);
+      });
+      server.on("error", (err: NodeJS.ErrnoException) => {
+        logger.error("[startup] HTTP server bind failed", logger.formatError(err));
+        reject(err);
+      });
+    });
+
+    // Then start gRPC server
+    try {
+      grpcServer = await new Promise<grpc.Server>((resolve, reject) => {
+        const server = startGrpcServer(50051, (err, port) => {
+          logger.error("[startup] gRPC server bind failed", {
+            ...logger.formatError(err),
+            port,
+          });
+          // Clean up HTTP server if gRPC fails
+          httpServer.close(() => {
+            logger.info("[startup] HTTP server closed due to gRPC bind failure");
+          });
+          reject(err);
+        });
+        // Give gRPC server a moment to bind before considering it successful
+        setTimeout(() => resolve(server), 100);
+      });
+      logger.info("[startup] gRPC server started successfully");
+    } catch (err) {
+      logger.error("[startup] coordinated startup failed, exiting");
+      process.exit(1);
+    }
+
+    // Real-time score updates over WebSocket (ws://<host>/ws)
+    attachWebSocketServer(httpServer);
+    return httpServer;
+  });
+
+  // GraphQL endpoint and playground setup
+  app.all(
+    "/graphql",
+    createHandler({
+      schema: graphqlSchema,
+      rootValue: graphqlRoot,
+      context: (req: any) => createGraphQLContext(req.raw) as any,
+    }),
+  );
+
+  app.get("/graphql-playground", (req, res) => {
+    // Generate a nonce for inline script CSP
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const nonce = require("crypto").randomBytes(16).toString("hex");
+
+    res.setHeader("Content-Type", "text/html");
+    // Override CSP to allow inline script with nonce
+    res.setHeader(
+      "Content-Security-Policy",
+      `default-src 'self'; script-src 'self' https://unpkg.com 'nonce-${nonce}'; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; connect-src 'self'`,
+    );
+
+    res.send(`
     <!DOCTYPE html>
     <html>
       <head>
@@ -608,95 +630,109 @@ app.get("/graphql-playground", (req, res) => {
       </body>
     </html>
   `);
-});
-
-// Periodically clear cached secrets so a rotated/compromised upstream
-// secret doesn't stay cached indefinitely (gated on SECRETS_ROTATION_ENABLED).
-startSecretRotation();
-
-// ── Graceful shutdown (#57) ──────────────────────────────────────────────────
-let isShuttingDown = false;
-
-async function gracefulShutdown(signal: string): Promise<void> {
-  if (isShuttingDown) return;
-  isShuttingDown = true;
-
-  const shutdownTimeoutMs = config.SHUTDOWN_TIMEOUT_MS;
-  logger.info(`[${signal}] graceful shutdown initiated (timeout: ${shutdownTimeoutMs}ms)`);
-
-  const shutdownPromise = (async () => {
-    // 1. Stop accepting new HTTP requests
-    logger.info("[shutdown] closing HTTP server (draining in-flight requests)…");
-    const server = await serverPromise;
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    logger.info("[shutdown] HTTP server closed");
-
-    // 2. Stop all cron jobs so no new work starts
-    logger.info(`[shutdown] stopping ${cronTasks.length} cron jobs…`);
-    for (const task of cronTasks) {
-      task.stop();
-    }
-    logger.info("[shutdown] cron jobs stopped");
-
-    // 3. Drain the RPC connection pool (waits up to 10 s for active connections)
-    logger.info("[shutdown] draining RPC connection pool…");
-    try {
-      await rpcPool.shutdown();
-      logger.info("[shutdown] connection pool drained");
-    } catch (err) {
-      logger.error("[shutdown] pool drain error", {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-
-    // 4. Stop the secret rotation timer so it doesn't keep the process alive
-    // or fire after shutdown begins.
-    stopSecretRotation();
-
-    // 5. Gracefully stop the gRPC server, letting in-flight/streaming RPCs
-    // (e.g. StreamProjectScores) drain instead of being killed mid-stream.
-    if (grpcServer) {
-      logger.info("[shutdown] draining gRPC server…");
-      await new Promise<void>((resolve) => {
-        const forceTimer = setTimeout(() => {
-          logger.warn("[shutdown] gRPC drain timed out, forcing shutdown");
-          grpcServer!.forceShutdown();
-          resolve();
-        }, shutdownTimeoutMs);
-        grpcServer!.tryShutdown((err) => {
-          clearTimeout(forceTimer);
-          if (err) {
-            logger.error("[shutdown] gRPC shutdown error", { error: err.message });
-          } else {
-            logger.info("[shutdown] gRPC server stopped");
-          }
-          resolve();
-        });
-      });
-    }
-
-    logger.info("[shutdown] clean exit");
-    process.exit(0);
-  })();
-
-  // Apply overall shutdown timeout — force exit if graceful cleanup takes too long
-  const timeoutPromise = new Promise<void>((_, reject) => {
-    setTimeout(() => {
-      reject(new Error(`Shutdown timed out after ${shutdownTimeoutMs}ms`));
-    }, shutdownTimeoutMs);
   });
 
-  try {
-    await Promise.race([shutdownPromise, timeoutPromise]);
-  } catch (err) {
-    logger.error("[shutdown] forced exit", {
-      error: err instanceof Error ? err.message : String(err),
+  // Periodically clear cached secrets so a rotated/compromised upstream
+  // secret doesn't stay cached indefinitely (gated on SECRETS_ROTATION_ENABLED).
+  startSecretRotation();
+
+  // ── Graceful shutdown (#57) ──────────────────────────────────────────────────
+  let isShuttingDown = false;
+
+  async function gracefulShutdown(signal: string): Promise<void> {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+
+    const shutdownTimeoutMs = config.SHUTDOWN_TIMEOUT_MS;
+    logger.info(`[${signal}] graceful shutdown initiated (timeout: ${shutdownTimeoutMs}ms)`);
+
+    const shutdownPromise = (async () => {
+      // 1. Stop accepting new HTTP requests
+      logger.info("[shutdown] closing HTTP server (draining in-flight requests)…");
+      const server = await serverPromise;
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      logger.info("[shutdown] HTTP server closed");
+
+      // 2. Stop all cron jobs so no new work starts
+      logger.info(`[shutdown] stopping ${cronTasks.length} cron jobs…`);
+      for (const task of cronTasks) {
+        task.stop();
+      }
+      logger.info("[shutdown] cron jobs stopped");
+
+      // 3. Drain the RPC connection pool (waits up to 10 s for active connections)
+      logger.info("[shutdown] draining RPC connection pool…");
+      try {
+        await rpcPool.shutdown();
+        logger.info("[shutdown] connection pool drained");
+      } catch (err) {
+        logger.error("[shutdown] pool drain error", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+
+      // 4. Stop the secret rotation timer so it doesn't keep the process alive
+      // or fire after shutdown begins.
+      stopSecretRotation();
+
+      // 5. Gracefully stop the gRPC server, letting in-flight/streaming RPCs
+      // (e.g. StreamProjectScores) drain instead of being killed mid-stream.
+      if (grpcServer) {
+        logger.info("[shutdown] draining gRPC server…");
+        await new Promise<void>((resolve) => {
+          const forceTimer = setTimeout(() => {
+            logger.warn("[shutdown] gRPC drain timed out, forcing shutdown");
+            grpcServer!.forceShutdown();
+            resolve();
+          }, shutdownTimeoutMs);
+          grpcServer!.tryShutdown((err) => {
+            clearTimeout(forceTimer);
+            if (err) {
+              logger.error("[shutdown] gRPC shutdown error", { error: err.message });
+            } else {
+              logger.info("[shutdown] gRPC server stopped");
+            }
+            resolve();
+          });
+        });
+      }
+
+      logger.info("[shutdown] clean exit");
+      process.exit(0);
+    })();
+
+    // Apply overall shutdown timeout — force exit if graceful cleanup takes too long
+    const timeoutPromise = new Promise<void>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error(`Shutdown timed out after ${shutdownTimeoutMs}ms`));
+      }, shutdownTimeoutMs);
     });
-    process.exit(1);
+
+    try {
+      await Promise.race([shutdownPromise, timeoutPromise]);
+    } catch (err) {
+      logger.error("[shutdown] forced exit", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      process.exit(1);
+    }
   }
+
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 }
 
-process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
-process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+// Start the servers only outside a test runner. Tests import `app` directly
+// with supertest, so they must not bind ports or schedule cron jobs.
+// `require.main === module` cannot be used here: `process-exit-codes.test.ts`
+// boots the real server by `require`-ing this module from a plain Node child
+// process, where `require.main` is the `-e` script rather than this module.
+// Jest installs an `expect` global (visible to required modules); a plain Node
+// process does not have one.
+const runningUnderTestRunner = typeof (globalThis as { expect?: unknown }).expect === "function";
+
+if (!runningUnderTestRunner) {
+  bootstrap();
+}
 
 export default app;
