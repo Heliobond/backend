@@ -54,6 +54,16 @@ function classifyContractSkip(err: unknown): CronSkipReason | null {
  * Per-project archived and deleted contract errors are similarly classified
  * as skips rather than failures so they don't trip the "ALL projects failed"
  * alert.
+ *
+ * Outcomes are counted as three distinct states (#713):
+ *  - `successCount`  — the update reached the chain,
+ *  - `failureCount`  — the update errored,
+ *  - `deferredCount` — the RPC was unavailable, so the update was queued.
+ *
+ * A deferral is deliberately not a success: nothing was written on-chain. It is
+ * also not a failure: the project is healthy, the transport is not. Keeping it
+ * separate is what allows a total RPC outage, where every project defers, to be
+ * reported as an outage instead of a 100% successful batch.
  */
 export async function runHourlyScoreUpdate(): Promise<void> {
   const endCronTimer = cronJobDuration.startTimer({ job: "score-update" });
@@ -95,6 +105,12 @@ export async function runHourlyScoreUpdate(): Promise<void> {
     let successCount = 0;
     let failureCount = 0;
     let skippedCount = 0;
+    // Projects whose update was queued rather than submitted on-chain, because
+    // the RPC was unavailable. This is neither a success nor a failure: no
+    // on-chain write happened, but nothing is wrong with the project either.
+    // It is counted separately (#713) so that a total RPC outage, where every
+    // project is deferred, cannot masquerade as a 100% successful batch.
+    let deferredCount = 0;
 
     for (const projectId of projectIds) {
       await withProjectLock(projectId, async () => {
@@ -111,7 +127,9 @@ export async function runHourlyScoreUpdate(): Promise<void> {
             enqueue(projectId, scoreResult.creditQuality, scoreResult.greenImpact, "RPC degraded");
             markCompleted(projectId);
             resetErrorRateLimit(`cron:project-${projectId}`);
-            successCount++;
+            // Not a success: the update was queued, not submitted. Counting it
+            // as one made a total RPC outage look like a fully successful run.
+            deferredCount++;
             return;
           }
 
@@ -197,10 +215,20 @@ export async function runHourlyScoreUpdate(): Promise<void> {
       });
     }
 
-    const totalProcessed = successCount + failureCount;
-    const failureRate = totalProcessed > 0 ? failureCount / totalProcessed : 0;
+    // Every project that reached a terminal state this run. `skipped` projects
+    // are excluded because they never attempted an update.
+    const totalProcessed = successCount + failureCount + deferredCount;
 
-    if (totalProcessed > 0 && failureCount === totalProcessed) {
+    // Failure rate deliberately excludes deferred projects. A deferral is not
+    // a failure, so including it in the denominator would dilute a genuine
+    // partial-failure signal during an RPC outage.
+    const attemptedOnChain = successCount + failureCount;
+    const failureRate = attemptedOnChain > 0 ? failureCount / attemptedOnChain : 0;
+
+    const allFailed = totalProcessed > 0 && failureCount === totalProcessed;
+    const allDeferred = totalProcessed > 0 && deferredCount === totalProcessed;
+
+    if (allFailed) {
       // All attempted projects failed, likely a systemic RPC or contract issue.
       logger.error(
         `[cron] ALERT: ALL ${failureCount} projects failed in score-update batch; ` +
@@ -209,17 +237,35 @@ export async function runHourlyScoreUpdate(): Promise<void> {
       recordCronRun("score-update", "error");
       endCronTimer();
       cronJobTotal.inc({ job: "score-update", result: "error" });
+    } else if (allDeferred) {
+      // No project failed and none reached the chain either: the RPC is down.
+      // Previously this reported a clean success while silently queueing the
+      // whole batch, so an outage produced no alert and a misleading metric.
+      logger.error(
+        `[cron] ALERT: ALL ${deferredCount} projects deferred in score-update batch; ` +
+          `Soroban RPC appears unavailable; ${deferredCount} update(s) queued and no scores were written on-chain`,
+      );
+      recordCronRun("score-update", "error");
+      endCronTimer();
+      cronJobTotal.inc({ job: "score-update", result: "error" });
     } else {
       if (failureCount > 0 && failureRate >= config.CRON_FAILURE_THRESHOLD) {
         logger.error(
           `[cron] WARN: high failure rate in score-update batch: ` +
-            `${failureCount}/${totalProcessed} (${(failureRate * 100).toFixed(1)}%)`,
+            `${failureCount}/${attemptedOnChain} (${(failureRate * 100).toFixed(1)}%)`,
+        );
+      }
+      if (deferredCount > 0) {
+        logger.warn(
+          `[cron] ${deferredCount} project(s) deferred during score-update batch; ` +
+            `queued updates will be retried by the tx-queue`,
         );
       }
       logger.info("[cron] hourly score update complete", {
         total,
         successCount,
         failureCount,
+        deferredCount,
         skippedCount,
       });
       recordCronRun("score-update", "success");

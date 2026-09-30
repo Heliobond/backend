@@ -174,12 +174,21 @@ export function evaluateAllBenchmarks(projectId: number): ProjectBenchmarkData[]
 // ── Percentile calculation ───────────────────────────────────────────────────
 
 const percentileStore = new Map<string, number[]>();
+const configuredMaxSamples = Number(process.env.BENCHMARK_MAX_SAMPLES);
+const MAX_PERCENTILE_SAMPLES =
+  Number.isInteger(configuredMaxSamples) && configuredMaxSamples > 0
+    ? configuredMaxSamples
+    : 1000;
 
-function recordSample(metric: string, value: number): void {
+export function recordSample(metric: string, value: number): void {
   if (!percentileStore.has(metric)) {
     percentileStore.set(metric, []);
   }
-  percentileStore.get(metric)!.push(value);
+  const samples = percentileStore.get(metric)!;
+  samples.push(value);
+  if (samples.length > MAX_PERCENTILE_SAMPLES) {
+    samples.splice(0, samples.length - MAX_PERCENTILE_SAMPLES);
+  }
 }
 
 function getSampledValues(metric: string): number[] {
@@ -190,9 +199,8 @@ export function calculatePercentile(value: number, metric: string): number {
   recordSample(metric, value);
   const samples = getSampledValues(metric);
   const sorted = [...samples].sort((a, b) => a - b);
-  const index = sorted.indexOf(value);
-  if (index === -1) return 50;
-  return Math.round((index / Math.max(sorted.length - 1, 1)) * 100);
+  const rank = sorted.filter((sample) => sample < value).length;
+  return Math.round((rank / Math.max(sorted.length - 1, 1)) * 100);
 }
 
 export function getPercentileRanking(projectId: number, metric: string): PercentileRanking {
@@ -299,6 +307,7 @@ export function trendVsBenchmark(
 // ── Initialise percentile store with some samples ────────────────────────────
 
 export function initBenchmarkSamples(sampleSize = 20): void {
+  percentileStore.clear();
   const metrics = ["credit_quality", "green_impact", "combined_score", "efficiency_pct", "forest_density_pct"];
   for (const metric of metrics) {
     const samples: number[] = [];
