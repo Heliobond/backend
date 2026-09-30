@@ -734,6 +734,210 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/creators/applications": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Submit a creator application */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          "application/json": {
+            name: string;
+            location: string;
+            capacity_kw: number;
+            /** @description ipfs://, https:// or ar:// URIs only. */
+            documents: string[];
+          };
+        };
+      };
+      responses: {
+        /** @description Application submitted */
+        201: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            "application/json": components["schemas"]["CreatorApplication"];
+          };
+        };
+        /** @description Invalid metadata or document URI */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Missing or invalid wallet authentication */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/creators/applications/{id}/create-project-tx": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Build an unsigned create_project transaction (#771) */
+    get: {
+      parameters: {
+        query?: {
+          sequence?: string;
+          maturity_date?: number;
+        };
+        header?: never;
+        path: {
+          id: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Unsigned create_project XDR (never signed server-side) */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Application belongs to another wallet */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Application is not approved yet */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/admin/creators/applications/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get a creator application */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          id: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Application */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            "application/json": components["schemas"]["CreatorApplication"];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /** Advance the creator application review workflow */
+    patch: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          id: string;
+        };
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          "application/json": {
+            /** @enum {string} */
+            status: "in_review" | "approved" | "rejected";
+            actor?: string;
+            note?: string;
+            /** @description Whitelister G... address; when set the response includes the unsigned set_whitelist XDR. */
+            whitelister?: string;
+            whitelister_sequence?: string;
+          };
+        };
+      };
+      responses: {
+        /** @description Updated application; includes set_whitelist_tx on approval when a whitelister is supplied */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Invalid transition or input */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -779,6 +983,17 @@ export interface components {
       id?: string;
       url?: string;
       secret?: string;
+    };
+    CreatorApplication: {
+      id?: string;
+      wallet?: string;
+      /** @enum {string} */
+      status?: "submitted" | "in_review" | "approved" | "rejected";
+      /** @description Validated against src/schemas/creator-application.schema.json (name, location, capacity_kw, documents). */
+      metadata?: Record<string, never>;
+      metadata_hash?: string | null;
+      metadata_uri?: string | null;
+      project_id?: number | null;
     };
   };
   responses: never;
