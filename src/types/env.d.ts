@@ -170,5 +170,91 @@ declare namespace NodeJS {
     DB_SSL_CA_PATH?: string;
     /** Optional database CA contents from deployment configuration. */
     DATABASE_CA?: string;
+
+    // ── Soroban vault & indexer ─────────────────────────────────────────
+    /** Soroban contract address of the InvestmentVault. */
+    INVESTMENT_VAULT_CONTRACT_ID?: string;
+    /** Integer ledger the vault event indexer starts from. Default: 0 */
+    VAULT_EVENT_INDEXER_START_LEDGER?: string;
+    /** "true" enables the vault event indexer. Default: false */
+    VAULT_EVENT_INDEXER_ENABLED?: string;
+    /** Positive integer max events retained by the indexer. Default: 1000 */
+    VAULT_EVENT_INDEXER_MAX_EVENTS?: string;
+
+    // ── gRPC, health & timeouts ─────────────────────────────────────────
+    /** Integer port the gRPC server listens on. Default: 50051 */
+    GRPC_PORT?: string;
+    /** Integer ms RPC must be unreachable before an outage is reported. Default: 300000 */
+    RPC_OUTAGE_THRESHOLD_MS?: string;
+    /** Integer ms each dependency health check may take. Default: 1000 */
+    HEALTH_CHECK_TIMEOUT_MS?: string;
+    /** Integer ms before a request times out. Default: 30000 */
+    REQUEST_TIMEOUT_MS?: string;
+    /** Integer ms before an admin request times out. Default: 60000 */
+    ADMIN_REQUEST_TIMEOUT_MS?: string;
+    /** Integer ms window for error-log rate limiting. Default: 60000 */
+    ERROR_RATE_LIMIT_WINDOW_MS?: string;
+
+    // ── Batch jobs, webhooks & queues ───────────────────────────────────
+    /** Integer ms a finished batch job is retained. Default: 3600000 */
+    BATCH_JOB_TTL_MS?: string;
+    /** Integer max batch jobs retained. Default: 1000 */
+    BATCH_JOB_MAX_SIZE?: string;
+    /** Integer ms between webhook store cleanups. Default: 3600000 */
+    WEBHOOK_CLEANUP_INTERVAL_MS?: string;
+    /** Integer ms after which a webhook entry is stale. Default: 86400000 */
+    WEBHOOK_STALE_THRESHOLD_MS?: string;
+    /** Integer retry attempts for queued transactions. Default: 10 */
+    TX_QUEUE_MAX_RETRIES?: string;
+    /** Integer max score history entries per project. */
+    SCORE_HISTORY_MAX_ENTRIES_PER_PROJECT?: string;
+    /** Integer ms score history entries are retained. */
+    SCORE_HISTORY_TTL_MS?: string;
+    /** Integer ms after which an IoT reading counts as stale. */
+    STALE_READING_MAX_AGE_MS?: string;
+
+    // ── Database (extra) ────────────────────────────────────────────────
+    /** Integer ms to acquire a connection in knexfile. Default: 30000 */
+    DB_ACQUIRE_TIMEOUT_MS?: string;
+    /** Integer ms a pooled connection may sit idle in knexfile. Default: 60000 */
+    DB_IDLE_TIMEOUT_MS?: string;
+    /** Legacy alias for DB_SSL_CA_PATH. */
+    DB_SSL_CA?: string;
+
+    // ── Auth & secrets ──────────────────────────────────────────────────
+    /** Comma-separated admin API keys, optionally with roles. */
+    ADMIN_API_KEYS?: string;
+    /** Base64 Ed25519 seed signing impact certificates. */
+    IMPACT_CERTIFICATE_PRIVATE_KEY?: string;
+    /** "true" enables periodic secrets rotation. */
+    SECRETS_ROTATION_ENABLED?: string;
+    /** Integer ms between secrets rotations. Default: 3600000 */
+    SECRETS_ROTATION_INTERVAL_MS?: string;
+    /** AWS region for Secrets Manager. Default: us-east-1 */
+    AWS_REGION?: string;
+    AWS_SECRET_ID?: string;
+    AWS_SECRET_VERSION_ID?: string;
+    /** Vault server URL. Default: http://localhost:8200 */
+    VAULT_ENDPOINT?: string;
+    VAULT_TOKEN?: string;
+    /** Default: secret/data/heliobond */
+    VAULT_SECRET_PATH?: string;
+    AZURE_VAULT_URL?: string;
+    AZURE_TENANT_ID?: string;
+    AZURE_CLIENT_ID?: string;
+    AZURE_CLIENT_SECRET?: string;
+
+    // ── Email, URLs & audit ─────────────────────────────────────────────
+    SENDGRID_API_KEY?: string;
+    /** Sender address. Default: no-reply@heliobond.dev */
+    EMAIL_FROM?: string;
+    /** HMAC secret for unsubscribe links; random per process if unset. */
+    EMAIL_UNSUBSCRIBE_SECRET?: string;
+    /** Public API base URL used in emails; falls back to FRONTEND_URL. */
+    PUBLIC_API_URL?: string;
+    /** Public base URL used in notifications. Default: http://localhost:3001 */
+    PUBLIC_BASE_URL?: string;
+    /** Audit log path, or "stdout". Default: logs/audit.log (empty in test) */
+    AUDIT_LOG_FILE?: string;
   }
 }
