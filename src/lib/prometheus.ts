@@ -105,4 +105,23 @@ export const oracleSubmitLatency = new client.Histogram({
   registers: [register],
 });
 
+// ── Frontend telemetry (#770) ───────────────────────────────────────────────
+// Ingested by `POST /v1/telemetry`. Labels are restricted to the validated
+// schema fields so a report can never smuggle PII (or unbounded cardinality)
+// into the time series.
+export const frontendErrorsTotal = new client.Counter({
+  name: "frontend_errors_total",
+  help: "Frontend error reports by kind and decoded Soroban contract error name",
+  labelNames: ["kind", "contract_error_name"] as const,
+  registers: [register],
+});
+
+export const frontendWebVital = new client.Histogram({
+  name: "frontend_web_vital",
+  help: "Frontend Web Vitals measurements by metric name and rating",
+  labelNames: ["name", "rating"] as const,
+  buckets: [50, 100, 200, 500, 1000, 2000, 3000, 5000, 10000, 30000],
+  registers: [register],
+});
+
 export { register };

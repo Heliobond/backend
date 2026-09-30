@@ -20,9 +20,11 @@ Errors follow a consistent structure:
 | Status | `error.code`           | When                                                         |
 | ------ | ---------------------- | ------------------------------------------------------------ |
 | `400`  | `bad_request`          | Invalid parameters, body validation error, or malformed JSON |
+| `400`  | `invalid_telemetry`    | Telemetry payload matches neither accepted schema           |
 | `401`  | `unauthorized`         | Missing or invalid authentication credentials / bearer token |
 | `403`  | `forbidden`            | Client IP not whitelisted or role insufficient               |
 | `404`  | `not_found`            | Resource or unknown route does not exist                     |
+| `413`  | `payload_too_large`    | Request body exceeds the configured size limit               |
 | `429`  | `too_many_requests`    | Rate limit exceeded (check `Retry-After` header)             |
 | `500`  | `server_misconfigured` | Admin endpoint called without `ADMIN_API_KEY` configured     |
 | `500`  | `internal_error`       | Unexpected server error                                      |
@@ -53,6 +55,8 @@ Configurable environment variables (see [`.env.example`](./.env.example)):
 
 - Public tier: `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`
 - Admin tier: `RATE_LIMIT_ADMIN_WINDOW_MS`, `RATE_LIMIT_ADMIN_MAX`
+- Telemetry tier (`POST /v1/telemetry`): `TELEMETRY_RATE_LIMIT_WINDOW_MS`,
+  `TELEMETRY_RATE_LIMIT_MAX`
 
 ---
 
@@ -77,6 +81,7 @@ Replace the `/api` prefix with `/v1` (e.g. `/api/projects` → `/v1/projects`). 
 | :--------------------- | :--------------------------------------- | :-------------------------- | :-------------- | :------------------------------------------------------------------------------------------ |
 | **System & Health**    | `/health`, `/ready`, `/metrics`, `/docs` | Public                      | None / Default  | Liveness, readiness, Prometheus metrics, and OpenAPI/Swagger documentation                  |
 | **Telemetry (IoT)**    | `/v1/iot`                                | Public / Consumer Key       | Public          | Simulated solar panel readings and satellite NDVI vegetation telemetry                      |
+| **Telemetry (Client)** | `/v1/telemetry`                          | Public                      | Telemetry       | Frontend error-report and Web Vitals beacon ingest with PII scrubbing                        |
 | **Projects**           | `/v1/projects`                           | Public / Consumer Key       | Public          | Paginated, filterable, and sortable project registry and detail                             |
 | **Score History**      | `/v1/projects/:id/history`               | Public / Consumer Key       | Public          | Historical score logs and score direction trend evaluation                                  |
 | **Aggregation**        | `/v1/projects/aggregate`                 | Public / Consumer Key       | Public          | Portfolio-level aggregate score calculations by category and region                         |
@@ -195,6 +200,80 @@ Exports distributed trace spans collected via OpenTelemetry.
   ]
 }
 ```
+
+### `POST /v1/telemetry`
+
+Ingest frontend error reports and Web Vitals measurements (#770). The browser
+sends the payload with `navigator.sendBeacon` as a `text/plain` Blob containing
+a JSON string; `application/json` is also accepted. No authentication, API key,
+or CSRF token is required — the route carries no cookies/session and browser
+beacons cannot set custom headers. The route is rate limited per client IP.
+
+Body size is bounded by `TELEMETRY_BODY_SIZE_LIMIT` (default `64kb`) for
+`text/plain`; `application/json` also remains bounded by `BODY_SIZE_LIMIT`.
+
+**ErrorReport**
+
+| Field               | Type             | Required | Notes                                                        |
+| :------------------ | :--------------- | :------- | :----------------------------------------------------------- |
+| `kind`              | string           | Yes      | Metric label; `[A-Za-z0-9_.:-]{1,64}`                        |
+| `message`           | string           | Yes      | 1–8192 chars; PII-scrubbed before use                        |
+| `stack`             | string           | No       | Up to 16384 chars                                            |
+| `url`               | string           | No       | Up to 2048 chars                                             |
+| `userAgent`         | string           | No       | Up to 1024 chars                                             |
+| `contractErrorCode` | number \| string | No       | Soroban error code (e.g. `22`)                               |
+| `contractErrorName` | string           | No       | Metric label; `[A-Za-z0-9_.:-]{1,64}`; defaults to `none`     |
+| `timestamp`         | number           | No       | Client epoch-ms                                              |
+
+**WebVitalReport**
+
+| Field            | Type   | Required | Notes                                                            |
+| :--------------- | :----- | :------- | :--------------------------------------------------------------- |
+| `name`           | string | Yes      | One of `CLS`, `FCP`, `INP`, `LCP`, `TTFB`, `FID`                 |
+| `value`          | number | Yes      | Finite, `>= 0`                                                    |
+| `rating`         | string | Yes      | One of `good`, `needs-improvement`, `poor`                        |
+| `id`             | string | No       | Measurement id                                                    |
+| `delta`          | number | No       | Delta since previous report                                       |
+| `navigationType` | string | No       | Navigation type                                                   |
+| `timestamp`      | number | No       | Client epoch-ms                                                   |
+
+**Security / PII**
+
+A second scrub pass rejects/strips anything resembling a Stellar address
+(`G...`), secret seed (`S...`), contract id (`C...`), XDR/base64 blob, or e-mail
+address. Reports are never persisted; only validated label fields reach the
+Prometheus registry. A redacted value used as a metric label fails validation
+and returns `400`.
+
+**Metrics**
+
+- `frontend_errors_total{kind, contract_error_name}` — counter
+- `frontend_web_vital{name, rating}` — histogram (exposed as
+  `frontend_web_vital_bucket`/`_sum`/`_count`)
+
+**Responses**
+
+| Status | Body / meaning                                                        |
+| :----- | :-------------------------------------------------------------------- |
+| `204`  | Accepted; empty body                                                  |
+| `400`  | `invalid_telemetry` — malformed JSON or neither schema matches         |
+| `413`  | `payload_too_large` — body over `TELEMETRY_BODY_SIZE_LIMIT`            |
+| `429`  | `too_many_requests` — per-IP telemetry rate limit exceeded            |
+
+```bash
+curl -X POST http://localhost:3001/v1/telemetry \
+  -H 'Content-Type: text/plain' \
+  --data '{"kind":"runtime","message":"boom","contractErrorName":"InvalidScore"}'
+# -> 204 No Content
+```
+
+> The unversioned alias `POST /api/telemetry` is deprecated like the rest of
+> `/api/*`.
+
+> **Frontend follow-up:** the frontend lives in a separate repository. Set
+> `NEXT_PUBLIC_ERROR_REPORT_URL` to `<api-base>/v1/telemetry` in the frontend's
+> `.env.example`. Optionally set `TELEMETRY_OTLP_ENABLED=true` on the backend to
+> forward accepted reports to the OTLP exporter.
 
 ---
 

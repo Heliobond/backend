@@ -140,5 +140,15 @@ declare namespace NodeJS {
     OTEL_ZIPKIN_ENDPOINT?: string;
     /** "true" enables the Zipkin exporter. */
     OTEL_ZIPKIN_ENABLED?: string;
+
+    // ── Frontend telemetry (#770) ───────────────────────────────────────
+    /** Max accepted body size for POST /v1/telemetry (e.g. "64kb"). Default: 64kb */
+    TELEMETRY_BODY_SIZE_LIMIT?: string;
+    /** "true" forwards accepted reports to the OTLP exporter. Default: false */
+    TELEMETRY_OTLP_ENABLED?: string;
+    /** Integer ms per-IP telemetry rate-limit window. Default: RATE_LIMIT_WINDOW_MS */
+    TELEMETRY_RATE_LIMIT_WINDOW_MS?: string;
+    /** Integer max telemetry requests per IP per window. Default: 120 */
+    TELEMETRY_RATE_LIMIT_MAX?: string;
   }
 }

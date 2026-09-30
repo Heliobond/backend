@@ -77,6 +77,7 @@ Full request/response details, validation rules, and error codes are in
 | `GET`  | `/v1/projects/:id`        | —            | Single project detail                                      |
 | `GET`  | `/v1/portfolio/:address`  | —            | Indexed deposit/withdraw history for an address            |
 | `POST` | `/v1/admin/update-scores` | Bearer token | Submit impact score update(s) to the Soroban contract      |
+| `POST` | `/v1/telemetry`           | —            | Ingest frontend error reports and Web Vitals (beacon)      |
 
 Errors return a consistent `{ "error": { "code": "<code>", "message": "<detail>" } }`
 JSON shape (never a stack trace). `code` is a stable, machine-readable
@@ -172,6 +173,44 @@ Omit `project_ids` (or send an empty array) to update every project registered o
 
 Soroban does not support multi-call batching; transactions are submitted sequentially.
 
+### `POST /v1/telemetry`
+
+Ingests frontend error reports and [Web Vitals](https://web.dev/vitals/) measurements.
+The browser sends beacons with `navigator.sendBeacon` using a `text/plain` Blob
+(JSON string); `application/json` is accepted as well. No authentication or CSRF
+token is required — the route carries no cookies or session, and browser beacons
+cannot set custom headers. It is rate limited per client IP.
+
+Request body (one report per request):
+
+```jsonc
+// ErrorReport
+{ "kind": "runtime", "message": "boom", "contractErrorName": "InvalidScore", "contractErrorCode": 22 }
+
+// WebVitalReport
+{ "name": "LCP", "value": 2345, "rating": "good" }
+```
+
+- `kind` and `contractErrorName` are bounded metric labels (`frontend_errors_total`).
+- `name` and `rating` label the `frontend_web_vital` histogram.
+- A second scrub pass strips anything resembling a Stellar address (`G...`),
+  secret seed (`S...`), contract id (`C...`), XDR blob, or e-mail address before
+  it can reach a metric, log, or trace. Reports are never persisted.
+
+Responses:
+
+| Status | When                                                        |
+| ------ | ----------------------------------------------------------- |
+| `204`  | Accepted (no body)                                          |
+| `400`  | Payload matches neither schema, or malformed JSON           |
+| `413`  | Body exceeds `TELEMETRY_BODY_SIZE_LIMIT` (default `64kb`)   |
+| `429`  | Per-IP telemetry rate limit exceeded                         |
+
+The endpoint is also mounted at the deprecated `/api/telemetry` path.
+
+> **Frontend follow-up:** the frontend lives in a separate repository. Point its
+> `NEXT_PUBLIC_ERROR_REPORT_URL` at `<api-base>/v1/telemetry` (see `.env.example`).
+
 ---
 
 ## Score Formula
@@ -245,6 +284,10 @@ Create a `.env` file (see `.env.example`):
 | `IOT_CACHE_MAX_SIZE`           | No       | `1000`                                | Max cached IoT readings; oldest are evicted first                     |
 | `MAX_PROJECT_ID`               | No       | `1000000`                             | Inclusive upper bound accepted for a `:id` project param              |
 | `BODY_SIZE_LIMIT`              | No       | `100kb`                               | Max request body size accepted by `express.json()` (e.g. `100kb`, `1mb`). Requests exceeding it return `413 Payload Too Large` |
+| `TELEMETRY_BODY_SIZE_LIMIT`    | No       | `64kb`                                | Max body size for `POST /v1/telemetry`; oversize bodies return `413`  |
+| `TELEMETRY_OTLP_ENABLED`       | No       | `false`                               | `true` forwards accepted telemetry reports to the OTLP exporter       |
+| `TELEMETRY_RATE_LIMIT_WINDOW_MS` | No     | `RATE_LIMIT_WINDOW_MS`                | Per-IP telemetry rate-limit window (ms)                              |
+| `TELEMETRY_RATE_LIMIT_MAX`     | No       | `120`                                 | Max telemetry requests per IP per window                              |
 
 ---
 
@@ -347,6 +390,11 @@ The application includes OpenTelemetry instrumentation for:
 - **Distributed Tracing**: Track requests across services
 - **Metrics**: Monitor performance and resource usage
 - **Logging**: Structured logging with correlation IDs
+
+Frontend telemetry ingested at `POST /v1/telemetry` is exposed on the shared
+`/metrics` registry as `frontend_errors_total{kind, contract_error_name}` and the
+`frontend_web_vital{name, rating}` histogram. Set `TELEMETRY_OTLP_ENABLED=true`
+to additionally forward accepted reports to the configured OTLP exporter.
 
 Configure OpenTelemetry exporters in your environment to send data to your preferred observability platform (Jaeger, Zipkin, Prometheus, etc.).
 

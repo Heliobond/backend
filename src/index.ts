@@ -80,6 +80,7 @@ import { handleListenError } from "./lib/listen-errors";
 import { initBenchmarkSamples } from "./lib/benchmarking";
 import { createBenchmarkSampleInitializer } from "./lib/benchmarkStartup";
 import { getImpactCertificatePublicKey } from "./lib/impactCertificate";
+import telemetryRouter from "./routes/telemetry";
 
 const env = initEnv();
 
@@ -368,6 +369,7 @@ v1.use("/status/oracle", publicLimiter, oracleStatusRouter);
 v1.use("/admin/api-keys", ipWhitelist, adminLimiter, requestSigning, apiKeysRouter);
 v1.use("/notifications", publicLimiter, publicNotificationsRouter); // email-link targets (confirm/unsubscribe)
 v1.use("/notifications", publicLimiter, apiKeyAuth, notificationsRouter);
+v1.use("/telemetry", telemetryRouter); // frontend error + web-vitals beacon (#770)
 
 // ── Legacy /api paths (deprecated) ──────────────────────────────────────────
 // Kept for backward compatibility; will be removed after 2027-01-01.
@@ -394,6 +396,7 @@ app.use("/api/maintenance", publicLimiter, apiKeyAuth, maintenanceRouter);
 app.use("/api/investor", publicLimiter, apiKeyAuth, investorRouter);
 app.use("/api/investors", publicLimiter, apiKeyAuth, investorActivityRouter);
 app.use("/api/admin/api-keys", ipWhitelist, adminLimiter, apiKeysRouter);
+app.use("/api/telemetry", telemetryRouter); // legacy alias for #770
 
 // JSON 404 for anything unmatched, then the structured error handler.
 app.use(notFoundHandler);

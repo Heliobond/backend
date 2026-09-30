@@ -166,6 +166,10 @@ function buildConfig() {
     /** Body size limit */
     BODY_SIZE_LIMIT: optionalEnv("BODY_SIZE_LIMIT", "100kb"),
 
+    /** Frontend telemetry (#770) */
+    TELEMETRY_BODY_SIZE_LIMIT: optionalEnv("TELEMETRY_BODY_SIZE_LIMIT", "64kb"),
+    TELEMETRY_OTLP_ENABLED: optionalEnv("TELEMETRY_OTLP_ENABLED", "false"),
+
     /** Secrets Management */
     SECRETS_PROVIDER: optionalEnv("SECRETS_PROVIDER", "env"),
 
