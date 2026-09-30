@@ -622,16 +622,22 @@ async function gracefulShutdown(signal: string): Promise<void> {
   isShuttingDown = true;
 
   const shutdownTimeoutMs = config.SHUTDOWN_TIMEOUT_MS;
-  logger.info(`[${signal}] graceful shutdown initiated (timeout: ${shutdownTimeoutMs}ms)`);
+  const shutdownDeadlineMs = shutdownTimeoutMs * 3;
+  let shutdownStep = "initializing";
+  logger.info(
+    `[${signal}] graceful shutdown initiated (step timeout: ${shutdownTimeoutMs}ms, total timeout: ${shutdownDeadlineMs}ms)`,
+  );
 
   const shutdownPromise = (async () => {
     // 1. Stop accepting new HTTP requests
+    shutdownStep = "HTTP server close";
     logger.info("[shutdown] closing HTTP server (draining in-flight requests)…");
     const server = await serverPromise;
     await new Promise<void>((resolve) => server.close(() => resolve()));
     logger.info("[shutdown] HTTP server closed");
 
     // 2. Stop all cron jobs so no new work starts
+    shutdownStep = "cron shutdown";
     logger.info(`[shutdown] stopping ${cronTasks.length} cron jobs…`);
     for (const task of cronTasks) {
       task.stop();
@@ -639,6 +645,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
     logger.info("[shutdown] cron jobs stopped");
 
     // 3. Drain the RPC connection pool (waits up to 10 s for active connections)
+    shutdownStep = "RPC pool drain";
     logger.info("[shutdown] draining RPC connection pool…");
     try {
       await rpcPool.shutdown();
@@ -651,11 +658,13 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
     // 4. Stop the secret rotation timer so it doesn't keep the process alive
     // or fire after shutdown begins.
+    shutdownStep = "secret rotation stop";
     stopSecretRotation();
 
     // 5. Gracefully stop the gRPC server, letting in-flight/streaming RPCs
     // (e.g. StreamProjectScores) drain instead of being killed mid-stream.
     if (grpcServer) {
+      shutdownStep = "gRPC server drain";
       logger.info("[shutdown] draining gRPC server…");
       await new Promise<void>((resolve) => {
         const forceTimer = setTimeout(() => {
@@ -682,8 +691,12 @@ async function gracefulShutdown(signal: string): Promise<void> {
   // Apply overall shutdown timeout — force exit if graceful cleanup takes too long
   const timeoutPromise = new Promise<void>((_, reject) => {
     setTimeout(() => {
-      reject(new Error(`Shutdown timed out after ${shutdownTimeoutMs}ms`));
-    }, shutdownTimeoutMs);
+      reject(
+        new Error(
+          `Shutdown timed out after ${shutdownDeadlineMs}ms during ${shutdownStep}`,
+        ),
+      );
+    }, shutdownDeadlineMs);
   });
 
   try {
