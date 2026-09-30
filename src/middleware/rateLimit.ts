@@ -55,9 +55,14 @@ const PUBLIC_WINDOW_MS = intFromEnv("RATE_LIMIT_WINDOW_MS", 60_000);
 const PUBLIC_MAX = intFromEnv("RATE_LIMIT_MAX", 100);
 const ADMIN_WINDOW_MS = intFromEnv("RATE_LIMIT_ADMIN_WINDOW_MS", PUBLIC_WINDOW_MS);
 const ADMIN_MAX = intFromEnv("RATE_LIMIT_ADMIN_MAX", 20);
+const TELEMETRY_WINDOW_MS = intFromEnv("TELEMETRY_RATE_LIMIT_WINDOW_MS", PUBLIC_WINDOW_MS);
+const TELEMETRY_MAX = intFromEnv("TELEMETRY_RATE_LIMIT_MAX", 120);
 
 /** Limiter for public, unauthenticated endpoints. */
 export const publicLimiter = createRateLimiter(PUBLIC_WINDOW_MS, PUBLIC_MAX);
 
 /** Stricter limiter for privileged admin endpoints. */
 export const adminLimiter = createRateLimiter(ADMIN_WINDOW_MS, ADMIN_MAX);
+
+/** Per-IP limiter for browser beacon traffic on `POST /v1/telemetry`. */
+export const telemetryLimiter = createRateLimiter(TELEMETRY_WINDOW_MS, TELEMETRY_MAX);
