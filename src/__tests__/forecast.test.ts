@@ -13,6 +13,8 @@ import {
   accuracyToCsv,
   getValidMethods,
   isMethodValid,
+  mean,
+  stdDev,
 } from "../lib/forecast";
 import forecastRouter from "../routes/forecast";
 import { errorHandler } from "../middleware/errors";
@@ -114,6 +116,48 @@ describe("forecastProject", () => {
     const result = forecastProject(1, "power_output_kw", 10, "linear_trend", 168);
     const vals = result.forecasts.map((f) => f.value);
     expect(new Set(vals).size).toBeGreaterThan(1);
+  });
+});
+
+describe("statistical helpers — empty input", () => {
+  it("mean([]) returns 0", () => {
+    expect(mean([])).toBe(0);
+  });
+
+  it("stdDev([]) returns 0", () => {
+    expect(stdDev([], 0)).toBe(0);
+  });
+
+  it("mean/stdDev keep behaviour for non-empty input", () => {
+    expect(mean([2, 4, 6])).toBe(4);
+    expect(stdDev([2, 4, 6], 4)).toBeCloseTo(Math.sqrt(8 / 3), 10);
+  });
+});
+
+describe("empty history produces no NaN", () => {
+  it("forecastProject yields no NaN across all methods", () => {
+    for (const method of getValidMethods()) {
+      const result = forecastProject(1, "power_output_kw", 6, method as any, 0);
+      for (const fp of result.forecasts) {
+        expect(Number.isNaN(fp.value)).toBe(false);
+      }
+    }
+  });
+
+  it("forecastWeatherAdjusted yields no NaN", () => {
+    const result = forecastWeatherAdjusted(1, 6, 0);
+    for (const fp of result.forecasts) {
+      expect(Number.isNaN(fp.value)).toBe(false);
+    }
+  });
+
+  it("analyzeSeasonalPatterns yields no NaN", () => {
+    const result = analyzeSeasonalPatterns(1, "power_output_kw", 0);
+    for (const p of result.hourly.patterns) {
+      expect(Number.isNaN(p.avg_value)).toBe(false);
+    }
+    expect(Number.isNaN(result.hourly.strength)).toBe(false);
+    expect(Number.isNaN(result.monthly.strength)).toBe(false);
   });
 });
 

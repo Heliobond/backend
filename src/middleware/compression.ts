@@ -34,6 +34,12 @@ const DEFAULT_EXCLUDE = ["/health", "/ready", "/v1/metrics"];
 
 // ── Compression metrics ─────────────────────────────────────────────────────
 
+// Extension interface for Response to store compression state
+interface CompressionResponseExt {
+  __compression_encoding?: string;
+  __compression_content_length?: number;
+}
+
 export interface CompressionMetrics {
   total_requests: number;
   compressed_requests: number;
@@ -75,7 +81,9 @@ export function resetCompressionMetrics(): void {
 
 // ── Middleware factory ───────────────────────────────────────────────────────
 
-export function compressionMiddleware(userConfig?: Partial<CompressionConfig>): (req: Request, res: Response, next: NextFunction) => void {
+export function compressionMiddleware(
+  userConfig?: Partial<CompressionConfig>,
+): (req: Request, res: Response, next: NextFunction) => void {
   const config = { ...DEFAULT_CONFIG, ...userConfig };
   const allExclude = new Set([...DEFAULT_EXCLUDE, ...config.excludePaths]);
 
@@ -103,7 +111,11 @@ export function compressionMiddleware(userConfig?: Partial<CompressionConfig>): 
     let compressionDetected = false;
 
     res.setHeader = function (name: string, value: string | number | readonly string[]): Response {
-      if (name.toLowerCase() === "content-encoding" && typeof value === "string" && value !== "identity") {
+      if (
+        name.toLowerCase() === "content-encoding" &&
+        typeof value === "string" &&
+        value !== "identity"
+      ) {
         compressionDetected = true;
         metrics.compressed_requests++;
         const encoding = value.split(",")[0].trim();
@@ -114,16 +126,18 @@ export function compressionMiddleware(userConfig?: Partial<CompressionConfig>): 
         }
         metrics.by_encoding[encoding].count++;
 
-        (res as any).__compression_encoding = encoding;
-        (res as any).__compression_content_length = contentLength;
+        const ext = res as Response & CompressionResponseExt;
+        ext.__compression_encoding = encoding;
+        ext.__compression_content_length = contentLength;
       }
       return originalSetHeader(name, value);
-    } as any;
+    } as typeof res.setHeader;
 
     res.on("finish", () => {
       if (compressionDetected) {
-        const encoding = (res as any).__compression_encoding;
-        const originalSize = (res as any).__compression_content_length || 0;
+        const ext = res as Response & CompressionResponseExt;
+        const encoding = ext.__compression_encoding;
+        const originalSize = ext.__compression_content_length || 0;
         const compressedSize = Number(res.getHeader("content-length")) || 0;
 
         if (encoding && metrics.by_encoding[encoding]) {

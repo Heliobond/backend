@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs";
 import { logger } from "./logger";
 import config from "../knexfile";
+import { config as appConfig } from "../config";
 
 let _knex: Knex | null = null;
 
@@ -281,7 +282,10 @@ export async function getMigrationHealth(): Promise<{
 
   try {
     const timeout = new Promise<never>((_, reject) => {
-      const timer = setTimeout(() => reject(new Error("Migration health check timeout")), 1000);
+      const timer = setTimeout(
+        () => reject(new Error("Migration health check timeout")),
+        appConfig.HEALTH_CHECK_TIMEOUT_MS,
+      );
       if (typeof timer.unref === "function") timer.unref();
     });
     return await Promise.race([check(), timeout]);
