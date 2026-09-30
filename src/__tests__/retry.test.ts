@@ -39,8 +39,8 @@ describe("isTransientError", () => {
     expect(isTransientError(new Error("tx_insufficient_fee"))).toBe(false);
   });
 
-  it("returns false for contract_error", () => {
-    expect(isTransientError(new Error("contract_error: revert"))).toBe(false);
+  it("retries generic contract_error messages", () => {
+    expect(isTransientError(new Error("contract_error: temporary simulation failure"))).toBe(true);
   });
 
   it("returns false for ADMIN_SECRET_KEY not set", () => {
