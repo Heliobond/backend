@@ -1,8 +1,8 @@
 export interface AnomalyConfig {
-  sensitivityZScore: number;    // z-score threshold (default 2.5)
-  trendWindowSize: number;      // readings to use for baseline (default 20)
-  trendDeviationPct: number;    // % deviation to flag as trend anomaly (default 20)
-  minBaseline: number;          // min readings before detection activates (default 5)
+  sensitivityZScore: number; // z-score threshold (default 2.5)
+  trendWindowSize: number; // readings to use for baseline (default 20)
+  trendDeviationPct: number; // % deviation to flag as trend anomaly (default 20)
+  minBaseline: number; // min readings before detection activates (default 5)
 }
 
 export interface AnomalyAlert {
@@ -48,32 +48,50 @@ export class AnomalyValidationError extends Error {
  * Validate a partial anomaly detection config, returning only the fields that
  * were present and valid. Throws `AnomalyValidationError` on the first problem.
  */
-export function validateAnomalyConfig(config: Partial<Record<keyof AnomalyConfig, unknown>>): Partial<AnomalyConfig> {
+export function validateAnomalyConfig(
+  config: Partial<Record<keyof AnomalyConfig, unknown>>,
+): Partial<AnomalyConfig> {
   const validated: Partial<AnomalyConfig> = {};
 
   if (config.sensitivityZScore !== undefined) {
-    if (typeof config.sensitivityZScore !== "number" || !Number.isFinite(config.sensitivityZScore) || config.sensitivityZScore <= 0) {
+    if (
+      typeof config.sensitivityZScore !== "number" ||
+      !Number.isFinite(config.sensitivityZScore) ||
+      config.sensitivityZScore <= 0
+    ) {
       throw new AnomalyValidationError("sensitivityZScore must be a finite positive number");
     }
     validated.sensitivityZScore = config.sensitivityZScore;
   }
 
   if (config.trendWindowSize !== undefined) {
-    if (typeof config.trendWindowSize !== "number" || !Number.isFinite(config.trendWindowSize) || config.trendWindowSize <= 0) {
+    if (
+      typeof config.trendWindowSize !== "number" ||
+      !Number.isFinite(config.trendWindowSize) ||
+      config.trendWindowSize <= 0
+    ) {
       throw new AnomalyValidationError("trendWindowSize must be a finite positive number");
     }
     validated.trendWindowSize = config.trendWindowSize;
   }
 
   if (config.trendDeviationPct !== undefined) {
-    if (typeof config.trendDeviationPct !== "number" || !Number.isFinite(config.trendDeviationPct) || config.trendDeviationPct <= 0) {
+    if (
+      typeof config.trendDeviationPct !== "number" ||
+      !Number.isFinite(config.trendDeviationPct) ||
+      config.trendDeviationPct <= 0
+    ) {
       throw new AnomalyValidationError("trendDeviationPct must be a finite positive number");
     }
     validated.trendDeviationPct = config.trendDeviationPct;
   }
 
   if (config.minBaseline !== undefined) {
-    if (typeof config.minBaseline !== "number" || !Number.isFinite(config.minBaseline) || config.minBaseline <= 0) {
+    if (
+      typeof config.minBaseline !== "number" ||
+      !Number.isFinite(config.minBaseline) ||
+      config.minBaseline <= 0
+    ) {
       throw new AnomalyValidationError("minBaseline must be a finite positive number");
     }
     validated.minBaseline = config.minBaseline;
@@ -86,7 +104,9 @@ export function validateAnomalyConfig(config: Partial<Record<keyof AnomalyConfig
 const historyStore = new Map<number, Map<MetricKey, number[]>>();
 let globalConfig: AnomalyConfig = { ...DEFAULT_CONFIG };
 
-export function configureAnomalyDetection(config: Partial<Record<keyof AnomalyConfig, unknown>>): void {
+export function configureAnomalyDetection(
+  config: Partial<Record<keyof AnomalyConfig, unknown>>,
+): void {
   const validated = validateAnomalyConfig(config);
   globalConfig = { ...globalConfig, ...validated };
 }
@@ -205,13 +225,28 @@ export function detectAnomalies(
   config?: Partial<AnomalyConfig>,
 ): AnomalyResult {
   const cfg = config ? { ...globalConfig, ...config } : globalConfig;
-  const metrics: MetricKey[] = ["efficiency_pct", "power_output_kw", "forest_density_pct", "ndvi_score"];
+  const metrics: MetricKey[] = [
+    "efficiency_pct",
+    "power_output_kw",
+    "forest_density_pct",
+    "ndvi_score",
+  ];
   const anomalies: AnomalyAlert[] = [];
-  const metricResults: AnomalyResult["metrics"] = {} as any;
+  const metricResults: AnomalyResult["metrics"] = {
+    efficiency_pct: { value: 0, mean: 0, stdDev: 0, zScore: 0 },
+    power_output_kw: { value: 0, mean: 0, stdDev: 0, zScore: 0 },
+    forest_density_pct: { value: 0, mean: 0, stdDev: 0, zScore: 0 },
+    ndvi_score: { value: 0, mean: 0, stdDev: 0, zScore: 0 },
+  };
 
   for (const metric of metrics) {
     const value = readings[metric];
-    const { mean: avg, stdDev: sd, zScore, alert: outlierAlert } = detectOutlier(projectId, metric, value, cfg);
+    const {
+      mean: avg,
+      stdDev: sd,
+      zScore,
+      alert: outlierAlert,
+    } = detectOutlier(projectId, metric, value, cfg);
     const trendAlert = detectTrend(projectId, metric, value, cfg);
 
     if (outlierAlert) anomalies.push(outlierAlert);

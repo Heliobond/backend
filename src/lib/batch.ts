@@ -1,5 +1,6 @@
 import { logger } from "./logger";
 import { parseContractError } from "./contractErrors";
+import { config } from "../config";
 
 /**
  * Batch transaction support (#54).
@@ -47,8 +48,46 @@ export interface BatchBenchmark {
 }
 
 const jobs = new Map<string, BatchJob>();
+const BATCH_JOB_TTL_MS = config.BATCH_JOB_TTL_MS;
+const BATCH_JOB_MAX_SIZE = config.BATCH_JOB_MAX_SIZE;
+
+/**
+ * Evict completed/failed jobs older than TTL and enforce max size limit.
+ */
+function evictStaleJobs(): void {
+  const now = Date.now();
+  const jobArray = Array.from(jobs.entries());
+
+  // Evict jobs older than TTL
+  for (const [id, job] of jobArray) {
+    if ((job.status === "completed" || job.status === "failed") && job.completed_at) {
+      const completedTime = new Date(job.completed_at).getTime();
+      if (now - completedTime > BATCH_JOB_TTL_MS) {
+        jobs.delete(id);
+      }
+    }
+  }
+
+  // Enforce max size - remove oldest completed/failed jobs first
+  if (jobs.size > BATCH_JOB_MAX_SIZE) {
+    const sortedJobs = Array.from(jobs.entries())
+      .filter(([_, job]) => job.status === "completed" || job.status === "failed")
+      .sort((a, b) => {
+        const timeA = a[1].completed_at ? new Date(a[1].completed_at).getTime() : 0;
+        const timeB = b[1].completed_at ? new Date(b[1].completed_at).getTime() : 0;
+        return timeA - timeB;
+      });
+
+    const toRemove = jobs.size - BATCH_JOB_MAX_SIZE;
+    for (let i = 0; i < toRemove && i < sortedJobs.length; i++) {
+      jobs.delete(sortedJobs[i][0]);
+    }
+  }
+}
 
 export function createJob(projectIds: number[], concurrency: number): BatchJob {
+  evictStaleJobs();
+
   const job: BatchJob = {
     id: `batch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     status: "queued",

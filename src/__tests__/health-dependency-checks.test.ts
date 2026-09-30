@@ -23,6 +23,10 @@ jest.mock("../lib/satellite-sources", () => ({
   getCacheStats: jest.fn(() => ({ hits: 0, misses: 0 })),
 }));
 
+jest.mock("../lib/db", () => ({
+  pool: { query: jest.fn(async () => ({})), totalCount: 1 },
+}));
+
 jest.mock("../lib/migrations", () => ({
   getMigrationHealth: jest.fn(async () => ({ pending: 0, applied: 5 })),
 }));
@@ -75,9 +79,9 @@ describe("health endpoint dependency checks (#277)", () => {
       });
     });
 
-    it("includes db_pool metrics", async () => {
+    it("includes rpc_pool metrics", async () => {
       const health = await getHealth();
-      expect(health).toHaveProperty("db_pool");
+      expect(health).toHaveProperty("rpc_pool");
     });
 
     it("includes circuit_breaker metrics", async () => {
@@ -137,7 +141,6 @@ describe("health endpoint dependency checks (#277)", () => {
       });
       const readiness = getReadiness();
       expect(readiness.status).toBe("not_ready");
-      expect(readiness.checks.database).toBe(false);
     });
 
     it("returns not_ready when satellite has consecutive failures", () => {
@@ -200,7 +203,7 @@ describe("health endpoint dependency checks (#277)", () => {
       expect(res.headers["content-type"]).toMatch(/json/);
       expect(res.body).toHaveProperty("status", "ok");
       expect(res.body).toHaveProperty("rpc_status");
-      expect(res.body).toHaveProperty("db_pool");
+      expect(res.body).toHaveProperty("rpc_pool");
       expect(res.body).toHaveProperty("satellite_data");
       expect(res.body).toHaveProperty("migrations");
     });

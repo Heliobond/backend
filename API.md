@@ -1079,7 +1079,37 @@ Subscribes an email address to recurring summary digests.
 
 ### `GET /v1/email/unsubscribe`
 
-One-click unsubscribe endpoint (`?token=<unsubscribe_token>`).
+**Public**, no admin API key, IP allowlist, or request signature required
+(#763). Recipients can click the footer link from any mail client. Rate
+limited by the shared `publicLimiter`.
+
+Query: `token=<unsubscribe_token>` (URL-encoded).
+
+Responses:
+- `200 {"unsubscribed": true}` on success.
+- `400` when the token is missing.
+- `404` when the token is unknown or already used.
+
+### `POST /v1/email/unsubscribe`
+
+**Public**. RFC 8058 `List-Unsubscribe=One-Click` target. Mail clients
+POST here automatically when the recipient uses the built-in Unsubscribe
+button surfaced from the `List-Unsubscribe` header.
+
+Body: `{ "token": "<unsubscribe_token>" }` (or `?token=` in the query
+string; either is accepted).
+
+Alert and digest emails carry:
+
+- Absolute footer:
+  `Unsubscribe: ${PUBLIC_API_URL}/v1/email/unsubscribe?token=...`.
+- Headers: `List-Unsubscribe: <${PUBLIC_API_URL}/v1/email/unsubscribe?token=...>`
+  and `List-Unsubscribe-Post: List-Unsubscribe=One-Click`.
+
+Tokens are HMAC-SHA256 derived from the subscriber's email plus
+`EMAIL_UNSUBSCRIBE_SECRET`. They are deterministic per subscriber and are
+not stored as raw UUIDs; rotating the secret invalidates every
+outstanding link.
 
 ### `GET /v1/email/subscribers`
 

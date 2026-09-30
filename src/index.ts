@@ -17,8 +17,9 @@ import priceHistoryRouter from "./routes/priceHistory";
 import panelsRouter from "./routes/panels";
 import metadataRouter from "./routes/metadata";
 import dashboardRouter from "./routes/dashboard";
-import emailRouter from "./routes/email";
+import emailRouter, { publicEmailRouter } from "./routes/email";
 import anomalyRouter from "./routes/anomaly";
+import anomalyAdminRouter from "./routes/anomaly-admin";
 import scoringFormulasRouter from "./routes/scoring-formulas";
 import chainsRouter from "./routes/chains";
 import satelliteSourcesRouter from "./routes/satellite-sources";
@@ -68,6 +69,7 @@ import { checkScheduledRotations } from "./lib/apiKeys";
 import { ipWhitelist } from "./middleware/ipWhitelist";
 import { apiKeyAuth } from "./middleware/apiKeyAuth";
 import { requestSigning } from "./middleware/requestSigning";
+import { requireAdminBearer } from "./middleware/requireAdminBearer";
 import { initApm } from "./lib/apm";
 import { csrfProtection } from "./middleware/csrf";
 import { startSecretRotation, stopSecretRotation, getSecretsStatus } from "./lib/secrets";
@@ -79,6 +81,7 @@ import { compressionMiddleware, getCompressionMetrics } from "./middleware/compr
 import { handleListenError } from "./lib/listen-errors";
 import { initBenchmarkSamples } from "./lib/benchmarking";
 import { createBenchmarkSampleInitializer } from "./lib/benchmarkStartup";
+import { createCronRunTracker, createShutdownSteps, runShutdownSequence } from "./lib/shutdown";
 import { getImpactCertificatePublicKey } from "./lib/impactCertificate";
 
 const env = initEnv();
@@ -108,11 +111,11 @@ if (initialAdminUserId) {
 
 // Initialize APM in background — errors are logged but don't block startup
 initApm().catch((err: Error) => {
-  console.error("[startup] APM initialization failed:", err.message);
+  logger.error("[startup] APM initialization failed:", { error: err.message });
 });
 
 if (!process.env.ADMIN_API_KEY) {
-  console.warn(
+  logger.warn(
     "[startup] WARNING: ADMIN_API_KEY is not set. Admin endpoints will return 500 errors.",
   );
 }
@@ -352,8 +355,21 @@ v1.use("/webhooks", ipWhitelist, adminLimiter, requestSigning, webhooksRouter);
 v1.use("/panels", ipWhitelist, adminLimiter, requestSigning, panelsRouter);
 v1.use("/metadata", ipWhitelist, adminLimiter, metadataRouter);
 v1.use("/dashboards", publicLimiter, apiKeyAuth, dashboardRouter);
+// The public router hosts GET/POST /unsubscribe so mail-client link-follows
+// (no admin headers, no IP allowlist) actually work. It MUST be mounted
+// before the admin router so Express matches the public handlers first;
+// everything else falls through to the admin mount below (#763).
+v1.use("/email", publicLimiter, publicEmailRouter);
 v1.use("/email", ipWhitelist, adminLimiter, requestSigning, emailRouter);
 v1.use("/anomaly", publicLimiter, anomalyRouter);
+v1.use(
+  "/anomaly",
+  ipWhitelist,
+  adminLimiter,
+  requireAdminBearer,
+  requestSigning,
+  anomalyAdminRouter,
+);
 v1.use("/scoring/formulas", ipWhitelist, adminLimiter, requestSigning, scoringFormulasRouter);
 v1.use("/chains", publicLimiter, adminLimiter, chainsRouter);
 v1.use("/satellite-sources", ipWhitelist, adminLimiter, requestSigning, satelliteSourcesRouter);
@@ -385,6 +401,7 @@ app.use("/api/webhooks", ipWhitelist, adminLimiter, webhooksRouter);
 app.use("/api/panels", ipWhitelist, adminLimiter, panelsRouter);
 app.use("/api/metadata", ipWhitelist, adminLimiter, metadataRouter);
 app.use("/api/dashboard", publicLimiter, apiKeyAuth, dashboardRouter);
+app.use("/api/email", publicLimiter, publicEmailRouter);
 app.use("/api/email", ipWhitelist, adminLimiter, emailRouter);
 app.use("/api/comparison", publicLimiter, apiKeyAuth, comparisonRouter);
 app.use("/api/benchmarking", publicLimiter, apiKeyAuth, benchmarkingRouter);
@@ -405,12 +422,17 @@ app.use(errorHandler);
 // const declared later would still be in its temporal dead zone here.
 const cronTasks: ScheduledTask[] = [];
 
+// Tracks the promise returned by each running cron handler so shutdown can
+// await work that is already in flight (node-cron's stop() only silences
+// future ticks — see #693).
+const cronRunTracker = createCronRunTracker();
+
 function scheduleCron(
   expression: string,
   fn: () => void | Promise<void>,
   opts?: { timezone?: string },
 ): void {
-  const task = cron.schedule(expression, fn, opts);
+  const task = cron.schedule(expression, cronRunTracker.wrap(fn), opts);
   cronTasks.push(task);
 }
 
@@ -471,7 +493,7 @@ scheduleCron(
   "*/5 * * * *",
   async () => {
     if (isShuttingDown) return;
-    if (isRpcOutageExtended(300_000)) {
+    if (isRpcOutageExtended(config.RPC_OUTAGE_THRESHOLD_MS)) {
       const status = getRpcStatus();
       logger.error(
         `[alert] Stellar RPC outage detected: ` +
@@ -531,7 +553,7 @@ const serverPromise = initializeBenchmarkSamples().then(async (sampleSize) => {
       resolve(server);
     });
     server.on("error", (err: NodeJS.ErrnoException) => {
-      logger.error("[startup] HTTP server bind failed", logger.formatError(err));
+      handleListenError(err, PORT);
       reject(err);
     });
   });
@@ -539,7 +561,7 @@ const serverPromise = initializeBenchmarkSamples().then(async (sampleSize) => {
   // Then start gRPC server
   try {
     grpcServer = await new Promise<grpc.Server>((resolve, reject) => {
-      const server = startGrpcServer(50051, (err, port) => {
+      const server = startGrpcServer(config.GRPC_PORT, (err, port) => {
         logger.error("[startup] gRPC server bind failed", {
           ...logger.formatError(err),
           port,
@@ -614,7 +636,7 @@ app.get("/graphql-playground", (req, res) => {
 // secret doesn't stay cached indefinitely (gated on SECRETS_ROTATION_ENABLED).
 startSecretRotation();
 
-// ── Graceful shutdown (#57) ──────────────────────────────────────────────────
+// ── Graceful shutdown (#57, #693) ────────────────────────────────────────────
 let isShuttingDown = false;
 
 async function gracefulShutdown(signal: string): Promise<void> {
@@ -624,46 +646,62 @@ async function gracefulShutdown(signal: string): Promise<void> {
   const shutdownTimeoutMs = config.SHUTDOWN_TIMEOUT_MS;
   logger.info(`[${signal}] graceful shutdown initiated (timeout: ${shutdownTimeoutMs}ms)`);
 
-  const shutdownPromise = (async () => {
-    // 1. Stop accepting new HTTP requests
-    logger.info("[shutdown] closing HTTP server (draining in-flight requests)…");
-    const server = await serverPromise;
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    logger.info("[shutdown] HTTP server closed");
-
-    // 2. Stop all cron jobs so no new work starts
-    logger.info(`[shutdown] stopping ${cronTasks.length} cron jobs…`);
-    for (const task of cronTasks) {
-      task.stop();
-    }
-    logger.info("[shutdown] cron jobs stopped");
-
-    // 3. Drain the RPC connection pool (waits up to 10 s for active connections)
-    logger.info("[shutdown] draining RPC connection pool…");
-    try {
-      await rpcPool.shutdown();
-      logger.info("[shutdown] connection pool drained");
-    } catch (err) {
-      logger.error("[shutdown] pool drain error", {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-
-    // 4. Stop the secret rotation timer so it doesn't keep the process alive
-    // or fire after shutdown begins.
-    stopSecretRotation();
-
-    // 5. Gracefully stop the gRPC server, letting in-flight/streaming RPCs
+  // Order is deliberate: stop producing work (cron scheduling, background
+  // timers) *before* draining the resources that work uses. Draining HTTP first
+  // let a scheduled job start mid-drain and race the teardown (#693). The whole
+  // sequence is bounded by the `shutdownTimeoutMs` race below.
+  const steps = createShutdownSteps({
+    // 1. Stop cron scheduling so no new job is produced.
+    stopCronScheduling: async () => {
+      logger.info(`[shutdown] stopping ${cronTasks.length} cron jobs…`);
+      await Promise.all(cronTasks.map(async (task) => task.stop()));
+      logger.info("[shutdown] cron jobs stopped");
+    },
+    // 2. Give work already in flight a chance to finish.
+    awaitInFlightCron: async () => {
+      const pending = cronRunTracker.pending();
+      if (pending > 0) {
+        logger.info(`[shutdown] awaiting ${pending} in-flight cron job(s)…`);
+      }
+      await cronRunTracker.drain();
+      logger.info("[shutdown] in-flight cron jobs drained");
+    },
+    // 3. Stop the secret rotation timer so it doesn't fire after shutdown begins.
+    stopBackgroundTimers: () => {
+      stopSecretRotation();
+    },
+    // 4. Stop accepting new HTTP requests and drain in-flight ones.
+    closeHttpServer: async () => {
+      logger.info("[shutdown] closing HTTP server (draining in-flight requests)…");
+      const server = await serverPromise;
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      logger.info("[shutdown] HTTP server closed");
+    },
+    // 5. Drain the RPC connection pool (waits up to 10 s for active connections).
+    drainRpc: async () => {
+      logger.info("[shutdown] draining RPC connection pool…");
+      try {
+        await rpcPool.shutdown();
+        logger.info("[shutdown] connection pool drained");
+      } catch (err) {
+        logger.error("[shutdown] pool drain error", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+    // 6. Gracefully stop the gRPC server, letting in-flight/streaming RPCs
     // (e.g. StreamProjectScores) drain instead of being killed mid-stream.
-    if (grpcServer) {
+    drainGrpc: async () => {
+      if (!grpcServer) return;
+      const server = grpcServer;
       logger.info("[shutdown] draining gRPC server…");
       await new Promise<void>((resolve) => {
         const forceTimer = setTimeout(() => {
           logger.warn("[shutdown] gRPC drain timed out, forcing shutdown");
-          grpcServer!.forceShutdown();
+          server.forceShutdown();
           resolve();
         }, shutdownTimeoutMs);
-        grpcServer!.tryShutdown((err) => {
+        server.tryShutdown((err) => {
           clearTimeout(forceTimer);
           if (err) {
             logger.error("[shutdown] gRPC shutdown error", { error: err.message });
@@ -673,11 +711,14 @@ async function gracefulShutdown(signal: string): Promise<void> {
           resolve();
         });
       });
-    }
+    },
+    exit: (code) => {
+      logger.info("[shutdown] clean exit");
+      process.exit(code);
+    },
+  });
 
-    logger.info("[shutdown] clean exit");
-    process.exit(0);
-  })();
+  const shutdownPromise = runShutdownSequence(steps);
 
   // Apply overall shutdown timeout — force exit if graceful cleanup takes too long
   const timeoutPromise = new Promise<void>((_, reject) => {
