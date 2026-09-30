@@ -10,6 +10,7 @@
 
 jest.mock("../lib/registry", () => ({
   getTotalProjects: jest.fn(),
+  isRegistryPaused: jest.fn().mockResolvedValue(false),
   updateImpactScore: jest.fn(),
   RpcDegradedError: class RpcDegradedError extends Error {
     constructor(message?: string) {
@@ -78,7 +79,12 @@ import { recordScoreHistory } from "../lib/history";
 import { triggerWebhooks } from "../lib/webhooks";
 import { runHourlyScoreUpdate } from "../lib/scoreUpdateCron";
 import { resetIdempotencyState } from "../lib/scoreService";
-import { getTotalProjects, updateImpactScore, RpcDegradedError } from "../lib/registry";
+import {
+  getTotalProjects,
+  isRegistryPaused,
+  updateImpactScore,
+  RpcDegradedError,
+} from "../lib/registry";
 import { getSolarData } from "../lib/iot";
 import { fetchSatelliteWithFallback } from "../lib/satellite-sources";
 import { computeScores } from "../lib/scoring";
@@ -179,5 +185,99 @@ describe("runHourlyScoreUpdate (cron job execution flow)", () => {
 
     expect(recordScoreHistory).toHaveBeenCalledTimes(1);
     expect(triggerWebhooks).toHaveBeenCalledTimes(1);
+  });
+
+  // ── #765: skip inactive / paused projects ────────────────────────────────
+
+  describe("#765 skip guardrails", () => {
+    async function readCounter(
+      reason: "paused" | "archived" | "deleted" | "unchanged",
+    ): Promise<number> {
+      const { cronProjectsSkipped } = await import("../lib/prometheus");
+      const metric = await cronProjectsSkipped.get();
+      const line = metric.values.find(
+        (v) => v.labels.job === "score-update" && v.labels.reason === reason,
+      );
+      return line?.value ?? 0;
+    }
+
+    it("skips the whole batch when the registry is paused and records a skipped run", async () => {
+      (isRegistryPaused as jest.Mock).mockResolvedValueOnce(true);
+      (getTotalProjects as jest.Mock).mockResolvedValue(5);
+      const before = await readCounter("paused");
+
+      await runHourlyScoreUpdate();
+
+      // Zero submissions attempted and the total_projects call was not
+      // needed because the pause gate short-circuits before it.
+      expect(updateImpactScore).not.toHaveBeenCalled();
+      expect(getTotalProjects).not.toHaveBeenCalled();
+      expect(recordCronRun).toHaveBeenCalledWith("score-update", "skipped", "paused");
+      expect(markFailed).not.toHaveBeenCalled();
+      expect(await readCounter("paused")).toBe(before + 1);
+    });
+
+    it("skips a project whose submission panics with ProjectArchived and does not count it as a failure", async () => {
+      (getTotalProjects as jest.Mock).mockResolvedValue(3);
+      (updateImpactScore as jest.Mock)
+        .mockResolvedValueOnce("tx-1")
+        .mockRejectedValueOnce(new Error("HostError: Error(Contract, #3)"))
+        .mockResolvedValueOnce("tx-3");
+      const before = await readCounter("archived");
+
+      await runHourlyScoreUpdate();
+
+      expect(markFailed).not.toHaveBeenCalledWith(2);
+      // 2 submissions succeeded, 1 skipped, 0 failed. The "ALL projects failed"
+      // path must NOT fire.
+      expect(recordCronRun).toHaveBeenCalledWith("score-update", "success");
+      expect(await readCounter("archived")).toBe(before + 1);
+    });
+
+    it("skips a project whose submission panics with ProjectNotFound (deleted) and does not count it as a failure", async () => {
+      (getTotalProjects as jest.Mock).mockResolvedValue(2);
+      (updateImpactScore as jest.Mock)
+        .mockRejectedValueOnce(new Error("HostError: Error(Contract, #7)"))
+        .mockResolvedValueOnce("tx-2");
+      const before = await readCounter("deleted");
+
+      await runHourlyScoreUpdate();
+
+      expect(markFailed).not.toHaveBeenCalledWith(1);
+      expect(recordCronRun).toHaveBeenCalledWith("score-update", "success");
+      expect(await readCounter("deleted")).toBe(before + 1);
+    });
+
+    it("increments the unchanged counter when scoreService returns a skip (data unchanged / stale reading)", async () => {
+      // Force scoreService to short-circuit via the freshness gate by feeding
+      // it a stale satellite reading; that path returns { status: "skipped" }
+      // which the cron now counts under `unchanged` in the prom counter.
+      (getTotalProjects as jest.Mock).mockResolvedValue(1);
+      (fetchSatelliteWithFallback as jest.Mock).mockResolvedValue({
+        forest_density_pct: 60,
+        ndvi_score: 0.6,
+        timestamp: Date.now() - 24 * 60 * 60 * 1000, // 24h old
+      });
+      const before = await readCounter("unchanged");
+
+      await runHourlyScoreUpdate();
+
+      expect(updateImpactScore).not.toHaveBeenCalled();
+      expect(markFailed).not.toHaveBeenCalled();
+      expect(await readCounter("unchanged")).toBe(before + 1);
+    });
+
+    it("does not fire the ALL-projects-failed alert when every project is archived (contract errors are skips, not failures)", async () => {
+      (getTotalProjects as jest.Mock).mockResolvedValue(3);
+      (updateImpactScore as jest.Mock).mockRejectedValue(
+        new Error("HostError: Error(Contract, #3)"),
+      );
+
+      await runHourlyScoreUpdate();
+
+      // No project counted as a failure, so the "ALL failed" branch is not hit.
+      expect(markFailed).not.toHaveBeenCalled();
+      expect(recordCronRun).toHaveBeenCalledWith("score-update", "success");
+    });
   });
 });

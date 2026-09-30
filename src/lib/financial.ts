@@ -111,7 +111,6 @@ function buildCashFlows(input: FinancialInput): DiscountedCashFlow[] {
   } = input;
 
   const cashFlows: DiscountedCashFlow[] = [];
-  const realDiscountRate = (1 + discount_rate) / (1 + inflation_rate) - 1;
 
   for (let year = 0; year <= project_lifetime_years; year++) {
     if (year === 0) {
@@ -129,6 +128,10 @@ function buildCashFlows(input: FinancialInput): DiscountedCashFlow[] {
       continue;
     }
 
+    // Cash flows are nominal: revenue and maintenance costs are escalated by
+    // the inflation rate, so they must be discounted at the nominal discount
+    // rate. Discounting nominal cash flows at a real (inflation-adjusted) rate
+    // would remove inflation twice.
     const degradedOutput = annual_energy_output_kwh * Math.pow(1 - degradation_rate, year - 1);
     const inflatedPrice = electricity_price_per_kwh * Math.pow(1 + inflation_rate, year - 1);
     const revenue = degradedOutput * inflatedPrice;
@@ -137,7 +140,7 @@ function buildCashFlows(input: FinancialInput): DiscountedCashFlow[] {
     if (year === project_lifetime_years) {
       netCF += salvage_value;
     }
-    const dcf = netCF / Math.pow(1 + realDiscountRate, year);
+    const dcf = netCF / Math.pow(1 + discount_rate, year);
     const prevCumulative = cashFlows[year - 1]?.cumulative_discounted_cash_flow ?? 0;
 
     cashFlows.push({

@@ -108,12 +108,14 @@ function round(n: number, d = 4): number {
   return Math.round(n * f) / f;
 }
 
-function mean(values: number[]): number {
+// Exported for tests; also used internally by the forecasting helpers.
+export function mean(values: number[]): number {
   if (values.length === 0) return 0;
   return values.reduce((s, v) => s + v, 0) / values.length;
 }
 
-function stdDev(values: number[], avg: number): number {
+// Exported for tests; also used internally by the forecasting helpers.
+export function stdDev(values: number[], avg: number): number {
   if (values.length === 0) return 0;
   return Math.sqrt(values.reduce((s, v) => s + (v - avg) ** 2, 0) / values.length);
 }

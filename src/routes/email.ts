@@ -17,6 +17,52 @@ const router = Router();
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// ── Public router (#763) ─────────────────────────────────────────────────────
+//
+// The admin `router` below sits behind `ipWhitelist + adminLimiter +
+// requestSigning`, which rejects any browser-followed link out of hand. The
+// public router hosts just the unsubscribe endpoints so recipients can
+// actually opt out. Mount it BEFORE the admin router in src/index.ts so
+// `/unsubscribe` matches the public handler first.
+export const publicEmailRouter = Router();
+
+function extractToken(req: Request): string | undefined {
+  // Accept the token from either the query string (GET click-through) or the
+  // request body (RFC 8058 One-Click POST). Only the first value if a client
+  // duplicates the field.
+  const q = Array.isArray(req.query.token) ? req.query.token[0] : req.query.token;
+  if (typeof q === "string" && q) return q;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const b = body.token;
+  return typeof b === "string" && b ? b : undefined;
+}
+
+function handlePublicUnsubscribe(req: Request, res: Response): void {
+  const token = extractToken(req);
+  if (!token) {
+    throw badRequest("token is required (query string or request body)");
+  }
+  const removed = unsubscribeByToken(token);
+  if (!removed) {
+    res.status(404).json({
+      error: "not_found",
+      message: "Unknown or already-used unsubscribe token",
+    });
+    return;
+  }
+  res.json({ unsubscribed: true });
+}
+
+/** GET /v1/email/unsubscribe?token=: click-through from an email footer. */
+publicEmailRouter.get("/unsubscribe", handlePublicUnsubscribe);
+
+/**
+ * POST /v1/email/unsubscribe: RFC 8058 List-Unsubscribe=One-Click target.
+ * Mail clients POST here without user interaction when the recipient clicks
+ * the Unsubscribe button surfaced from the `List-Unsubscribe` header.
+ */
+publicEmailRouter.post("/unsubscribe", handlePublicUnsubscribe);
+
 /** POST /email/subscribe — { email, frequency? } */
 router.post("/subscribe", (req: Request, res: Response) => {
   const { email, frequency } = req.body as { email?: unknown; frequency?: unknown };
@@ -35,19 +81,8 @@ router.post("/subscribe", (req: Request, res: Response) => {
   });
 });
 
-/** GET /email/unsubscribe?token= — one-click unsubscribe. */
-router.get("/unsubscribe", (req: Request, res: Response) => {
-  const token = Array.isArray(req.query.token) ? req.query.token[0] : req.query.token;
-  if (typeof token !== "string" || !token) {
-    throw badRequest("token query param is required");
-  }
-  const removed = unsubscribeByToken(token);
-  if (!removed) {
-    res.status(404).json({ error: "not_found", message: "Unknown or already-used unsubscribe token" });
-    return;
-  }
-  res.json({ unsubscribed: true });
-});
+// GET /email/unsubscribe moved to `publicEmailRouter` above so recipients
+// can actually reach the endpoint from a mail client. See #763.
 
 /** GET /email/subscribers — list current subscribers. */
 router.get("/subscribers", (req: Request, res: Response) => {

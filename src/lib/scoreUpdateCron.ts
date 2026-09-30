@@ -1,4 +1,4 @@
-import { getTotalProjects } from "./registry";
+import { getTotalProjects, isRegistryPaused } from "./registry";
 import { updateScoreForProject } from "./scoreService";
 import { recordScoreHistory, getHistory } from "./history";
 import { tryBeginUpdate, markCompleted, markFailed } from "./duplicate-detection";
@@ -12,7 +12,31 @@ import { broadcastScoreUpdate } from "./websocket";
 import { recordCronRun } from "./health";
 import { logger } from "./logger";
 import { config } from "../config";
-import { cronJobDuration, cronJobTotal } from "./prometheus";
+import {
+  cronJobDuration,
+  cronJobTotal,
+  cronProjectsSkipped,
+  registryPaused as registryPausedGauge,
+} from "./prometheus";
+import { parseContractError } from "./contractErrors";
+
+/**
+ * Reasons the cron can skip a project before or during submission (#765).
+ *
+ * `paused` covers the whole batch; the rest are per-project. Kept as a
+ * closed union so any future skip reason has to be added intentionally
+ * (and mirrored in dashboards that filter on the label).
+ */
+export type CronSkipReason = "paused" | "archived" | "deleted" | "unchanged";
+
+function classifyContractSkip(err: unknown): CronSkipReason | null {
+  const decoded = parseContractError(err, "registry");
+  if (!decoded) return null;
+  if (decoded.name === "ProjectArchived") return "archived";
+  if (decoded.name === "ProjectNotFound") return "deleted";
+  if (decoded.name === "Paused") return "paused";
+  return null;
+}
 
 /**
  * Core logic for the hourly score-update cron job. Extracted from src/index.ts
@@ -21,17 +45,56 @@ import { cronJobDuration, cronJobTotal } from "./prometheus";
  * Fetches the total project count, walks every project, computes fresh scores,
  * and submits them on-chain. Per-project failures are isolated (logged and
  * counted) so one bad project never aborts the batch. A getTotalProjects
- * failure aborts the whole run — there's nothing to iterate without it.
+ * failure aborts the whole run, there's nothing to iterate without it.
+ *
+ * Before iterating, `is_paused()` is simulated once; a paused registry causes
+ * the whole batch to be skipped (recorded as `skipped(paused)` in health and
+ * the Prometheus `cron_projects_skipped_total` counter) rather than running
+ * `n` per-project simulations that would all fail with `Paused` (#765).
+ * Per-project archived and deleted contract errors are similarly classified
+ * as skips rather than failures so they don't trip the "ALL projects failed"
+ * alert.
  */
 export async function runHourlyScoreUpdate(): Promise<void> {
   const endCronTimer = cronJobDuration.startTimer({ job: "score-update" });
   try {
     logger.info("[cron] running hourly score update");
+
+    // Pause gate: one contract read up-front avoids `n` per-project
+    // simulations that would all fail with the same `Paused` error while
+    // emergency_pause() is engaged.
+    let paused: boolean;
+    try {
+      paused = await isRegistryPaused();
+    } catch (err) {
+      // A failure of the pause check itself is not conclusive; fall through
+      // and let the per-project loop run. Any Paused errors from the loop
+      // will still be classified as skips, so the "ALL failed" alert won't
+      // fire spuriously.
+      logger.warn(
+        "[cron] is_paused check failed; continuing without pause gate",
+        logger.formatError(err),
+      );
+      paused = false;
+    }
+
+    if (paused) {
+      registryPausedGauge.set(1);
+      logger.info("[cron] registry is paused; skipping score-update run");
+      cronProjectsSkipped.inc({ job: "score-update", reason: "paused" });
+      recordCronRun("score-update", "skipped", "paused");
+      endCronTimer();
+      cronJobTotal.inc({ job: "score-update", result: "skipped" });
+      return;
+    }
+    registryPausedGauge.set(0);
+
     const total = await getTotalProjects();
     const projectIds = Array.from({ length: total }, (_, i) => i + 1);
 
     let successCount = 0;
     let failureCount = 0;
+    let skippedCount = 0;
 
     for (const projectId of projectIds) {
       await withProjectLock(projectId, async () => {
@@ -56,8 +119,10 @@ export async function runHourlyScoreUpdate(): Promise<void> {
             logger.warn(
               `[cron] project ${projectId}: skipped on-chain update (${scoreResult.reason})`,
             );
+            cronProjectsSkipped.inc({ job: "score-update", reason: "unchanged" });
             markCompleted(projectId);
             resetErrorRateLimit(`cron:project-${projectId}`);
+            skippedCount++;
             return;
           }
 
@@ -110,6 +175,19 @@ export async function runHourlyScoreUpdate(): Promise<void> {
           resetErrorRateLimit(`cron:project-${projectId}`);
           successCount++;
         } catch (err) {
+          // Archived / deleted / paused project errors are expected state
+          // transitions, not oracle failures. Classify them as skips so
+          // they don't trip the "ALL projects failed" alert and don't
+          // spam the log on every hourly run.
+          const skipReason = classifyContractSkip(err);
+          if (skipReason) {
+            logger.info(`[cron] project ${projectId}: skipping (${skipReason})`);
+            cronProjectsSkipped.inc({ job: "score-update", reason: skipReason });
+            markCompleted(projectId);
+            resetErrorRateLimit(`cron:project-${projectId}`);
+            skippedCount++;
+            return;
+          }
           markFailed(projectId);
           if (!isErrorRateLimited(`cron:project-${projectId}`)) {
             logger.error(`[cron] project ${projectId} failed`, logger.formatError(err));
@@ -123,9 +201,9 @@ export async function runHourlyScoreUpdate(): Promise<void> {
     const failureRate = totalProcessed > 0 ? failureCount / totalProcessed : 0;
 
     if (totalProcessed > 0 && failureCount === totalProcessed) {
-      // All attempted projects failed — likely a systemic RPC or contract issue.
+      // All attempted projects failed, likely a systemic RPC or contract issue.
       logger.error(
-        `[cron] ALERT: ALL ${failureCount} projects failed in score-update batch — ` +
+        `[cron] ALERT: ALL ${failureCount} projects failed in score-update batch; ` +
           `check Soroban RPC connectivity and contract state`,
       );
       recordCronRun("score-update", "error");
@@ -138,7 +216,12 @@ export async function runHourlyScoreUpdate(): Promise<void> {
             `${failureCount}/${totalProcessed} (${(failureRate * 100).toFixed(1)}%)`,
         );
       }
-      logger.info("[cron] hourly score update complete", { total, successCount, failureCount });
+      logger.info("[cron] hourly score update complete", {
+        total,
+        successCount,
+        failureCount,
+        skippedCount,
+      });
       recordCronRun("score-update", "success");
       endCronTimer();
       cronJobTotal.inc({ job: "score-update", result: "success" });
