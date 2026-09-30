@@ -1,0 +1,121 @@
+groups:
+  - name: oracle_slo_alerts
+    interval: 30s
+    rules:
+      # Score Freshness Alert
+      - alert: OracleScoreStaleness
+        expr: (time() - oracle_score_age_seconds) > 7200
+        for: 5m
+        labels:
+          severity: warning
+          component: oracle
+        annotations:
+          summary: "Oracle score is stale for project {{ $labels.project_id }}"
+          description: "Project {{ $labels.project_id }} has not been updated in {{ $value }} seconds (threshold: 7200s / 2 hours)"
+          runbook_url: "https://github.com/Heliobond/backend/blob/main/docs/SLO.md#score-staleness"
+
+      # Submission Failure Rate Alert
+      - alert: OracleSubmissionFailureRate
+        expr: rate(stellar_tx_submissions_total{result="failure"}[1h]) / rate(stellar_tx_submissions_total[1h]) > 0.01
+        for: 10m
+        labels:
+          severity: critical
+          component: oracle
+        annotations:
+          summary: "Oracle submission failure rate above 1%"
+          description: "{{ $value | humanizePercentage }} of submissions are failing (SLO threshold: 99% success)"
+          runbook_url: "https://github.com/Heliobond/backend/blob/main/docs/SLO.md#high-failure-rate"
+
+      # Low Signer Balance Alert
+      - alert: OracleSignerLowBalance
+        expr: oracle_signer_balance_xlm < 100
+        for: 1m
+        labels:
+          severity: warning
+          component: oracle
+        annotations:
+          summary: "Oracle signer balance is low"
+          description: "Signer balance is {{ $value }} XLM (threshold: 100 XLM). Top up soon to prevent submission failures."
+          runbook_url: "https://github.com/Heliobond/backend/blob/main/docs/SLO.md#low-balance"
+
+      # Critical Low Balance (imminent failure)
+      - alert: OracleSignerCriticalBalance
+        expr: oracle_signer_balance_xlm < 10
+        for: 1m
+        labels:
+          severity: critical
+          component: oracle
+        annotations:
+          summary: "Oracle signer balance is critically low"
+          description: "Signer balance is {{ $value }} XLM. Submissions will fail soon!"
+          runbook_url: "https://github.com/Heliobond/backend/blob/main/docs/SLO.md#low-balance"
+
+      # Registry Paused Alert
+      - alert: RegistryPausedUnexpectedly
+        expr: registry_paused == 1
+        for: 15m
+        labels:
+          severity: warning
+          component: oracle
+        annotations:
+          summary: "Registry has been paused for >15 minutes"
+          description: "Registry is paused. Score updates are being rejected. Check if this is a planned maintenance."
+          runbook_url: "https://github.com/Heliobond/backend/blob/main/docs/SLO.md#registry-paused"
+
+      # High Submit-to-Confirm Latency Alert
+      - alert: OracleHighLatency
+        expr: histogram_quantile(0.95, rate(oracle_submit_to_confirm_latency_seconds_bucket[5m])) > 30
+        for: 10m
+        labels:
+          severity: warning
+          component: oracle
+        annotations:
+          summary: "Oracle submission latency is high"
+          description: "P95 submit-to-confirm latency is {{ $value }}s (threshold: 30s). Stellar RPC may be degraded."
+          runbook_url: "https://github.com/Heliobond/backend/blob/main/docs/SLO.md"
+
+      # SLO Burn Rate (Fast Burn - 1% error budget consumed in 1 hour)
+      - alert: OracleSLOFastBurn
+        expr: |
+          (
+            rate(stellar_tx_submissions_total{result="failure"}[1h]) 
+            / 
+            rate(stellar_tx_submissions_total[1h])
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          component: oracle
+        annotations:
+          summary: "Oracle SLO error budget burning fast"
+          description: "Failure rate is {{ $value | humanizePercentage }} over 1h (consuming error budget rapidly)"
+          runbook_url: "https://github.com/Heliobond/backend/blob/main/docs/SLO.md#high-failure-rate"
+
+      # SLO Burn Rate (Slow Burn - sustained over 6 hours)
+      - alert: OracleSLOSlowBurn
+        expr: |
+          (
+            rate(stellar_tx_submissions_total{result="failure"}[6h]) 
+            / 
+            rate(stellar_tx_submissions_total[6h])
+          ) > 0.01
+        for: 30m
+        labels:
+          severity: warning
+          component: oracle
+        annotations:
+          summary: "Oracle SLO error budget burning steadily"
+          description: "Failure rate is {{ $value | humanizePercentage }} over 6h (sustained above SLO threshold)"
+          runbook_url: "https://github.com/Heliobond/backend/blob/main/docs/SLO.md#high-failure-rate"
+
+      # No Recent Submissions (oracle may be down)
+      - alert: OracleNoRecentSubmissions
+        expr: rate(stellar_tx_submissions_total[10m]) == 0
+        for: 15m
+        labels:
+          severity: critical
+          component: oracle
+        annotations:
+          summary: "Oracle has not submitted any transactions recently"
+          description: "No submissions in the last 15 minutes. Oracle cron may be stuck or service may be down."
+          runbook_url: "https://github.com/Heliobond/backend/blob/main/docs/SLO.md"

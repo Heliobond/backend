@@ -5,4 +5,4 @@ coverage/
 .env.local
 load-tests/reports/
 .mimocode/
-fix.md
+fix.mdlogs/

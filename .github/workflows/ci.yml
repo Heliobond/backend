@@ -49,6 +49,38 @@ jobs:
       - name: Test
         run: bun run test
 
+  openapi-client:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.x"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check OpenAPI spec is up to date
+        run: bun run openapi:check
+
+      - name: Regenerate spec and client
+        run: |
+          bun run openapi:export
+          bun run api-client:generate
+
+      - name: Fail if generated files are stale
+        run: git diff --exit-code -- openapi.json packages/api-client
+
+      - name: Build client
+        run: bun run api-client:build
+
+      - name: Smoke-test client import
+        run: |
+          node --input-type=module -e "import { createApiClient } from './packages/api-client/dist/index.js'; createApiClient({ baseUrl: 'http://localhost' })"
+
   codeql:
     runs-on: ubuntu-latest
     permissions:

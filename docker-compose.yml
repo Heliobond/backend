@@ -1,3 +1,7 @@
+# Default `docker compose up` starts just the backend (needs a .env).
+# `docker compose --profile local-stack up backend-local` starts the whole platform locally
+# (Stellar node, contract deployer, Postgres, backend, frontend) — see
+# docs/LOCAL_STACK.md (#662).
 services:
   backend:
     build:
@@ -33,3 +37,95 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  # ── Local full stack (profile: local-stack) ────────────────────────────────
+  stellar:
+    profiles: [local-stack]
+    image: stellar/quickstart:latest
+    command: ["--local", "--enable", "rpc,core,friendbot"]
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/soroban/rpc", "-X", "POST", "-H", "Content-Type: application/json", "-d", '{"jsonrpc":"2.0","id":1,"method":"getHealth"}']
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  postgres:
+    profiles: [local-stack]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: heliobond_dev
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d heliobond_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One-shot: builds + deploys the contracts, funds accounts, writes /stack/contracts.env.
+  deployer:
+    profiles: [local-stack]
+    image: stellar/stellar-cli:latest
+    user: root
+    entrypoint: ["/bin/sh", "/deploy.sh"]
+    environment:
+      RPC_URL: http://stellar:8000/soroban/rpc
+    volumes:
+      - ${CONTRACTS_DIR:-../contracts}:/contracts
+      - ./scripts/local-stack/deploy.sh:/deploy.sh:ro
+      - stack:/stack
+    depends_on:
+      stellar:
+        condition: service_healthy
+
+  backend-local:
+    profiles: [local-stack]
+    build:
+      context: .
+      target: production
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: development
+      PORT: "3001"
+      DB_HOST: postgres
+      DB_NAME: heliobond_dev
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-local-admin-key}
+      CORS_ORIGIN: http://localhost:3000
+    volumes:
+      - stack:/stack:ro
+    # contracts.env (written by `deployer`) supplies the contract ids, RPC URL and admin key.
+    command: ["sh", "-c", "set -a; . /stack/contracts.env; set +a; exec node dist/index.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      deployer:
+        condition: service_completed_successfully
+
+  # Optional: set FRONTEND_DIR to a checkout of the frontend repo.
+  frontend:
+    profiles: [local-stack-frontend]
+    build:
+      context: ${FRONTEND_DIR:-../frontend}
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:3001
+      NEXT_PUBLIC_RPC_URL: http://localhost:8000/soroban/rpc
+      NEXT_PUBLIC_NETWORK_PASSPHRASE: "Standalone Network ; February 2017"
+    volumes:
+      - stack:/stack:ro
+    depends_on:
+      backend-local:
+        condition: service_started
+
+volumes:
+  pgdata:
+  stack:

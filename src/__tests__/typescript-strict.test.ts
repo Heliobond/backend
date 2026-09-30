@@ -131,11 +131,13 @@ describe("TypeScript Strict Improvements (Issue #287)", () => {
   describe("Type Coverage", () => {
     it("no implicit any in function parameters", () => {
       const result = execSync(
-        `find ${srcDir} -type f -name "*.ts" ! -path "*/__tests__/*" ! -name "*.test.ts" ! -name "*.spec.ts" -exec grep -l "function.*([^:]*)" {} \\; | wc -l`,
+        `find ${srcDir} -type f -name "*.ts" ! -path "*/__tests__/*" ! -name "*.test.ts" ! -name "*.spec.ts" -exec grep -lE "function[^(]*\\([^):]+\\)" {} \\; | wc -l`,
         { encoding: "utf-8" },
       );
 
-      // This is a simple heuristic; real projects might need type-coverage tool
+      // Simple heuristic: files with a function whose parameter list has no type
+      // annotations (zero-arg functions are not counted). Real projects might need
+      // a type-coverage tool.
       expect(parseInt(result.trim(), 10)).toBeLessThan(50);
     });
 

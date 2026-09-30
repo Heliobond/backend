@@ -21,7 +21,7 @@ const baseConfig: Knex.Config = {
  * always on; a private CA is supported via DB_SSL_CA_PATH (or DB_SSL_CA /
  * DATABASE_CA).
  */
-function getSslConfig(): { rejectUnauthorized: true; ca?: string } {
+export function getSslConfig(): { rejectUnauthorized: true; ca?: string } {
   const caPath = process.env.DB_SSL_CA_PATH || process.env.DB_SSL_CA || process.env.DATABASE_CA;
   if (caPath) {
     return {

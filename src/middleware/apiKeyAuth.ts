@@ -1,7 +1,5 @@
 import { Request, Response, NextFunction } from "express";
 import { resolveAuthContext, incrementUsage } from "../lib/apiKeys";
-import { validateApiKey, incrementUsage, isRateLimited } from "../lib/apiKeys";
-import { timingSafeCompare } from "../lib/timing-safe";
 import { errorBody } from "./errors";
 
 export interface AuthenticatedRequest extends Request {
@@ -20,18 +18,6 @@ export function apiKeyAuth(req: AuthenticatedRequest, res: Response, next: NextF
   }
 
   if (!auth.providedKey) {
-    return res.status(401).json({
-      error: "unauthorized",
-      message: "Missing API key in Authorization bearer token or X-API-Key header",
-    });
-  }
-
-  if (auth.rateLimited) {
-    return res.status(429).json({
-      error: "too_many_requests",
-      message: "Rate limit exceeded for this API key. Please retry later.",
-    });
-  if (!providedKey) {
     return res
       .status(401)
       .json(
@@ -42,13 +28,7 @@ export function apiKeyAuth(req: AuthenticatedRequest, res: Response, next: NextF
       );
   }
 
-  const apiKeyRecord = validateApiKey(providedKey);
-  if (!apiKeyRecord) {
-    return res.status(401).json(errorBody("unauthorized", "Invalid or revoked API key"));
-  }
-
-  // Enforce rate limit
-  if (isRateLimited(apiKeyRecord.id, apiKeyRecord.rate_limit)) {
+  if (auth.rateLimited) {
     return res
       .status(429)
       .json(
@@ -57,10 +37,7 @@ export function apiKeyAuth(req: AuthenticatedRequest, res: Response, next: NextF
   }
 
   if (!auth.isConsumer || !auth.keyRecord) {
-    return res.status(401).json({
-      error: "unauthorized",
-      message: "Invalid or revoked API key",
-    });
+    return res.status(401).json(errorBody("unauthorized", "Invalid or revoked API key"));
   }
 
   // Increment usage

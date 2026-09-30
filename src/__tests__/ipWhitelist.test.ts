@@ -2,6 +2,17 @@ import express from "express";
 import request from "supertest";
 import { ipWhitelist, refreshIPWhitelist } from "../middleware/ipWhitelist";
 
+jest.mock("../config", () => ({
+  config: {
+    get ADMIN_IP_WHITELIST() {
+      return process.env.ADMIN_IP_WHITELIST ?? "";
+    },
+    get ADMIN_IP_WHITELIST_BYPASS_PRIVATE() {
+      return process.env.ADMIN_IP_WHITELIST_BYPASS_PRIVATE ?? "true";
+    },
+  },
+}));
+
 describe("IP Whitelist Middleware", () => {
   let originalEnv: NodeJS.ProcessEnv;
 

@@ -1,0 +1,38 @@
+{
+  "name": "@heliobond/api-client",
+  "version": "1.0.0",
+  "description": "Type-safe API client for Heliobond backend",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "openapi-fetch": "^0.13.0"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "openapi-fetch": "^0.13.0"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com/",
+    "access": "restricted"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/heliobond/backend.git",
+    "directory": "packages/api-client"
+  }
+}

@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import cron, { ScheduledTask } from "node-cron";
 import { config, initEnv } from "./config";
+import { getTotalProjects } from "./lib/registry";
 import swaggerUi from "swagger-ui-express";
 import iotRouter from "./routes/iot";
 import adminRouter from "./routes/admin";
@@ -26,26 +27,18 @@ import financialRouter from "./routes/financial";
 import forecastRouter from "./routes/forecast";
 import maintenanceRouter from "./routes/maintenance";
 import investorRouter from "./routes/investor";
+import investorActivityRouter from "./routes/investorActivity";
 import apiKeysRouter from "./routes/apiKeys";
+import notificationsRouter, { publicNotificationsRouter } from "./routes/notifications";
+import oracleStatusRouter from "./routes/oracle-status";
 import { createHandler } from "graphql-http/lib/use/express";
 import { graphqlSchema, graphqlRoot, createGraphQLContext } from "./graphql/schema";
 import { startGrpcServer } from "./grpc/server";
-import { getSolarData } from "./lib/iot";
 import { assignRole } from "./lib/roles";
-import { fetchSatelliteWithFallback } from "./lib/satellite-sources";
-import { computeScores } from "./lib/scoring";
-import { getTotalProjects, updateImpactScore, DuplicateSubmissionError } from "./lib/registry";
-import { generateIdempotencyKey, checkIdempotency } from "./lib/idempotency";
 import { runHourlyScoreUpdate } from "./lib/scoreUpdateCron";
+import { runTxQueueRetry } from "./lib/txQueueRetryCron";
 import { isErrorRateLimited } from "./lib/error-limiter";
-import { isRpcOutageExtended, isRpcAvailable, getRpcStatus } from "./lib/stellar";
-import {
-  getQueueSize,
-  getQueueSnapshot,
-  remove,
-  incrementRetry,
-  hasExceededMaxRetries,
-} from "./lib/tx-queue";
+import { isRpcOutageExtended, getRpcStatus } from "./lib/stellar";
 import { indexer } from "./lib/indexer";
 import { getHealth, getReadiness, recordCronRun } from "./lib/health";
 import { getMetrics } from "./lib/metrics";
@@ -59,7 +52,12 @@ import { errorHandler, notFoundHandler } from "./middleware/errors";
 import { sanitizeInputs } from "./middleware/sanitize";
 import { securityHeaders, permissionsHeaders } from "./middleware/securityHeaders";
 import { publicLimiter, adminLimiter, parseTrustProxy } from "./middleware/rateLimit";
-import { versionHeaders, acceptVersion, deprecationHeaders } from "./middleware/versioning";
+import {
+  versionHeaders,
+  acceptVersion,
+  deprecationHeaders,
+  legacyApiUsage,
+} from "./middleware/versioning";
 import { runWithCorrelationId, generateCorrelationId } from "./lib/correlation";
 import { logger } from "./lib/logger";
 import { getTraces, getTraceSummary } from "./lib/tracer";
@@ -69,16 +67,17 @@ import { ipWhitelist } from "./middleware/ipWhitelist";
 import { apiKeyAuth } from "./middleware/apiKeyAuth";
 import { requestSigning } from "./middleware/requestSigning";
 import { initApm } from "./lib/apm";
-import { csrfProtection, setCsrfCookie } from "./middleware/csrf";
+import { csrfProtection } from "./middleware/csrf";
 import { startSecretRotation, stopSecretRotation, getSecretsStatus } from "./lib/secrets";
 import { setLogLevel, getLogLevel } from "./lib/logger";
 import { getMigrationStatus, runMigrations, rollbackMigration } from "./lib/migrations";
 import { featureFlagContext, registerFlagRoutes } from "./middleware/featureFlags";
-import { loadFlags, getFlagAnalytics } from "./lib/feature-flags";
+import { getFlagAnalytics } from "./lib/feature-flags";
 import { compressionMiddleware, getCompressionMetrics } from "./middleware/compression";
 import { handleListenError } from "./lib/listen-errors";
 import { initBenchmarkSamples } from "./lib/benchmarking";
 import { createBenchmarkSampleInitializer } from "./lib/benchmarkStartup";
+import { getImpactCertificatePublicKey } from "./lib/impactCertificate";
 
 const env = initEnv();
 
@@ -205,6 +204,10 @@ app.use(featureFlagContext);
 // ── Liveness ────────────────────────────────────────────────────────────────
 app.get("/health", async (_req, res) => res.json(await getHealth()));
 
+app.get("/.well-known/heliobond-impact-key", (_req, res) => {
+  res.json({ algorithm: "Ed25519", public_key: getImpactCertificatePublicKey() });
+});
+
 // ── Prometheus metrics ──────────────────────────────────────────────────────
 app.get("/metrics", async (_req, res) => {
   res.set("Content-Type", register.contentType);
@@ -323,7 +326,7 @@ v1.use("/admin/batch", ipWhitelist, adminLimiter, requestSigning, batchRouter);
 v1.use("/projects", publicLimiter, apiKeyAuth, projectsRouter);
 v1.use("/projects/:id/history", publicLimiter, apiKeyAuth, historyRouter);
 v1.use("/projects/aggregate", publicLimiter, apiKeyAuth, aggregateRouter);
-v1.use("/portfolio", publicLimiter, portfolioRouter);
+v1.use("/portfolio", publicLimiter, apiKeyAuth, portfolioRouter);
 v1.use("/roles", ipWhitelist, adminLimiter, rolesRouter);
 v1.use("/webhooks", ipWhitelist, adminLimiter, requestSigning, webhooksRouter);
 v1.use("/panels", ipWhitelist, adminLimiter, requestSigning, panelsRouter);
@@ -340,11 +343,15 @@ v1.use("/financial", publicLimiter, apiKeyAuth, financialRouter);
 v1.use("/forecast", publicLimiter, forecastRouter);
 v1.use("/maintenance", publicLimiter, apiKeyAuth, maintenanceRouter);
 v1.use("/investor", publicLimiter, investorRouter);
+v1.use("/investors", publicLimiter, investorActivityRouter);
+v1.use("/status/oracle", publicLimiter, oracleStatusRouter);
 v1.use("/admin/api-keys", ipWhitelist, adminLimiter, requestSigning, apiKeysRouter);
+v1.use("/notifications", publicLimiter, publicNotificationsRouter); // email-link targets (confirm/unsubscribe)
+v1.use("/notifications", publicLimiter, apiKeyAuth, notificationsRouter);
 
 // ── Legacy /api paths (deprecated) ──────────────────────────────────────────
 // Kept for backward compatibility; will be removed after 2027-01-01.
-app.use("/api", deprecationHeaders, versionHeaders);
+app.use("/api", legacyApiUsage(), deprecationHeaders, versionHeaders);
 app.use("/api/iot", publicLimiter, apiKeyAuth, iotRouter);
 app.use("/api/admin", ipWhitelist, adminLimiter, adminRouter);
 app.use("/api/admin/batch", ipWhitelist, adminLimiter, batchRouter);
@@ -364,6 +371,7 @@ app.use("/api/financial", publicLimiter, apiKeyAuth, financialRouter);
 app.use("/api/forecast", publicLimiter, apiKeyAuth, forecastRouter);
 app.use("/api/maintenance", publicLimiter, apiKeyAuth, maintenanceRouter);
 app.use("/api/investor", publicLimiter, apiKeyAuth, investorRouter);
+app.use("/api/investors", publicLimiter, apiKeyAuth, investorActivityRouter);
 app.use("/api/admin/api-keys", ipWhitelist, adminLimiter, apiKeysRouter);
 
 // JSON 404 for anything unmatched, then the structured error handler.
@@ -432,84 +440,7 @@ scheduleCron(
   "*/5 * * * *",
   async () => {
     if (isShuttingDown) return;
-    if (getQueueSize() === 0) return;
-
-    if (!isRpcAvailable()) {
-      logger.info(`[cron] tx-queue: RPC unavailable, ${getQueueSize()} transactions pending`);
-      return;
-    }
-
-    logger.info(`[cron] tx-queue: processing ${getQueueSize()} queued transactions`);
-    const maxRetries = 10;
-    const processed: number[] = [];
-
-    // Snapshot the queue once and make a single pass over it. Each item gets
-    // at most one attempt per cron tick: on success (or a detected duplicate)
-    // it is removed; on failure it is left in the queue (with its retry
-    // count bumped in place) so the *next* 5-minute tick retries it, instead
-    // of hot-looping the same failing item synchronously in this run.
-    //
-    // Items are only ever removed from the queue on success, on a detected
-    // duplicate, or once they've exceeded MAX_RETRIES — never merely because
-    // an attempt was made (see #532).
-    for (const item of getQueueSnapshot()) {
-      try {
-        const solar = getSolarData(item.projectId);
-        const satellite = await fetchSatelliteWithFallback(item.projectId);
-        const fresh = computeScores({ solar, satellite });
-
-        // Generate an idempotency key for this retry so a queued transaction
-        // that was already submitted on-chain is not double-submitted.
-        const idempotencyKey = generateIdempotencyKey(item.projectId);
-        const { isDuplicate } = checkIdempotency(idempotencyKey);
-        if (isDuplicate) {
-          logger.info(
-            `[cron] tx-queue: project ${item.projectId} skipped — already submitted this hour (key=${idempotencyKey})`,
-          );
-          remove(item.projectId);
-          processed.push(item.projectId);
-        } else {
-          const tx_hash = await updateImpactScore(
-            item.projectId,
-            fresh.credit_quality,
-            fresh.green_impact,
-            idempotencyKey,
-          );
-          remove(item.projectId);
-          processed.push(item.projectId);
-          logger.info(
-            `[cron] tx-queue: project ${item.projectId} retried successfully tx=${tx_hash}`,
-          );
-        }
-      } catch (err) {
-        if (err instanceof DuplicateSubmissionError) {
-          // Belt-and-suspenders: also catch if DuplicateSubmissionError bubbles up.
-          logger.info(
-            `[cron] tx-queue: project ${item.projectId} skipped (duplicate): ${err.message}`,
-          );
-          remove(item.projectId);
-          processed.push(item.projectId);
-        } else {
-          const errMsg = err instanceof Error ? err.message : String(err);
-          incrementRetry(item.projectId, errMsg);
-
-          if (hasExceededMaxRetries(item.projectId)) {
-            logger.error(
-              `[cron] tx-queue: project ${item.projectId} exceeded max retries (${maxRetries}), dropping`,
-            );
-            remove(item.projectId);
-          } else {
-            logger.warn(
-              `[cron] tx-queue: project ${item.projectId} retry failed (attempt ${item.retryCount}), will retry`,
-            );
-          }
-        }
-      }
-    }
-
-    if (processed.length > 0) {
-      logger.info(`[cron] tx-queue: successfully retried ${processed.length} transactions`);
-    }
+    await runTxQueueRetry();
   },
   { timezone: CRON_TIMEZONE },
 );

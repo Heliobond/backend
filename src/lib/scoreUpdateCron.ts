@@ -6,6 +6,7 @@ import { withProjectLock } from "./request-queue";
 import { isErrorRateLimited, resetErrorRateLimit } from "./error-limiter";
 import { enqueue } from "./tx-queue";
 import { sendAlertIfSignificant } from "./email";
+import { notify } from "./notifications";
 import { triggerWebhooks } from "./webhooks";
 import { broadcastScoreUpdate } from "./websocket";
 import { recordCronRun } from "./health";
@@ -51,6 +52,15 @@ export async function runHourlyScoreUpdate(): Promise<void> {
             return;
           }
 
+          if (scoreResult.status === "skipped") {
+            logger.warn(
+              `[cron] project ${projectId}: skipped on-chain update (${scoreResult.reason})`,
+            );
+            markCompleted(projectId);
+            resetErrorRateLimit(`cron:project-${projectId}`);
+            return;
+          }
+
           if (scoreResult.status === "error") {
             throw new Error(scoreResult.error);
           }
@@ -67,11 +77,24 @@ export async function runHourlyScoreUpdate(): Promise<void> {
           // Email alert when this update moved scores significantly (#22).
           const recent = getHistory(projectId).slice(-2);
           if (recent.length === 2) {
-            await sendAlertIfSignificant({
+            const change = {
               project_id: projectId,
               credit_quality_delta: recent[1].credit_quality - recent[0].credit_quality,
               green_impact_delta: recent[1].green_impact - recent[0].green_impact,
-            });
+            };
+            await sendAlertIfSignificant(change);
+            // Investor notifications (#661); never let a delivery failure fail the score update.
+            await notify({
+              type: "score_changed",
+              id: scoreResult.txHash,
+              project_id: projectId,
+              data: {
+                credit_quality_delta: change.credit_quality_delta,
+                green_impact_delta: change.green_impact_delta,
+              },
+            }).catch((err) =>
+              logger.error("[cron] investor notification failed", logger.formatError(err)),
+            );
           }
           const timestamp = Date.now();
           broadcastScoreUpdate({

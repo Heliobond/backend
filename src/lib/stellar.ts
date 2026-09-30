@@ -4,7 +4,12 @@ import { logger } from "./logger";
 import { RpcConnectionPool } from "./db-pool";
 import { CircuitBreaker } from "./circuit-breaker";
 import { withRetry, isTransientError } from "./retry";
-import { stellarRpcDuration, stellarRpcTotal, txSubmissionTotal } from "./prometheus";
+import {
+  stellarRpcDuration,
+  stellarRpcTotal,
+  txSubmissionTotal,
+  oracleSubmitLatency,
+} from "./prometheus";
 
 export const networkPassphrase =
   config.STELLAR_NETWORK === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
@@ -214,6 +219,10 @@ async function _attemptSubmit(
   }
 
   tx.sign(keypair);
+
+  // Start latency timer
+  const submitStartTime = Date.now();
+
   const result = await withRpcRetry(() => client.sendTransaction(tx), "stellar:sendTransaction");
 
   if (result.status === "ERROR") {
@@ -264,8 +273,15 @@ async function _attemptSubmit(
   }
 
   if (getResult.status === rpc.Api.GetTransactionStatus.FAILED) {
+    // Record latency even for failed transactions
+    const latencySeconds = (Date.now() - submitStartTime) / 1000;
+    oracleSubmitLatency.observe({ result: "failed" }, latencySeconds);
     throw new Error("Transaction failed on-chain");
   }
+
+  // Record successful submission latency
+  const latencySeconds = (Date.now() - submitStartTime) / 1000;
+  oracleSubmitLatency.observe({ result: "success" }, latencySeconds);
 
   return result.hash;
 }

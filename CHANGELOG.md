@@ -15,6 +15,19 @@ file when starting a new section.
 
 ### Added
 
+- Structured admin audit logging (#542): every `POST /admin/update-scores` call
+  writes a JSON line (timestamp, action, correlation id, IP, user agent, project
+  ids, outcome) to a dedicated sink, separate from application logs. Configure
+  with `AUDIT_LOG_FILE` (a path, or `stdout`; default `logs/audit.log`).
+- Legacy `/api/*` usage is now measurable via `legacy_api_requests_total{path}`
+  and logged (#660). **Deprecation:** `/api/*` returns `410 Gone` (pointing to
+  `/v1`) from 2027-01-01 and the mounts are then removed. Migration notes in
+  `API.md`; removal plan in `docs/LEGACY_API_REMOVAL.md`.
+- Investor notifications (#661): per-address preferences, double opt-in email and
+  signed webhook delivery for yield distributed, withdrawal queued/claimable and
+  material score changes, with per-event/channel de-duplication and unsubscribe.
+- One-command local stack (#662): `docker compose --profile local-stack up backend-local` and
+  `docs/LOCAL_STACK.md`.
 - In-memory TTL cache for the deterministic IoT readings. Entries are keyed
   `solar:<projectId>:<hourSeed>` and `satellite:<projectId>:<hourSeed>` and
   expire at the next hour boundary, so repeated reads within an hour no longer

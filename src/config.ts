@@ -76,6 +76,7 @@ function buildConfig() {
     STELLAR_NETWORK: networkEnv("STELLAR_NETWORK", "testnet"),
     ADMIN_SECRET_KEY: process.env.ADMIN_SECRET_KEY || "",
     PROJECT_REGISTRY_CONTRACT_ID: process.env.PROJECT_REGISTRY_CONTRACT_ID || "",
+    INVESTMENT_VAULT_CONTRACT_ID: process.env.INVESTMENT_VAULT_CONTRACT_ID || "",
     RPC_URL: optionalEnv("RPC_URL", "https://soroban-testnet.stellar.org"),
 
     /** HTTP server */
@@ -167,6 +168,10 @@ function buildConfig() {
 
     /** Secrets Management */
     SECRETS_PROVIDER: optionalEnv("SECRETS_PROVIDER", "env"),
+
+    /** Vault event indexer */
+    VAULT_EVENT_INDEXER_START_LEDGER: numEnv("VAULT_EVENT_INDEXER_START_LEDGER", 0),
+    VAULT_EVENT_INDEXER_ENABLED: optionalEnv("VAULT_EVENT_INDEXER_ENABLED", "false"),
   } as const;
 }
 

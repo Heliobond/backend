@@ -61,6 +61,14 @@ Configurable environment variables (see [`.env.example`](./.env.example)):
 All current routes are mounted under the `/v1` prefix.
 Legacy unversioned `/api/*` routes are deprecated and maintained for backward compatibility until 2027-01-01. Responses on `/api/*` include `Deprecation: true` and sunset warning headers.
 
+### Migration: `/api/*` → `/v1/*`
+
+Replace the `/api` prefix with `/v1` (e.g. `/api/projects` → `/v1/projects`). Notes:
+
+- Auth is not identical between the two mounts (for example `/api/portfolio` requires an API key while `/v1/portfolio` does not; admin routes on `/v1` additionally require request signing). Follow the `/v1` requirements.
+- Legacy traffic is counted in the Prometheus metric `legacy_api_requests_total{path}`; check it to find remaining callers.
+- On and after **2027-01-01T00:00:00Z** every `/api/*` request returns `410 Gone` with a `Link: </v1/...>; rel="successor-version"` header and a JSON body pointing at the `/v1` equivalent. The mounts are then deleted; see [docs/LEGACY_API_REMOVAL.md](docs/LEGACY_API_REMOVAL.md).
+
 ---
 
 ## Route Groups Index
@@ -1216,7 +1224,233 @@ Feature flag management and evaluation context analytics.
 
 ---
 
-## 20. GraphQL API
+## 20. WebSocket Real-Time Updates
+
+The WebSocket endpoint provides real-time binary score updates with low latency and minimal bandwidth usage.
+
+### Connection
+
+- **Endpoint**: `ws://localhost:3001/ws` (dev) or `wss://your-domain.com/ws` (production)
+- **Protocol**: Binary frames for score updates, JSON for control messages
+
+### Authentication
+
+Authentication is **required in production** and optional in dev/test environments. Send the bearer token via the `Authorization` header during the WebSocket upgrade:
+
+```javascript
+const ws = new WebSocket('ws://localhost:3001/ws', {
+  headers: {
+    'Authorization': 'Bearer YOUR_WS_AUTH_TOKEN'
+  }
+});
+```
+
+**Important**: Query string authentication (`?token=...`) is **not supported** for security reasons (tokens in URLs leak into logs). `WS_AUTH_TOKEN` does **not** fall back to `ADMIN_API_KEY`.
+
+**Close codes**:
+- `1008 Unauthorized`: Missing or invalid bearer token (production only)
+
+### Control Frames (JSON)
+
+Clients send JSON control messages to manage subscriptions:
+
+#### Subscribe to Specific Projects
+
+```json
+{
+  "action": "subscribe",
+  "project_ids": [1, 42, 100]
+}
+```
+
+#### Subscribe to All Projects
+
+```json
+{
+  "action": "subscribe",
+  "all": true
+}
+```
+
+Or alternatively:
+
+```json
+{
+  "action": "subscribe",
+  "project_ids": "all"
+}
+```
+
+#### Unsubscribe from Specific Projects
+
+```json
+{
+  "action": "unsubscribe",
+  "project_ids": [1, 42]
+}
+```
+
+#### Unsubscribe from All
+
+```json
+{
+  "action": "unsubscribe",
+  "all": true
+}
+```
+
+#### Subscription Acknowledgement
+
+After each subscription change, the server confirms with:
+
+```json
+{
+  "type": "subscribed",
+  "all": false,
+  "project_ids": [1, 42, 100]
+}
+```
+
+#### Error Responses
+
+```json
+{
+  "type": "error",
+  "message": "invalid JSON control frame"
+}
+```
+
+Or:
+
+```json
+{
+  "type": "error",
+  "message": "unknown action: invalid_action"
+}
+```
+
+### Binary Score Update Frames
+
+Score updates are sent as compact **15-byte binary frames** for efficiency:
+
+| Offset | Length | Type    | Field            | Description                          |
+|--------|--------|---------|------------------|--------------------------------------|
+| 0      | 1      | uint8   | message_type     | Always `0x01` (score update)         |
+| 1      | 4      | uint32  | project_id       | Big-endian project identifier        |
+| 5      | 1      | uint8   | credit_quality   | 0–100 (clamped)                      |
+| 6      | 1      | uint8   | green_impact     | 0–100 (clamped)                      |
+| 7      | 8      | float64 | timestamp        | Big-endian Unix timestamp (ms)       |
+
+#### Decoding Example (JavaScript/Node.js)
+
+```javascript
+ws.on('message', (data) => {
+  if (data instanceof Buffer && data.length === 15) {
+    const messageType = data.readUInt8(0);
+    
+    if (messageType === 0x01) {
+      const projectId = data.readUInt32BE(1);
+      const creditQuality = data.readUInt8(5);
+      const greenImpact = data.readUInt8(6);
+      const timestamp = data.readDoubleBE(7);
+      
+      console.log({
+        project_id: projectId,
+        credit_quality: creditQuality,
+        green_impact: greenImpact,
+        timestamp: new Date(timestamp).toISOString()
+      });
+    }
+  } else {
+    // JSON control frame (acknowledgement or error)
+    const message = JSON.parse(data.toString());
+    console.log('Control message:', message);
+  }
+});
+```
+
+#### Decoding Example (Python)
+
+```python
+import struct
+import json
+from datetime import datetime
+
+def decode_score_update(data: bytes):
+    if len(data) == 15:
+        msg_type, project_id, cq, gi, timestamp = struct.unpack('>BIBBD', data)
+        if msg_type == 0x01:
+            return {
+                'project_id': project_id,
+                'credit_quality': cq,
+                'green_impact': gi,
+                'timestamp': datetime.fromtimestamp(timestamp / 1000)
+            }
+    else:
+        return json.loads(data.decode('utf-8'))
+```
+
+### Heartbeat
+
+WebSocket connections remain open indefinitely. Clients should implement reconnection logic for network interruptions. The server does not send ping/pong heartbeats; rely on TCP keep-alive or application-level health checks.
+
+### Complete Client Example
+
+```javascript
+const WebSocket = require('ws');
+
+const ws = new WebSocket('ws://localhost:3001/ws', {
+  headers: {
+    'Authorization': 'Bearer YOUR_WS_AUTH_TOKEN'
+  }
+});
+
+ws.on('open', () => {
+  console.log('Connected');
+  
+  // Subscribe to specific projects
+  ws.send(JSON.stringify({
+    action: 'subscribe',
+    project_ids: [1, 2, 3]
+  }));
+});
+
+ws.on('message', (data) => {
+  if (data instanceof Buffer && data.length === 15) {
+    const messageType = data.readUInt8(0);
+    
+    if (messageType === 0x01) {
+      const projectId = data.readUInt32BE(1);
+      const creditQuality = data.readUInt8(5);
+      const greenImpact = data.readUInt8(6);
+      const timestamp = data.readDoubleBE(7);
+      
+      console.log('Score update:', {
+        project_id: projectId,
+        credit_quality: creditQuality,
+        green_impact: greenImpact,
+        timestamp: new Date(timestamp).toISOString()
+      });
+    }
+  } else {
+    const message = JSON.parse(data.toString());
+    console.log('Control message:', message);
+  }
+});
+
+ws.on('error', (error) => {
+  console.error('WebSocket error:', error);
+});
+
+ws.on('close', (code, reason) => {
+  console.log(`Connection closed: ${code} ${reason}`);
+  // Implement reconnection logic here
+});
+```
+
+---
+
+## 21. GraphQL API
 
 - **HTTP Endpoint**: `/graphql` (POST requests)
 - **GraphiQL Playground**: `/graphql-playground` (GET request in browser)
@@ -1257,7 +1491,7 @@ mutation UpdateProjectScore {
 
 ---
 
-## 21. gRPC Service
+## 22. gRPC Service
 
 High-performance gRPC service listening on port `50051`. Authenticates callers via gRPC metadata headers (`authorization` or `x-api-key`).
 

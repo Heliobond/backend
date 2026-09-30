@@ -8,12 +8,34 @@ import {
   calculatePaybackPeriod,
 } from "../lib/financial";
 import { getAuditLog } from "../lib/audit";
-import { badRequest, maxProjectId } from "../middleware/errors";
+import { ApiError, badRequest, maxProjectId } from "../middleware/errors";
+import {
+  buildImpactCertificate,
+  certificatePdf,
+  getImpactCertificatePublicKey,
+} from "../lib/impactCertificate";
 
 const CARBON_OFFSET_FACTOR = 0.05;
 const CARBON_CREDIT_FACTOR = 0.5;
 
 const router = Router();
+
+function validPeriod(value: unknown): value is string {
+  return typeof value === "string" && /^\d{4}-Q[1-4]$/.test(value);
+}
+
+function assertCertificateAccess(req: Request, address: string): void {
+  const wallet = req.header("x-wallet-address")?.trim();
+  const adminKey = req.header("x-admin-api-key");
+  const configuredAdminKey = process.env.ADMIN_API_KEY;
+  if (wallet !== address && (!configuredAdminKey || adminKey !== configuredAdminKey)) {
+    throw new ApiError(
+      403,
+      "forbidden",
+      "Only the wallet owner or an administrator may fetch an impact certificate.",
+    );
+  }
+}
 
 // Helper to collect all project details deterministically
 async function getPortfolioData() {
@@ -87,6 +109,46 @@ router.get("/dashboard", async (_req: Request, res: Response, next: NextFunction
     next(error);
   }
 });
+
+// GET /:address/impact-certificate — verifiable investor impact certificate
+router.get(
+  "/:address/impact-certificate",
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const address = String(req.params.address).trim();
+      const period = req.query.period;
+      const format = req.query.format === undefined ? "json" : req.query.format;
+      if (!address || address.length > 128)
+        throw badRequest("address must be a non-empty wallet address");
+      if (!validPeriod(period)) throw badRequest("period must use YYYY-Q1 through YYYY-Q4 format");
+      if (format !== "json" && format !== "pdf") throw badRequest("format must be json or pdf");
+      assertCertificateAccess(req, address);
+
+      const portfolio = await getPortfolioData();
+      const projects = portfolio.map((project) => ({
+        id: project.id,
+        power_output_kw: project.solar.power_output_kw,
+        funding: project.funding,
+        certified: project.id % 3 !== 0,
+        certification_status: project.id % 3 !== 0 ? "certified" : "uncertified",
+        contract_id: `project_registry:project-${project.id}`,
+        ledger: project.id,
+        data_source_id: `iot:solar:${project.id}`,
+      }));
+      const certificate = buildImpactCertificate(address, period, projects);
+      if (format === "pdf") {
+        res
+          .type("application/pdf")
+          .set("Content-Disposition", `attachment; filename="${certificate.certificate_id}.pdf"`)
+          .send(certificatePdf(certificate));
+        return;
+      }
+      res.json(certificate);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 // GET /performance-report — Performance Reports
 router.get("/performance-report", async (_req: Request, res: Response, next: NextFunction) => {
@@ -208,7 +270,9 @@ router.get("/compliance-report", async (_req: Request, res: Response, next: Next
       }
 
       // Carbon credits: simulated registry entry
-      const carbonCredits = Math.round(p.solar.power_output_kw * p.scores.green_impact * CARBON_CREDIT_FACTOR);
+      const carbonCredits = Math.round(
+        p.solar.power_output_kw * p.scores.green_impact * CARBON_CREDIT_FACTOR,
+      );
 
       return {
         project_id: p.id,

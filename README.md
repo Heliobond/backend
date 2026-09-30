@@ -327,6 +327,10 @@ Use the provided docker-compose.yml for local development with all dependencies:
 docker-compose up
 ```
 
+To run the whole platform locally (Stellar node, contracts, Postgres, backend,
+optional frontend) use `docker compose --profile local-stack up --build backend-local`; see
+[docs/LOCAL_STACK.md](docs/LOCAL_STACK.md).
+
 ### Production Deployment
 
 For production deployments, consider:

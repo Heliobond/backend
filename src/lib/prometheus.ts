@@ -21,6 +21,14 @@ export const httpRequestsTotal = new client.Counter({
   registers: [register],
 });
 
+// ── Legacy API usage (#660) ─────────────────────────────────────────────────
+export const legacyApiRequestsTotal = new client.Counter({
+  name: "legacy_api_requests_total",
+  help: "Requests to the deprecated unversioned /api/* routes",
+  labelNames: ["path"] as const,
+  registers: [register],
+});
+
 // ── Stellar RPC metrics ─────────────────────────────────────────────────────
 export const stellarRpcDuration = new client.Histogram({
   name: "stellar_rpc_call_duration_seconds",
@@ -66,6 +74,34 @@ export const circuitBreakerState = new client.Gauge({
   name: "circuit_breaker_state",
   help: "Circuit breaker state (0=CLOSED, 1=HALF_OPEN, 2=OPEN)",
   labelNames: ["name"] as const,
+  registers: [register],
+});
+
+// ── Oracle SLO metrics ──────────────────────────────────────────────────────
+export const oracleScoreAge = new client.Gauge({
+  name: "oracle_score_age_seconds",
+  help: "Age of the last score update for a project (seconds since last_update_timestamp)",
+  labelNames: ["project_id"] as const,
+  registers: [register],
+});
+
+export const oracleSignerBalance = new client.Gauge({
+  name: "oracle_signer_balance_xlm",
+  help: "Oracle signer account balance in XLM",
+  registers: [register],
+});
+
+export const registryPaused = new client.Gauge({
+  name: "registry_paused",
+  help: "Registry paused state (0=active, 1=paused)",
+  registers: [register],
+});
+
+export const oracleSubmitLatency = new client.Histogram({
+  name: "oracle_submit_to_confirm_latency_seconds",
+  help: "Time from transaction submission to confirmation",
+  labelNames: ["result"] as const,
+  buckets: [0.5, 1, 2, 5, 10, 15, 30, 60],
   registers: [register],
 });
 

@@ -16,7 +16,7 @@ import {
   withRpcRetry,
 } from "./stellar";
 import { config } from "../config";
-import { stellarRpcDuration, stellarRpcTotal } from "./prometheus";
+import { stellarRpcDuration, stellarRpcTotal, oracleSignerBalance } from "./prometheus";
 
 // Re-export so callers (scoreService, routes/batch) can `instanceof`-check the
 // exact error class the RPC layer throws, instead of comparing against a
@@ -86,6 +86,14 @@ export async function updateImpactScore(
         () => client.getAccount(keypair.publicKey()),
         "stellar:getAccount",
       );
+
+      // Record signer balance for SLO monitoring
+      const balances = (account as any).balances || [];
+      const nativeBalance = balances.find((b: any) => b.asset_type === "native");
+      if (nativeBalance) {
+        const xlmBalance = parseFloat(nativeBalance.balance);
+        oracleSignerBalance.set(xlmBalance);
+      }
 
       const rawSeq =
         typeof account.sequenceNumber === "function"

@@ -19,7 +19,12 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
     "typecheck": "tsc --noEmit",
-    "prepare": "husky"
+    "prepare": "husky",
+    "openapi:export": "tsx scripts/export-openapi.ts",
+    "openapi:check": "tsx scripts/check-openapi.ts",
+    "api-client:generate": "tsx scripts/generate-api-client.ts",
+    "api-client:build": "cd packages/api-client && bun run build",
+    "api-client:publish": "cd packages/api-client && npm publish"
   },
   "lint-staged": {
     "*.ts": [
@@ -84,5 +89,29 @@
     "typescript": "6.0.3",
     "typescript-eslint": "8.70.1",
     "yaml": "2.9.1"
+    "@eslint/js": "^10.0.1",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^26.4.0",
+    "@types/node-cron": "^3.0.11",
+    "@types/supertest": "^7.2.0",
+    "@types/swagger-ui-express": "^4.1.8",
+    "@types/ws": "^8.18.1",
+    "eslint": "^10.9.1",
+    "husky": "^9.1.7",
+    "jest": "^30.4.2",
+    "jest-openapi": "^0.14.2",
+    "lint-staged": "^17.4.1",
+    "openapi-fetch": "^0.13.0",
+    "openapi-typescript": "^7.13.0",
+    "prettier": "^3.8.3",
+    "supertest": "^7.2.2",
+    "ts-jest": "^29.4.12",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.0.0",
+    "yaml": "^2.8.0"
   }
 }
