@@ -84,11 +84,11 @@ export function createGraphQLContext(req: any): GraphQLContext {
   }
 
   const solarLoader = new DataLoader<number, any>(async (keys) => {
-    return keys.map((id) => getSolarData(id));
+    return Promise.all(keys.map((id) => Promise.resolve(getSolarData(id))));
   });
 
   const satelliteLoader = new DataLoader<number, any>(async (keys) => {
-    return keys.map((id) => getSatelliteData(id));
+    return Promise.all(keys.map((id) => Promise.resolve(getSatelliteData(id))));
   });
 
   return {
@@ -205,9 +205,18 @@ export const graphqlRoot = {
     const BATCH_SIZE = 1000;
     for (let offset = 0; offset < total; offset += BATCH_SIZE) {
       const batchEnd = Math.min(offset + BATCH_SIZE, total);
-      for (let id = offset + 1; id <= batchEnd; id++) {
-        const solar = getSolarData(id);
-        const satellite = getSatelliteData(id);
+      const ids = Array.from(
+        { length: batchEnd - offset },
+        (_, index) => offset + index + 1,
+      );
+      const batch = await Promise.all(
+        ids.map(async (id) => ({
+          id,
+          solar: await context.loaders.solarLoader.load(id),
+          satellite: await context.loaders.satelliteLoader.load(id),
+        })),
+      );
+      for (const { id, solar, satellite } of batch) {
         const scores = computeScores({ solar, satellite });
         sumCq += scores.credit_quality;
         sumGi += scores.green_impact;

@@ -1,6 +1,6 @@
 import request from "supertest";
 import express, { Express } from "express";
-import emailRouter from "../routes/email";
+import emailRouter, { publicEmailRouter } from "../routes/email";
 import { errorHandler } from "../middleware/errors";
 import {
   isSignificant,
@@ -16,6 +16,10 @@ import {
 function buildApp(): Express {
   const app = express();
   app.use(express.json());
+  // Mirror the production mount order from src/index.ts: the public
+  // router matches GET/POST /unsubscribe first, everything else falls
+  // through to the admin router.
+  app.use("/email", publicEmailRouter);
   app.use("/email", emailRouter);
   app.use(errorHandler);
   return app;

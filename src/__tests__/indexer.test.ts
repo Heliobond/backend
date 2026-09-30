@@ -1,4 +1,5 @@
-import { indexer } from "../lib/indexer";
+import { indexer, VaultEvent } from "../lib/indexer";
+import { config } from "../config";
 
 // Prevent withRpcConnection from touching the real Stellar network; we supply
 // a mock client directly through the callback.
@@ -187,5 +188,94 @@ describe("EventIndexer.processTransaction()", () => {
       txHash,
       ledger: 42,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bounded event store — eviction (#676)
+// ---------------------------------------------------------------------------
+
+describe("EventIndexer event store eviction", () => {
+  const setMaxEvents = (max: number) => {
+    (
+      config as unknown as { VAULT_EVENT_INDEXER_MAX_EVENTS: number }
+    ).VAULT_EVENT_INDEXER_MAX_EVENTS = max;
+  };
+
+  const makeEvent = (id: string, overrides: Partial<VaultEvent> = {}): VaultEvent => ({
+    id,
+    type: "deposit",
+    address: `G${"C".repeat(55)}`,
+    amount: 1,
+    shares: 1,
+    timestamp: Date.now(),
+    ledger: 1,
+    txHash: id,
+    ...overrides,
+  });
+
+  afterEach(() => {
+    setMaxEvents(1000);
+  });
+
+  it("caps the store at the configured max, keeping the newest and dropping the oldest", () => {
+    const cap = 3;
+    setMaxEvents(cap);
+
+    for (let i = 0; i < cap + 2; i++) {
+      indexer.addEvent(makeEvent(`evt-${i}`, { txHash: `tx-${i}` }));
+    }
+
+    const ids = indexer.getStore().events.map((e) => e.id);
+    expect(ids).toHaveLength(cap);
+    expect(ids).toEqual(["evt-2", "evt-3", "evt-4"]);
+  });
+
+  it("does not double-store a duplicate id within the retained window", () => {
+    setMaxEvents(10);
+    const event = makeEvent("evt-1", { txHash: "tx-1" });
+
+    indexer.addEvent(event);
+    indexer.addEvent({ ...event });
+
+    expect(indexer.getStore().events).toHaveLength(1);
+  });
+
+  it("does not double-store events sharing a txHash within the retained window", async () => {
+    setMaxEvents(10);
+    const sourceAccount = `G${"D".repeat(55)}`;
+    const txHash = "dup-tx";
+    const client = {
+      getTransaction: jest.fn().mockResolvedValue({
+        source: sourceAccount,
+        events: [{ type: "deposit", amount: 5, shares: 5 }],
+      }),
+    };
+
+    await (indexer as any).processTransaction(client as any, txHash, 1);
+    await (indexer as any).processTransaction(client as any, txHash, 2);
+
+    expect(indexer.getStore().events).toHaveLength(1);
+    expect(indexer.getStore().events[0].txHash).toBe(txHash);
+  });
+
+  it("bounds the store when events are ingested through processTransaction()", async () => {
+    const cap = 2;
+    setMaxEvents(cap);
+    const sourceAccount = `G${"E".repeat(55)}`;
+
+    for (let i = 1; i <= cap + 2; i++) {
+      const client = {
+        getTransaction: jest.fn().mockResolvedValue({
+          source: sourceAccount,
+          events: [{ type: "deposit", amount: i, shares: i }],
+        }),
+      };
+      await (indexer as any).processTransaction(client as any, `tx-${i}`, i);
+    }
+
+    const events = indexer.getStore().events;
+    expect(events).toHaveLength(cap);
+    expect(events.map((e) => e.txHash)).toEqual(["tx-3", "tx-4"]);
   });
 });

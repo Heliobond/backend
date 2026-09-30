@@ -161,3 +161,5 @@ the Actions tab.
 - [SETUP.md](SETUP.md) — local development setup
 - `Dockerfile` — build stages and the heap ceiling
 - `docker-compose.yml` — resource limits and service wiring
+
+Set `DATABASE_CA` to the inline CA certificate string for SSL database connections.

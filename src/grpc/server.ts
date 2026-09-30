@@ -196,7 +196,7 @@ function chatProjectScores(call: grpc.ServerDuplexStream<any, any>) {
 }
 
 export function startGrpcServer(
-  port = 50051,
+  port: number = 50051,
   handleBindError: (err: NodeJS.ErrnoException, port: number | string) => void = handleListenError,
 ): grpc.Server {
   const server = new grpc.Server({
