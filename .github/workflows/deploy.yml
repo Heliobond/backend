@@ -52,12 +52,16 @@ jobs:
     steps:
       - name: Resolve environment
         id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_ENVIRONMENT: ${{ github.event.inputs.environment }}
+          REF: ${{ github.ref }}
         run: |
-          case "${{ github.event_name }}" in
+          case "$EVENT_NAME" in
             release|repository_dispatch) target=production ;;
-            workflow_dispatch)           target="${{ github.event.inputs.environment }}" ;;
+            workflow_dispatch)           target="$INPUT_ENVIRONMENT" ;;
             push)
-              if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+              if [[ "$REF" == refs/tags/v* ]]; then
                 target=production
               else
                 target=staging

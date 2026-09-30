@@ -40,8 +40,10 @@ jobs:
 
       - name: Determine scenario
         id: scenario
+        env:
+          INPUT_SCENARIO: ${{ github.event.inputs.scenario || 'smoke' }}
         run: |
-          SCENARIO="${{ github.event.inputs.scenario || 'smoke' }}"
+          SCENARIO="$INPUT_SCENARIO"
           echo "name=${SCENARIO}" >> "$GITHUB_OUTPUT"
 
       - name: Run k6 load test
