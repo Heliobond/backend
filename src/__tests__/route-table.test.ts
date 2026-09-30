@@ -32,6 +32,7 @@ jest.mock("../lib/registry", () => {
     resetLocalSequence: jest.fn(),
     updateImpactScore: jest.fn(),
     getTotalProjects: jest.fn().mockResolvedValue(3),
+    projectExists: jest.fn().mockResolvedValue(true),
     getScoreHistory: jest.fn().mockResolvedValue([]),
     getInterestRate: jest.fn().mockResolvedValue(5),
   };
@@ -101,7 +102,7 @@ describe("route table (#760)", () => {
     const res = await request(app).get("/v1/projects/5").set(AUTH);
     expect(isProjectIdError(res)).toBe(false);
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ id: 5 });
+    expect(res.body).toMatchObject({ project: { id: 5 } });
   });
 
   it("GET /v1/projects/5/history reaches the history handler", async () => {
