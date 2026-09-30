@@ -2,6 +2,11 @@
 
 Base URL (local): `http://localhost:3001`
 
+> **Frontend integration:** set `NEXT_PUBLIC_API_URL` to the versioned base and
+> **include `/v1`**, e.g. `http://localhost:3001/v1`. The frontend calls
+> `${NEXT_PUBLIC_API_URL}/projects`; a base without `/v1` resolves to the
+> deprecated `/api` paths (or `404`).
+
 All REST responses default to JSON unless an export format (e.g. `format=csv`) is explicitly requested.
 
 Errors follow a consistent structure:
@@ -243,8 +248,10 @@ Paginated, filterable list of projects with latest scores and telemetry.
 
 | Param        | In    | Type   | Rules                                                                                                                                | Default |
 | :----------- | :---- | :----- | :----------------------------------------------------------------------------------------------------------------------------------- | :------ |
-| `limit`      | query | int    | Integer `1..100`                                                                                                                     | `10`    |
-| `cursor`     | query | int    | Non-negative integer offset                                                                                                          | `0`     |
+| `page`       | query | int    | 1-based page number (`>= 1`)                                                                                                         | `1`     |
+| `pageSize`   | query | int    | Integer `1..100`                                                                                                                     | `10`    |
+| `limit`      | query | int    | Alias for `pageSize` (kept for existing clients)                                                                                     | `10`    |
+| `cursor`     | query | int    | Legacy offset alias. When present it is applied as the offset and takes precedence over `page`                                       | —       |
 | `min_score`  | query | number | Minimum credit quality score filter                                                                                                  | —       |
 | `max_score`  | query | number | Maximum credit quality score filter                                                                                                  | —       |
 | `min_date`   | query | number | Minimum timestamp (ms)                                                                                                               | —       |
@@ -252,7 +259,7 @@ Paginated, filterable list of projects with latest scores and telemetry.
 | `sort_by`    | query | string | One of: `id`, `credit_quality`, `green_impact`, `power_output_kw`, `efficiency_pct`, `forest_density_pct`, `ndvi_score`, `timestamp` | `id`    |
 | `sort_order` | query | string | `asc` or `desc`                                                                                                                      | `asc`   |
 
-**Response `200`**
+**Response `200`** (`PaginatedProjectsResponse`)
 
 ```json
 {
@@ -270,27 +277,48 @@ Paginated, filterable list of projects with latest scores and telemetry.
   ],
   "total": 50,
   "filtered_total": 50,
+  "page": 1,
+  "pageSize": 10,
+  "hasMore": true,
   "cursor": 10
 }
 ```
 
+`cursor` is returned only when another page follows; it carries the next
+offset, so cursor clients (`?cursor=10&limit=10`) keep working unchanged.
+
 ### `GET /v1/projects/:id`
 
-Detailed metrics and funding data for a specific project.
+Detailed metrics and funding data for a specific project, nested as the
+frontend's `ProjectWithDetail` shape: `{project, detail, verifiedMetadata}`.
+
+- `project`: identity and impact scores (`id`, `credit_quality`, `green_impact`).
+- `detail`: telemetry and funding (`power_output_kw`, `efficiency_pct`,
+  `forest_density_pct`, `ndvi_score`, `timestamp`, `funding`).
+- `verifiedMetadata`: whether the backend holds metadata for the project.
+
+Returns `404 not_found` for ids that do not exist on the registry, including
+ids that were never issued and projects that were deleted or compacted
+(existence is read from the contract's `get_project(id)` getter).
 
 **Response `200`**
 
 ```json
 {
-  "id": 1,
-  "credit_quality": 74,
-  "green_impact": 69,
-  "power_output_kw": 742.15,
-  "efficiency_pct": 74.21,
-  "forest_density_pct": 68.44,
-  "ndvi_score": 0.684,
-  "timestamp": 1718150400000,
-  "funding": 482910.55
+  "project": {
+    "id": 1,
+    "credit_quality": 74,
+    "green_impact": 69
+  },
+  "detail": {
+    "power_output_kw": 742.15,
+    "efficiency_pct": 74.21,
+    "forest_density_pct": 68.44,
+    "ndvi_score": 0.684,
+    "timestamp": 1718150400000,
+    "funding": 482910.55
+  },
+  "verifiedMetadata": false
 }
 ```
 

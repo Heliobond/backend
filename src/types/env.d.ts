@@ -51,6 +51,10 @@ declare namespace NodeJS {
     CORS_ORIGINS?: string;
     /** Bearer token for /api/admin/*; unset skips admin auth (dev only). */
     ADMIN_API_KEY?: string;
+    /** Maximum age of signed admin requests in milliseconds. */
+    ADMIN_REQUEST_MAX_AGE_MS?: string;
+    /** Optional initial admin identity for RBAC bootstrap. */
+    INITIAL_ADMIN_USER_ID?: string;
     /** Token required to open a /ws connection; falls back to ADMIN_API_KEY. */
     WS_AUTH_TOKEN?: string;
     /** "true" requires a signed wallet challenge on creator endpoints. Default: false */
@@ -91,6 +95,20 @@ declare namespace NodeJS {
     TX_RETRY_BASE_DELAY_MS?: string;
     /** Integer ms cap on retry backoff. Default: 10000 */
     TX_RETRY_MAX_DELAY_MS?: string;
+    /** Consecutive failures before the circuit breaker opens. */
+    CIRCUIT_BREAKER_THRESHOLD?: string;
+    /** Cooldown in milliseconds before a circuit breaker probe. */
+    CIRCUIT_BREAKER_COOLDOWN_MS?: string;
+    /** Maximum Stellar RPC retry attempts. */
+    RPC_MAX_RETRIES?: string;
+    /** Base Stellar RPC retry delay in milliseconds. */
+    RPC_RETRY_BASE_MS?: string;
+    /** Poll interval in milliseconds for transaction status. */
+    POLL_INTERVAL_MS?: string;
+    /** Maximum transaction polling attempts. */
+    POLL_MAX_ATTEMPTS?: string;
+    /** Transaction timeout in seconds. */
+    TX_TIMEOUT_SECONDS?: string;
 
     // ── Cron & IoT ──────────────────────────────────────────────────────
     /** IANA timezone for cron/hourly seed boundaries. Default: UTC */
@@ -105,6 +123,10 @@ declare namespace NodeJS {
     SATELLITE_CACHE_TTL_MS?: string;
     /** Integer consecutive source failures before alerting. Default: 3 */
     SATELLITE_ALERT_THRESHOLD?: string;
+    /** Maximum expected solar output in kW. */
+    MAX_POWER_KW?: string;
+    /** Idempotency record lifetime in milliseconds. */
+    IDEMPOTENCY_TTL_MS?: string;
 
     // ── Rate limiting & access control ──────────────────────────────────
     /** Integer ms public rate-limit window. Default: 60000 */
@@ -119,10 +141,12 @@ declare namespace NodeJS {
     ADMIN_IP_WHITELIST?: string;
     /** "false" stops private/internal ranges bypassing the whitelist. */
     ADMIN_IP_WHITELIST_BYPASS_PRIVATE?: string;
+    /** Express trust-proxy setting. */
+    TRUST_PROXY?: string;
     /** HMAC secret for request signature verification; empty disables. */
     REQUEST_SIGNING_SECRET?: string;
-    /** Secrets backend: "env" | provider name. Default: env */
-    SECRETS_PROVIDER?: string;
+    /** Secrets backend. Default: env. */
+    SECRETS_PROVIDER?: "env" | "aws" | "vault" | "azure";
 
     // ── Logging & APM ───────────────────────────────────────────────────
     /** "debug" | "info" | "warn" | "error". Default: derived from NODE_ENV */
@@ -142,5 +166,97 @@ declare namespace NodeJS {
     OTEL_ZIPKIN_ENDPOINT?: string;
     /** "true" enables the Zipkin exporter. */
     OTEL_ZIPKIN_ENABLED?: string;
+    /** Maximum request body size accepted by Express. */
+    BODY_SIZE_LIMIT?: string;
+    /** Optional CA bundle path for database TLS. */
+    DB_SSL_CA_PATH?: string;
+    /** Optional database CA contents from deployment configuration. */
+    DATABASE_CA?: string;
+
+    // ── Soroban vault & indexer ─────────────────────────────────────────
+    /** Soroban contract address of the InvestmentVault. */
+    INVESTMENT_VAULT_CONTRACT_ID?: string;
+    /** Integer ledger the vault event indexer starts from. Default: 0 */
+    VAULT_EVENT_INDEXER_START_LEDGER?: string;
+    /** "true" enables the vault event indexer. Default: false */
+    VAULT_EVENT_INDEXER_ENABLED?: string;
+    /** Positive integer max events retained by the indexer. Default: 1000 */
+    VAULT_EVENT_INDEXER_MAX_EVENTS?: string;
+
+    // ── gRPC, health & timeouts ─────────────────────────────────────────
+    /** Integer port the gRPC server listens on. Default: 50051 */
+    GRPC_PORT?: string;
+    /** Integer ms RPC must be unreachable before an outage is reported. Default: 300000 */
+    RPC_OUTAGE_THRESHOLD_MS?: string;
+    /** Integer ms each dependency health check may take. Default: 1000 */
+    HEALTH_CHECK_TIMEOUT_MS?: string;
+    /** Integer ms before a request times out. Default: 30000 */
+    REQUEST_TIMEOUT_MS?: string;
+    /** Integer ms before an admin request times out. Default: 60000 */
+    ADMIN_REQUEST_TIMEOUT_MS?: string;
+    /** Integer ms window for error-log rate limiting. Default: 60000 */
+    ERROR_RATE_LIMIT_WINDOW_MS?: string;
+
+    // ── Batch jobs, webhooks & queues ───────────────────────────────────
+    /** Integer ms a finished batch job is retained. Default: 3600000 */
+    BATCH_JOB_TTL_MS?: string;
+    /** Integer max batch jobs retained. Default: 1000 */
+    BATCH_JOB_MAX_SIZE?: string;
+    /** Integer ms between webhook store cleanups. Default: 3600000 */
+    WEBHOOK_CLEANUP_INTERVAL_MS?: string;
+    /** Integer ms after which a webhook entry is stale. Default: 86400000 */
+    WEBHOOK_STALE_THRESHOLD_MS?: string;
+    /** Integer retry attempts for queued transactions. Default: 10 */
+    TX_QUEUE_MAX_RETRIES?: string;
+    /** Integer max score history entries per project. */
+    SCORE_HISTORY_MAX_ENTRIES_PER_PROJECT?: string;
+    /** Integer ms score history entries are retained. */
+    SCORE_HISTORY_TTL_MS?: string;
+    /** Integer ms after which an IoT reading counts as stale. */
+    STALE_READING_MAX_AGE_MS?: string;
+
+    // ── Database (extra) ────────────────────────────────────────────────
+    /** Integer ms to acquire a connection in knexfile. Default: 30000 */
+    DB_ACQUIRE_TIMEOUT_MS?: string;
+    /** Integer ms a pooled connection may sit idle in knexfile. Default: 60000 */
+    DB_IDLE_TIMEOUT_MS?: string;
+    /** Legacy alias for DB_SSL_CA_PATH. */
+    DB_SSL_CA?: string;
+
+    // ── Auth & secrets ──────────────────────────────────────────────────
+    /** Comma-separated admin API keys, optionally with roles. */
+    ADMIN_API_KEYS?: string;
+    /** Base64 Ed25519 seed signing impact certificates. */
+    IMPACT_CERTIFICATE_PRIVATE_KEY?: string;
+    /** "true" enables periodic secrets rotation. */
+    SECRETS_ROTATION_ENABLED?: string;
+    /** Integer ms between secrets rotations. Default: 3600000 */
+    SECRETS_ROTATION_INTERVAL_MS?: string;
+    /** AWS region for Secrets Manager. Default: us-east-1 */
+    AWS_REGION?: string;
+    AWS_SECRET_ID?: string;
+    AWS_SECRET_VERSION_ID?: string;
+    /** Vault server URL. Default: http://localhost:8200 */
+    VAULT_ENDPOINT?: string;
+    VAULT_TOKEN?: string;
+    /** Default: secret/data/heliobond */
+    VAULT_SECRET_PATH?: string;
+    AZURE_VAULT_URL?: string;
+    AZURE_TENANT_ID?: string;
+    AZURE_CLIENT_ID?: string;
+    AZURE_CLIENT_SECRET?: string;
+
+    // ── Email, URLs & audit ─────────────────────────────────────────────
+    SENDGRID_API_KEY?: string;
+    /** Sender address. Default: no-reply@heliobond.dev */
+    EMAIL_FROM?: string;
+    /** HMAC secret for unsubscribe links; random per process if unset. */
+    EMAIL_UNSUBSCRIBE_SECRET?: string;
+    /** Public API base URL used in emails; falls back to FRONTEND_URL. */
+    PUBLIC_API_URL?: string;
+    /** Public base URL used in notifications. Default: http://localhost:3001 */
+    PUBLIC_BASE_URL?: string;
+    /** Audit log path, or "stdout". Default: logs/audit.log (empty in test) */
+    AUDIT_LOG_FILE?: string;
   }
 }
