@@ -33,6 +33,7 @@ import investorRouter from "./routes/investor";
 import investorActivityRouter from "./routes/investorActivity";
 import apiKeysRouter from "./routes/apiKeys";
 import notificationsRouter, { publicNotificationsRouter } from "./routes/notifications";
+import { creatorApplicationsRouter, creatorAdminRouter } from "./routes/creatorApplications";
 import oracleStatusRouter from "./routes/oracle-status";
 import { createHandler } from "graphql-http/lib/use/express";
 import { graphqlSchema, graphqlRoot, createGraphQLContext } from "./graphql/schema";
@@ -353,6 +354,10 @@ v1.use("/admin/api-keys", ipWhitelist, adminLimiter, requestSigning, apiKeysRout
 v1.use("/notifications", publicLimiter, publicNotificationsRouter); // email-link targets (confirm/unsubscribe)
 v1.use("/notifications", publicLimiter, apiKeyAuth, notificationsRouter);
 v1.use("/telemetry", telemetryRouter); // frontend error + web-vitals beacon (#770)
+// Creator onboarding (#771): wallet-authenticated creator routes and
+// bearer-authenticated admin review routes.
+v1.use("/creators", publicLimiter, creatorApplicationsRouter);
+v1.use("/admin/creators", ipWhitelist, adminLimiter, creatorAdminRouter);
 
 // Mount the versioned router. Without this every `/v1/*` route registered above
 // is unreachable (the request falls through to the JSON 404 handler).
@@ -669,12 +674,16 @@ function bootstrap(): void {
     isShuttingDown = true;
 
     const shutdownTimeoutMs = config.SHUTDOWN_TIMEOUT_MS;
-    logger.info(`[${signal}] graceful shutdown initiated (timeout: ${shutdownTimeoutMs}ms)`);
+    const shutdownDeadlineMs = shutdownTimeoutMs * 3;
+    let shutdownStep = "initializing";
+    logger.info(
+      `[${signal}] graceful shutdown initiated (step timeout: ${shutdownTimeoutMs}ms, total timeout: ${shutdownDeadlineMs}ms)`,
+    );
 
     // Order is deliberate: stop producing work (cron scheduling, background
     // timers) *before* draining the resources that work uses. Draining HTTP first
     // let a scheduled job start mid-drain and race the teardown (#693). The whole
-    // sequence is bounded by the `shutdownTimeoutMs` race below.
+    // sequence is bounded by the `shutdownDeadlineMs` race below.
     const steps = createShutdownSteps({
       // 1. Stop cron scheduling so no new job is produced.
       stopCronScheduling: async () => {
@@ -743,13 +752,23 @@ function bootstrap(): void {
       },
     });
 
-    const shutdownPromise = runShutdownSequence(steps);
+    const shutdownPromise = runShutdownSequence(
+      steps.map((step) => ({
+        ...step,
+        run: () => {
+          shutdownStep = step.name;
+          return step.run();
+        },
+      })),
+    );
 
     // Apply overall shutdown timeout — force exit if graceful cleanup takes too long
     const timeoutPromise = new Promise<void>((_, reject) => {
       setTimeout(() => {
-        reject(new Error(`Shutdown timed out after ${shutdownTimeoutMs}ms`));
-      }, shutdownTimeoutMs);
+        reject(
+          new Error(`Shutdown timed out after ${shutdownDeadlineMs}ms during ${shutdownStep}`),
+        );
+      }, shutdownDeadlineMs);
     });
 
     try {
