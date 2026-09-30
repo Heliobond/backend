@@ -44,7 +44,28 @@ jobs:
         run: bun run lint
 
       - name: Audit dependencies
-        run: bun audit --json || true
+        run: |
+          bun audit --json > bun-audit-report.json || true
+          node -e '
+            const fs=require("fs");
+            if (!fs.existsSync("bun-audit-report.json")) process.exit(0);
+            const report=JSON.parse(fs.readFileSync("bun-audit-report.json","utf8"));
+            let critical=0, high=0;
+            if (report.metadata?.vulnerabilities) {
+              critical=report.metadata.vulnerabilities.critical||0;
+              high=report.metadata.vulnerabilities.high||0;
+            } else for (const advisories of Object.values(report)) if (Array.isArray(advisories)) for (const adv of advisories) {
+              const severity=(adv.severity||"").toLowerCase();
+              if (severity === "critical") critical++;
+              if (severity === "high") high++;
+            }
+            if (high) console.warn(`::warning::Found ${high} high vulnerabilities`);
+            if (critical) {
+              console.error(`Found ${critical} critical vulnerabilities`);
+              process.exit(1);
+            }
+            console.log("No critical vulnerabilities found; lower severities are warnings.");
+          '
 
       - name: Test
         run: bun run test

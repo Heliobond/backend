@@ -99,20 +99,31 @@ jobs:
               });
             ' >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            CRITICAL=$(node -e '
+            read -r CRITICAL HIGH <<<"$(node -e '
               const fs=require("fs");
               const report=JSON.parse(fs.readFileSync("bun-audit-report.json","utf8"));
-              let c=0;
-              if(report.metadata?.vulnerabilities) c=report.metadata.vulnerabilities.critical||0;
+              let c=0, h=0;
+              if(report.metadata?.vulnerabilities) {
+                c=report.metadata.vulnerabilities.critical||0;
+                h=report.metadata.vulnerabilities.high||0;
+              }
               else {
                 for(const advisories of Object.values(report)){
-                  if(Array.isArray(advisories)) for(const adv of advisories) if((adv.severity||"").toLowerCase()==="critical") c++;
+                  if(Array.isArray(advisories)) for(const adv of advisories) {
+                    const severity=(adv.severity||"").toLowerCase();
+                    if(severity==="critical") c++;
+                    if(severity==="high") h++;
+                  }
                 }
               }
-              console.log(c);
-            ')
+              console.log(`${c} ${h}`);
+            ')"
+            if [ "$HIGH" -gt 0 ]; then
+              echo "::warning::Found $HIGH high vulnerabilities in dependencies (via bun audit)"
+            fi
             if [ "$CRITICAL" -gt 0 ]; then
               echo "::error::Found $CRITICAL critical vulnerabilities in dependencies (via bun audit)"
+              exit 1
             fi
           else
             echo "No dependencies scanned or no vulnerabilities found." >> $GITHUB_STEP_SUMMARY
