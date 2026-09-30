@@ -31,7 +31,7 @@ export function getSslConfig(): { rejectUnauthorized: true; ca?: string } {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to read SSL CA file at ${caPath}: ${message}`);
+      throw new Error(`Failed to read SSL CA file at ${caPath}: ${message}`, { cause: error });
     }
   }
   return { rejectUnauthorized: true };

@@ -332,6 +332,105 @@
         }
       }
     },
+    "/projects/{id}/price-history": {
+      "get": {
+        "summary": "Price and yield chart series for a project (#769)",
+        "description": "Returns `PricePoint[]` = `{date, price, yield?}` for the project's chart. Values are derived from the on-chain `get_score_history` timestamps and the current `get_interest_rate`. `yield` is `rate_bps / 100`; `price` is `100 / (1 + yield/100)` (one-period present value). See API.md for the full formula.",
+        "tags": [
+          "History"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Start timestamp (unix ms)"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            },
+            "description": "End timestamp (unix ms)"
+          },
+          {
+            "name": "interval",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "day",
+                "week"
+              ],
+              "default": "day"
+            },
+            "description": "Bucket size for the series"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "PricePoint series in ascending date order",
+            "content": {
+              "application/json": {
+                "example": {
+                  "project_id": 27,
+                  "interval": "day",
+                  "count": 3,
+                  "points": [
+                    {
+                      "date": "2026-09-28",
+                      "price": 96.15,
+                      "yield": 4
+                    },
+                    {
+                      "date": "2026-09-29",
+                      "price": 96.15,
+                      "yield": 4
+                    },
+                    {
+                      "date": "2026-09-30",
+                      "price": 96.15,
+                      "yield": 4
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid range or interval",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or archived project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/portfolio": {
       "get": {
         "summary": "Get portfolio summary",
