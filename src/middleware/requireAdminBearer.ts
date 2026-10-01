@@ -17,6 +17,11 @@ import { timingSafeCompare } from "../lib/timing-safe";
 export function requireAdminBearer(req: Request, res: Response, next: NextFunction): void {
   const apiKey = process.env.ADMIN_API_KEY;
   if (!apiKey) {
+    if (process.env.NODE_ENV === "production") {
+      res.status(500).json({ error: "server_misconfigured", message: "ADMIN_API_KEY is not set" });
+      return;
+    }
+    console.warn("[requireAdminBearer] ADMIN_API_KEY is not set — skipping auth (non-production)");
     next();
     return;
   }
