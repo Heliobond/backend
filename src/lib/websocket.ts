@@ -25,6 +25,21 @@ interface ClientState {
 const clients = new Map<WebSocket, ClientState>();
 let wss: WebSocketServer | null = null;
 
+const WS_MAX_CONNECTIONS = envInt("WS_MAX_CONNECTIONS", 1000);
+const WS_MAX_PER_IP = envInt("WS_MAX_PER_IP", 10);
+const WS_MAX_SUBSCRIPTIONS = envInt("WS_MAX_SUBSCRIPTIONS", 100);
+const WS_MSG_RATE_LIMIT = envInt("WS_MSG_RATE_LIMIT", 30);
+const WS_MSG_RATE_WINDOW_MS = 60_000;
+
+const wsIpCounts = new Map<string, number>();
+
+interface RateLimitState {
+  count: number;
+  windowStart: number;
+}
+
+const wsRateLimits = new Map<WebSocket, RateLimitState>();
+
 function clampByte(v: number): number {
   return Math.max(0, Math.min(255, Math.round(v)));
 }
@@ -82,6 +97,20 @@ function handleMessage(ws: WebSocket, data: unknown): void {
   const state = clients.get(ws);
   if (!state) return;
 
+  const rl = wsRateLimits.get(ws);
+  if (rl) {
+    const now = Date.now();
+    if (now - rl.windowStart > WS_MSG_RATE_WINDOW_MS) {
+      rl.count = 0;
+      rl.windowStart = now;
+    }
+    rl.count++;
+    if (rl.count > WS_MSG_RATE_LIMIT) {
+      ws.close(1013, "rate limit exceeded");
+      return;
+    }
+  }
+
   let msg: { action?: string; project_ids?: unknown; all?: boolean };
   try {
     msg = JSON.parse(String(data));
@@ -94,7 +123,11 @@ function handleMessage(ws: WebSocket, data: unknown): void {
       if (msg.all === true || msg.project_ids === "all") {
         state.all = true;
       } else {
-        for (const id of asIdArray(msg.project_ids)) state.subscriptions.add(id);
+        const ids = asIdArray(msg.project_ids);
+        if (state.subscriptions.size + ids.length > WS_MAX_SUBSCRIPTIONS) {
+          return sendError(ws, `subscription limit of ${WS_MAX_SUBSCRIPTIONS} exceeded`);
+        }
+        for (const id of ids) state.subscriptions.add(id);
       }
       break;
     case "unsubscribe":
@@ -331,11 +364,33 @@ export function _resetEventsServerForTests(): void {
 export function attachWebSocketServer(server: HttpServer): WebSocketServer {
   wss = new WebSocketServer({ noServer: true });
 
-  wss.on("connection", (ws) => {
+  wss.on("connection", (ws, req) => {
+    if (clients.size >= WS_MAX_CONNECTIONS) {
+      ws.close(1013, "server connection limit reached");
+      return;
+    }
+
+    const ip = ipFromRequest(req);
+    const ipCount = wsIpCounts.get(ip) ?? 0;
+    if (ipCount >= WS_MAX_PER_IP) {
+      ws.close(1013, "per-IP connection limit reached");
+      return;
+    }
+    wsIpCounts.set(ip, ipCount + 1);
+
     clients.set(ws, { subscriptions: new Set(), all: false });
+    wsRateLimits.set(ws, { count: 0, windowStart: Date.now() });
+
     ws.on("message", (data) => handleMessage(ws, data));
-    ws.on("close", () => clients.delete(ws));
-    ws.on("error", () => clients.delete(ws));
+    const cleanup = () => {
+      clients.delete(ws);
+      wsRateLimits.delete(ws);
+      const next = (wsIpCounts.get(ip) ?? 1) - 1;
+      if (next <= 0) wsIpCounts.delete(ip);
+      else wsIpCounts.set(ip, next);
+    };
+    ws.on("close", cleanup);
+    ws.on("error", cleanup);
   });
 
   const events = attachEventsWebSocketServer(server);
