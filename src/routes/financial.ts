@@ -19,20 +19,53 @@ function parseOptionalFloat(raw: string | undefined, field: string): number | un
   return n;
 }
 
+function validatePositive(n: number | undefined, field: string): number | undefined {
+  if (n !== undefined && n <= 0) throw badRequest(`${field} must be greater than 0`);
+  return n;
+}
+
+function validateNonNegative(n: number | undefined, field: string): number | undefined {
+  if (n !== undefined && n < 0) throw badRequest(`${field} must not be negative`);
+  return n;
+}
+
 function buildFinancialInput(projectId: number, req: Request) {
   const solar = getSolarData(projectId);
-  const capacityKw = parseOptionalFloat(req.query.capacity_kw as string, "capacity_kw") ?? solar.max_power_kw;
-  const efficiencyPct = parseOptionalFloat(req.query.efficiency_pct as string, "efficiency_pct") ?? solar.efficiency_pct;
+  const capacityKw = validatePositive(
+    parseOptionalFloat(req.query.capacity_kw as string, "capacity_kw") ?? solar.max_power_kw,
+    "capacity_kw",
+  )!;
+  const efficiencyPct =
+    parseOptionalFloat(req.query.efficiency_pct as string, "efficiency_pct") ??
+    solar.efficiency_pct;
 
   const overrides: Record<string, number | undefined> = {
-    installation_cost: parseOptionalFloat(req.query.installation_cost as string, "installation_cost"),
-    annual_maintenance_cost: parseOptionalFloat(req.query.annual_maintenance_cost as string, "annual_maintenance_cost"),
-    annual_energy_output_kwh: parseOptionalFloat(req.query.annual_energy_output_kwh as string, "annual_energy_output_kwh"),
-    electricity_price_per_kwh: parseOptionalFloat(req.query.electricity_price_per_kwh as string, "electricity_price_per_kwh"),
+    installation_cost: parseOptionalFloat(
+      req.query.installation_cost as string,
+      "installation_cost",
+    ),
+    annual_maintenance_cost: parseOptionalFloat(
+      req.query.annual_maintenance_cost as string,
+      "annual_maintenance_cost",
+    ),
+    annual_energy_output_kwh: parseOptionalFloat(
+      req.query.annual_energy_output_kwh as string,
+      "annual_energy_output_kwh",
+    ),
+    electricity_price_per_kwh: parseOptionalFloat(
+      req.query.electricity_price_per_kwh as string,
+      "electricity_price_per_kwh",
+    ),
     degradation_rate: parseOptionalFloat(req.query.degradation_rate as string, "degradation_rate"),
-    discount_rate: parseOptionalFloat(req.query.discount_rate as string, "discount_rate"),
+    discount_rate: validateNonNegative(
+      parseOptionalFloat(req.query.discount_rate as string, "discount_rate"),
+      "discount_rate",
+    ),
     inflation_rate: parseOptionalFloat(req.query.inflation_rate as string, "inflation_rate"),
-    project_lifetime_years: parseOptionalFloat(req.query.project_lifetime_years as string, "project_lifetime_years"),
+    project_lifetime_years: validatePositive(
+      parseOptionalFloat(req.query.project_lifetime_years as string, "project_lifetime_years"),
+      "project_lifetime_years",
+    ),
     tax_incentives: parseOptionalFloat(req.query.tax_incentives as string, "tax_incentives"),
     salvage_value: parseOptionalFloat(req.query.salvage_value as string, "salvage_value"),
     capacity_factor: parseOptionalFloat(req.query.capacity_factor as string, "capacity_factor"),
@@ -97,13 +130,20 @@ router.get("/roi-comparison", async (req: Request, res: Response, next: NextFunc
     const idsRaw = req.query.ids as string | undefined;
     if (!idsRaw) throw badRequest("ids query parameter is required (comma-separated)");
     const maxId = maxProjectId();
-    const ids = idsRaw.split(",").map((s) => {
-      const trimmed = s.trim();
-      const n = Number(trimmed);
-      if (!Number.isInteger(n) || n < 1) throw badRequest(`Invalid project id "${trimmed}"`);
-      if (n > maxId) throw badRequest(`Invalid project id "${trimmed}" exceeds maximum allowed project id ${maxId}`);
-      return n;
-    });
+    const ids = [
+      ...new Set(
+        idsRaw.split(",").map((s) => {
+          const trimmed = s.trim();
+          const n = Number(trimmed);
+          if (!Number.isInteger(n) || n < 1) throw badRequest(`Invalid project id "${trimmed}"`);
+          if (n > maxId)
+            throw badRequest(
+              `Invalid project id "${trimmed}" exceeds maximum allowed project id ${maxId}`,
+            );
+          return n;
+        }),
+      ),
+    ];
     if (ids.length === 0) throw badRequest("At least one project id is required");
     if (ids.length > 20) throw badRequest("Cannot compare more than 20 projects at once");
 

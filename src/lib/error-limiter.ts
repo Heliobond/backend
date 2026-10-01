@@ -1,22 +1,22 @@
-/**
- * Simple rate-limiter for error log messages (#57).
- * Prevents log spam when the same error fires repeatedly.
- */
-
-export const ERROR_RATE_LIMIT_WINDOW_MS = parseInt(
-  process.env.ERROR_RATE_LIMIT_WINDOW_MS ?? "60000",
-  10,
-);
-const WINDOW_MS = ERROR_RATE_LIMIT_WINDOW_MS;
+const WINDOW_MS = 60_000;
+const CLEANUP_INTERVAL_MS = 5 * 60_000;
 
 const seen = new Map<string, number>();
+let lastCleanup = Date.now();
 
-/**
- * Returns true if the key has been seen within the current window,
- * meaning the caller should suppress the log.
- * Returns false (and records the key) on first occurrence within the window.
- */
+function cleanup(): void {
+  const now = Date.now();
+  if (now - lastCleanup < CLEANUP_INTERVAL_MS) return;
+  lastCleanup = now;
+  for (const [key, timestamp] of seen) {
+    if (now - timestamp >= WINDOW_MS) {
+      seen.delete(key);
+    }
+  }
+}
+
 export function isErrorRateLimited(key: string): boolean {
+  cleanup();
   const now = Date.now();
   const last = seen.get(key);
   if (last !== undefined && now - last < WINDOW_MS) return true;
