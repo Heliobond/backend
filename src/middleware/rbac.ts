@@ -35,10 +35,10 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 /** Reject the request with 403 when the caller lacks the required role. */
 export function requireRole(role: Role) {
   return (req: Request, res: Response, next: NextFunction): void => {
-    // Bootstrap: if no roles exist, allow the request to proceed so that
-    // the first admin can be assigned via POST /v1/roles.
     if (listRoles().length === 0) {
-      next();
+      res
+        .status(403)
+        .json(errorBody("forbidden", `This action requires the '${role}' role or higher`));
       return;
     }
     if (!req.userId || !hasPermission(req.userId, role)) {

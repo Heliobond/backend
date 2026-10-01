@@ -67,13 +67,13 @@ describe("RBAC middleware", () => {
   });
 
   describe("requireRole", () => {
-    it("should allow request if no roles exist yet (bootstrap mode - happy path)", async () => {
+    it("should reject request with 403 if no roles exist yet (bootstrap deny-all)", async () => {
       (rolesLib.listRoles as jest.Mock).mockReturnValue([]);
 
       const res = await request(app).get("/admin").set("X-User-Id", "user-123");
 
-      expect(res.status).toBe(200);
-      expect(res.body.ok).toBe(true);
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe("forbidden");
     });
 
     it("should allow request if user has the required permission (happy path)", async () => {

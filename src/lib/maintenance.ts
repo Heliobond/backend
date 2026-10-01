@@ -206,8 +206,12 @@ export function analyzeEfficiencyTrend(projectId: number, historyHours = 720): E
   };
 }
 
-export function predictFailure(projectId: number, historyHours = 720): FailurePrediction {
-  const analysis = analyzeEfficiencyTrend(projectId, historyHours);
+export function predictFailure(
+  projectId: number,
+  historyHours = 720,
+  cachedAnalysis?: EfficiencyTrendAnalysis,
+): FailurePrediction {
+  const analysis = cachedAnalysis ?? analyzeEfficiencyTrend(projectId, historyHours);
   const points = sampleEfficiencyHistory(projectId, Math.min(historyHours, 24));
   const currentEfficiency = points.length > 0 ? points[points.length - 1].efficiency_pct : 0;
 
@@ -263,8 +267,12 @@ function classifyHealth(eff: number, threshold: number): "good" | "fair" | "poor
   return "critical";
 }
 
-export function recommendMaintenance(projectId: number, historyHours = 720): MaintenanceRecommendation {
-  const prediction = predictFailure(projectId, historyHours);
+export function recommendMaintenance(
+  projectId: number,
+  historyHours = 720,
+  cachedAnalysis?: EfficiencyTrendAnalysis,
+): MaintenanceRecommendation {
+  const prediction = predictFailure(projectId, historyHours, cachedAnalysis);
   const config = getPanelConfig(projectId);
   const panelType = config?.panel_type ?? "monocrystalline";
   const efficiencyRating = config?.efficiency_rating ?? 18;
@@ -401,8 +409,12 @@ export function recommendMaintenance(projectId: number, historyHours = 720): Mai
   };
 }
 
-export function generateSchedule(projectId: number, historyHours = 720): MaintenanceSchedule {
-  const recommendation = recommendMaintenance(projectId, historyHours);
+export function generateSchedule(
+  projectId: number,
+  historyHours = 720,
+  cachedAnalysis?: EfficiencyTrendAnalysis,
+): MaintenanceSchedule {
+  const recommendation = recommendMaintenance(projectId, historyHours, cachedAnalysis);
   const now = Date.now();
   const schedule: ScheduleEntry[] = [];
 
@@ -434,13 +446,14 @@ export function generateSchedule(projectId: number, historyHours = 720): Mainten
 }
 
 export function generateFullReport(projectId: number, historyHours = 720): FullMaintenanceReport {
+  const trendAnalysis = analyzeEfficiencyTrend(projectId, historyHours);
   return {
     project_id: projectId,
     generated_at: new Date().toISOString(),
-    trend_analysis: analyzeEfficiencyTrend(projectId, historyHours),
-    failure_prediction: predictFailure(projectId, historyHours),
-    recommendation: recommendMaintenance(projectId, historyHours),
-    schedule: generateSchedule(projectId, historyHours),
+    trend_analysis: trendAnalysis,
+    failure_prediction: predictFailure(projectId, historyHours, trendAnalysis),
+    recommendation: recommendMaintenance(projectId, historyHours, trendAnalysis),
+    schedule: generateSchedule(projectId, historyHours, trendAnalysis),
   };
 }
 
