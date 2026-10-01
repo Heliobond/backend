@@ -157,7 +157,12 @@ export async function signAndSubmit(
           reject(error);
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        logger.error("submission queue unexpected error", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        reject(err);
+      });
   });
 }
 
