@@ -30,7 +30,8 @@ interface PortfolioResponse {
 }
 
 router.get("/:address", async (req: Request, res: Response, next: NextFunction) => {
-  const address = Array.isArray(req.params.address) ? req.params.address[0] : req.params.address;
+  const rawAddress = Array.isArray(req.params.address) ? req.params.address[0] : req.params.address;
+  const address = typeof rawAddress === "string" ? rawAddress.trim() : "";
 
   try {
     // Validate the address as a G- or C-strkey

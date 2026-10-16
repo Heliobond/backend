@@ -12,14 +12,56 @@ import { withRpcConnection, networkPassphrase, withRpcRetry } from "./stellar";
 import { config } from "../config";
 import { stellarRpcDuration, stellarRpcTotal } from "./prometheus";
 
-// Simple in-memory cache for portfolio results (~15 second TTL)
+// Simple in-memory cache for portfolio results (~15 second TTL) with bounded LRU eviction
 interface CachedPortfolio {
   data: PortfolioInfo;
   timestamp: number;
 }
 
 const portfolioCache = new Map<string, CachedPortfolio>();
-const CACHE_TTL_MS = 15_000; // 15 seconds
+export const CACHE_TTL_MS = 15_000; // 15 seconds
+const DEFAULT_PORTFOLIO_CACHE_MAX_SIZE = 1000;
+
+function getPortfolioCacheMaxSize(): number {
+  const raw = process.env.PORTFOLIO_CACHE_MAX_SIZE;
+  if (!raw) return DEFAULT_PORTFOLIO_CACHE_MAX_SIZE;
+  const parsed = parseInt(raw, 10);
+  if (Number.isNaN(parsed) || parsed < 1) {
+    return DEFAULT_PORTFOLIO_CACHE_MAX_SIZE;
+  }
+  return parsed;
+}
+
+/**
+ * Evicts expired entries first, then evicts oldest entries LRU-style
+ * until the cache fits within the max entry bound.
+ */
+export function evictPortfolioCacheTo(max: number): void {
+  const now = Date.now();
+  for (const [key, entry] of portfolioCache.entries()) {
+    if (now - entry.timestamp >= CACHE_TTL_MS) {
+      portfolioCache.delete(key);
+    }
+  }
+
+  while (portfolioCache.size > max) {
+    const oldestKey = portfolioCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      portfolioCache.delete(oldestKey);
+    } else {
+      break;
+    }
+  }
+}
+
+/** Test helpers for cache introspection and deterministic cleanup */
+export function _resetPortfolioCache(): void {
+  portfolioCache.clear();
+}
+
+export function _getPortfolioCacheSize(): number {
+  return portfolioCache.size;
+}
 
 /**
  * Portfolio information returned from the vault's get_portfolio function.
@@ -83,13 +125,21 @@ export async function getPortfolio(address: string): Promise<PortfolioInfo> {
     throw new Error("INVESTMENT_VAULT_CONTRACT_ID env var is required to query portfolio");
   }
 
-  validateStellarAddress(address);
+  if (!address || typeof address !== "string") {
+    throw new Error("address must be a non-empty string");
+  }
 
-  // Check cache
-  const cached = portfolioCache.get(address);
+  const normalizedAddress = address.trim();
+  validateStellarAddress(normalizedAddress);
+
+  // Check cache and evict expired entry on read
+  const cached = portfolioCache.get(normalizedAddress);
   const now = Date.now();
-  if (cached && now - cached.timestamp < CACHE_TTL_MS) {
-    return cached.data;
+  if (cached) {
+    if (now - cached.timestamp < CACHE_TTL_MS) {
+      return cached.data;
+    }
+    portfolioCache.delete(normalizedAddress);
   }
 
   const portfolio = await withRpcConnection(async (client) => {
@@ -100,7 +150,7 @@ export async function getPortfolio(address: string): Promise<PortfolioInfo> {
     );
 
     // Convert the address to a ScVal Address type
-    const addressParam = nativeToScVal(address, { type: "address" });
+    const addressParam = nativeToScVal(normalizedAddress, { type: "address" });
 
     const tx = new TransactionBuilder(dummyAccount, { fee: BASE_FEE, networkPassphrase })
       .addOperation(contract.call("get_portfolio", addressParam))
@@ -156,8 +206,12 @@ export async function getPortfolio(address: string): Promise<PortfolioInfo> {
     };
   });
 
-  // Cache the result
-  portfolioCache.set(address, { data: portfolio, timestamp: Date.now() });
+  // Cache the result with LRU bounding
+  portfolioCache.set(normalizedAddress, { data: portfolio, timestamp: Date.now() });
+  const max = getPortfolioCacheMaxSize();
+  if (portfolioCache.size > max) {
+    evictPortfolioCacheTo(max);
+  }
 
   return portfolio;
 }
@@ -165,17 +219,41 @@ export async function getPortfolio(address: string): Promise<PortfolioInfo> {
 /**
  * Converts an i128 string value to a human-readable decimal with 7 decimal places
  * (standard for USDC on Stellar which uses 7 decimal places, not 6 like Ethereum).
+ * Safely handles positive, negative, and zero values with decimal clamping and input validation.
  */
-export function i128ToDecimal(value: string, decimals: number = 7): string {
-  const bigIntValue = BigInt(value);
-  const divisor = BigInt(10 ** decimals);
-  const integerPart = bigIntValue / divisor;
-  const fractionalPart = bigIntValue % divisor;
-
-  if (fractionalPart === 0n) {
-    return integerPart.toString();
+export function i128ToDecimal(value: string | number | bigint, decimals: number = 7): string {
+  if (value === null || value === undefined) {
+    throw new Error("i128 value cannot be null or undefined");
   }
 
-  const fractionalStr = fractionalPart.toString().padStart(decimals, "0");
-  return `${integerPart}.${fractionalStr}`.replace(/\.?0+$/, "");
+  const str = String(value).trim();
+  if (!str || !/^-?\d+$/.test(str)) {
+    throw new Error(`Invalid i128 numeric string: ${value}`);
+  }
+
+  if (decimals < 0) {
+    throw new Error("decimals cannot be negative");
+  }
+
+  const bigIntValue = BigInt(str);
+  if (bigIntValue === 0n) {
+    return "0";
+  }
+
+  const isNegative = bigIntValue < 0n;
+  const absValue = isNegative ? -bigIntValue : bigIntValue;
+  const divisor = 10n ** BigInt(decimals);
+
+  const integerPart = absValue / divisor;
+  const fractionalPart = absValue % divisor;
+
+  let result: string;
+  if (fractionalPart === 0n) {
+    result = integerPart.toString();
+  } else {
+    const fractionalStr = fractionalPart.toString().padStart(decimals, "0");
+    result = `${integerPart}.${fractionalStr}`.replace(/\.?0+$/, "");
+  }
+
+  return isNegative && result !== "0" ? `-${result}` : result;
 }
