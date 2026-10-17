@@ -82,10 +82,13 @@ export function rotateApiKey(id: string, gracePeriodMs?: number): ApiKey | null 
   const newKey = `hk_live_${crypto.randomBytes(24).toString("hex")}`;
   const now = Date.now();
 
-  // Store old key for grace period if specified
+  // Store old key for grace period if specified, otherwise clear previous grace key
   if (gracePeriodMs && gracePeriodMs > 0) {
     apiKey.old_key = apiKey.key;
     apiKey.new_key_expires_at = now + gracePeriodMs;
+  } else {
+    delete apiKey.old_key;
+    delete apiKey.new_key_expires_at;
   }
 
   apiKey.key = newKey;
