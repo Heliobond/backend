@@ -95,7 +95,7 @@ changed and what they need to do about it, rather than which files moved. Link t
 issue or PR at the end of each entry.
 
 ```markdown
-## [Unreleased]
+<!-- ## [Unreleased] -->
 
 ### Added         <!-- new features -->
 ### Changed       <!-- changes in existing behaviour -->

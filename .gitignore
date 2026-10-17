@@ -6,3 +6,4 @@ coverage/
 load-tests/reports/
 .mimocode/
 fix.mdlogs/
+tmp-*
