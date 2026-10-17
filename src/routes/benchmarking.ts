@@ -1,16 +1,17 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { parseProjectId } from "../middleware/errors";
-import { badRequest } from "../middleware/errors";
+import { parseProjectId, badRequest, notFound } from "../middleware/errors";
+import { requireAdminBearer } from "../middleware/requireAdminBearer";
 import {
   evaluateAllBenchmarks,
-  evaluateProjectBenchmark,
   getPercentileRanking,
   checkBenchmarkAlerts,
   trendVsBenchmark,
   getBenchmarks,
   getBenchmarkById,
   defineCustomBenchmark,
-  BenchmarkDefinition,
+  KNOWN_METRICS,
+  isKnownMetric,
+  isBuiltInBenchmark,
 } from "../lib/benchmarking";
 
 const router = Router();
@@ -22,21 +23,67 @@ router.get("/benchmarks", (_req: Request, res: Response) => {
 router.get("/benchmarks/:id", (req: Request, res: Response, next: NextFunction) => {
   const id = req.params.id as string;
   const benchmark = getBenchmarkById(id);
-  if (!benchmark) return next(badRequest(`Benchmark "${id}" not found`));
+  if (!benchmark) return next(notFound(`Benchmark "${id}" not found`));
   res.json(benchmark);
 });
 
-router.post("/benchmarks", (req: Request, res: Response, next: NextFunction) => {
+router.post("/benchmarks", requireAdminBearer, (req: Request, res: Response, next: NextFunction) => {
   const { name, description, metric, thresholds, source, id } = req.body;
-  if (!name || !metric || !thresholds) {
-    return next(badRequest("name, metric, and thresholds are required"));
+  if (!name || typeof name !== "string" || !name.trim()) {
+    return next(badRequest("name is required and must be a non-empty string"));
+  }
+  if (!metric || typeof metric !== "string") {
+    return next(badRequest("metric is required and must be a string"));
+  }
+  if (!isKnownMetric(metric)) {
+    return next(badRequest(`Invalid metric "${metric}". Allowed metrics: ${KNOWN_METRICS.join(", ")}`));
+  }
+  if (!thresholds || typeof thresholds !== "object" || Array.isArray(thresholds)) {
+    return next(badRequest("thresholds is required and must be an object"));
   }
   const { poor, fair, good, excellent } = thresholds;
-  if ([poor, fair, good, excellent].some((v: number) => typeof v !== "number")) {
+  if (
+    typeof poor !== "number" ||
+    !Number.isFinite(poor) ||
+    typeof fair !== "number" ||
+    !Number.isFinite(fair) ||
+    typeof good !== "number" ||
+    !Number.isFinite(good) ||
+    typeof excellent !== "number" ||
+    !Number.isFinite(excellent)
+  ) {
     return next(badRequest("thresholds must have numeric poor, fair, good, excellent values"));
   }
-  const benchmark = defineCustomBenchmark({ name, description, metric, thresholds, source, id });
-  res.status(201).json(benchmark);
+  if (poor < 0 || fair < 0 || good < 0 || excellent < 0) {
+    return next(badRequest("thresholds values must be non-negative"));
+  }
+  if (!(poor <= fair && fair <= good && good <= excellent)) {
+    return next(badRequest("thresholds must satisfy poor <= fair <= good <= excellent"));
+  }
+
+  const targetId =
+    typeof id === "string" && id.trim()
+      ? id.trim()
+      : name.trim().toLowerCase().replace(/\s+/g, "_");
+
+  if (isBuiltInBenchmark(targetId)) {
+    return next(badRequest(`Cannot overwrite built-in benchmark "${targetId}"`));
+  }
+
+  try {
+    const benchmark = defineCustomBenchmark({
+      name: name.trim(),
+      description: typeof description === "string" ? description : "",
+      metric,
+      thresholds: { poor, fair, good, excellent },
+      source: typeof source === "string" ? source : "Custom",
+      id: targetId,
+    });
+    res.status(201).json(benchmark);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    next(badRequest(msg));
+  }
 });
 
 router.get("/:id", (req: Request, res: Response, next: NextFunction) => {
@@ -77,7 +124,7 @@ router.get("/:id/trend", (req: Request, res: Response, next: NextFunction) => {
     const benchmarkId = (req.query.benchmark as string) ?? "credit_quality";
 
     const benchmark = getBenchmarkById(benchmarkId);
-    if (!benchmark) return next(badRequest(`Benchmark "${benchmarkId}" not found`));
+    if (!benchmark) return next(notFound(`Benchmark "${benchmarkId}" not found`));
 
     const result = trendVsBenchmark(id, metric, benchmarkId);
     res.json(result);

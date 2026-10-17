@@ -66,6 +66,34 @@ const DEFAULT_BENCHMARKS: BenchmarkDefinition[] = [
 // Custom benchmarks defined by users
 const customBenchmarks = new Map<string, BenchmarkDefinition>();
 
+export const KNOWN_METRICS = [
+  "credit_quality",
+  "green_impact",
+  "combined_score",
+  "power_output_kw",
+  "efficiency_pct",
+  "forest_density_pct",
+  "ndvi_score",
+] as const;
+
+export type KnownMetric = (typeof KNOWN_METRICS)[number];
+
+export function isKnownMetric(metric: string): metric is KnownMetric {
+  return (KNOWN_METRICS as readonly string[]).includes(metric);
+}
+
+export function isBuiltInBenchmark(id: string): boolean {
+  return DEFAULT_BENCHMARKS.some((b) => b.id === id);
+}
+
+export function getBuiltInBenchmarkIds(): string[] {
+  return DEFAULT_BENCHMARKS.map((b) => b.id);
+}
+
+export function clearCustomBenchmarks(): void {
+  customBenchmarks.clear();
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export interface ProjectBenchmarkData {
@@ -145,7 +173,11 @@ export function getBenchmarkById(id: string): BenchmarkDefinition | undefined {
 }
 
 export function defineCustomBenchmark(def: Omit<BenchmarkDefinition, "id"> & { id?: string }): BenchmarkDefinition {
-  const id = def.id ?? def.name.toLowerCase().replace(/\s+/g, "_");
+  const rawId = def.id ?? def.name.toLowerCase().replace(/\s+/g, "_");
+  const id = rawId.trim();
+  if (isBuiltInBenchmark(id)) {
+    throw new Error(`Cannot overwrite built-in benchmark "${id}"`);
+  }
   const benchmark: BenchmarkDefinition = { ...def, id };
   customBenchmarks.set(id, benchmark);
   return benchmark;

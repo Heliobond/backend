@@ -38,8 +38,8 @@ describe("benchmarking routes", () => {
   });
 
   it("GET /api/benchmarking/benchmarks/:id — 404 for unknown benchmark", async () => {
-    const res = await request(app).get("/api/benchmarking/benchmarks/nonexistent").expect(400);
-    expect(res.body.error.code).toBe("bad_request");
+    const res = await request(app).get("/api/benchmarking/benchmarks/nonexistent").expect(404);
+    expect(res.body.error.code).toBe("not_found");
   });
 
   it("POST /api/benchmarking/benchmarks — creates a custom benchmark", async () => {

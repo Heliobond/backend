@@ -36,6 +36,10 @@ export function badRequest(message: string): ApiError {
   return new ApiError(400, "bad_request", message);
 }
 
+export function notFound(message: string): ApiError {
+  return new ApiError(404, "not_found", message);
+}
+
 /** Hard upper bound on project ids, used when MAX_PROJECT_ID is unset or invalid. */
 export const MAX_PROJECT_ID = 100_000;
 export const DEFAULT_MAX_PROJECT_ID = MAX_PROJECT_ID;
