@@ -44,6 +44,12 @@ export class AnomalyValidationError extends Error {
   }
 }
 
+export const MAX_SENSITIVITY_Z_SCORE = 20;
+export const MAX_TREND_WINDOW_SIZE = 1000;
+export const MIN_TREND_WINDOW_SIZE = 2;
+export const MAX_TREND_DEVIATION_PCT = 1000;
+export const MAX_MIN_BASELINE = 500;
+
 /**
  * Validate a partial anomaly detection config, returning only the fields that
  * were present and valid. Throws `AnomalyValidationError` on the first problem.
@@ -61,6 +67,9 @@ export function validateAnomalyConfig(
     ) {
       throw new AnomalyValidationError("sensitivityZScore must be a finite positive number");
     }
+    if (config.sensitivityZScore > MAX_SENSITIVITY_Z_SCORE) {
+      throw new AnomalyValidationError(`sensitivityZScore cannot exceed ${MAX_SENSITIVITY_Z_SCORE}`);
+    }
     validated.sensitivityZScore = config.sensitivityZScore;
   }
 
@@ -68,9 +77,16 @@ export function validateAnomalyConfig(
     if (
       typeof config.trendWindowSize !== "number" ||
       !Number.isFinite(config.trendWindowSize) ||
+      !Number.isInteger(config.trendWindowSize) ||
       config.trendWindowSize <= 0
     ) {
-      throw new AnomalyValidationError("trendWindowSize must be a finite positive number");
+      throw new AnomalyValidationError("trendWindowSize must be a positive integer");
+    }
+    if (config.trendWindowSize < MIN_TREND_WINDOW_SIZE) {
+      throw new AnomalyValidationError(`trendWindowSize must be at least ${MIN_TREND_WINDOW_SIZE}`);
+    }
+    if (config.trendWindowSize > MAX_TREND_WINDOW_SIZE) {
+      throw new AnomalyValidationError(`trendWindowSize exceeds maximum allowed window size of ${MAX_TREND_WINDOW_SIZE}`);
     }
     validated.trendWindowSize = config.trendWindowSize;
   }
@@ -83,6 +99,9 @@ export function validateAnomalyConfig(
     ) {
       throw new AnomalyValidationError("trendDeviationPct must be a finite positive number");
     }
+    if (config.trendDeviationPct > MAX_TREND_DEVIATION_PCT) {
+      throw new AnomalyValidationError(`trendDeviationPct exceeds maximum allowed percentage of ${MAX_TREND_DEVIATION_PCT}`);
+    }
     validated.trendDeviationPct = config.trendDeviationPct;
   }
 
@@ -90,11 +109,21 @@ export function validateAnomalyConfig(
     if (
       typeof config.minBaseline !== "number" ||
       !Number.isFinite(config.minBaseline) ||
+      !Number.isInteger(config.minBaseline) ||
       config.minBaseline <= 0
     ) {
-      throw new AnomalyValidationError("minBaseline must be a finite positive number");
+      throw new AnomalyValidationError("minBaseline must be a positive integer");
+    }
+    if (config.minBaseline > MAX_MIN_BASELINE) {
+      throw new AnomalyValidationError(`minBaseline cannot exceed ${MAX_MIN_BASELINE}`);
     }
     validated.minBaseline = config.minBaseline;
+  }
+
+  if (validated.minBaseline !== undefined && validated.trendWindowSize !== undefined) {
+    if (validated.minBaseline > validated.trendWindowSize) {
+      throw new AnomalyValidationError("minBaseline cannot exceed trendWindowSize");
+    }
   }
 
   return validated;

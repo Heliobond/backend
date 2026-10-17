@@ -36,6 +36,10 @@ export function badRequest(message: string): ApiError {
   return new ApiError(400, "bad_request", message);
 }
 
+export function notFound(message: string): ApiError {
+  return new ApiError(404, "not_found", message);
+}
+
 /** Hard upper bound on project ids, used when MAX_PROJECT_ID is unset or invalid. */
 export const MAX_PROJECT_ID = 100_000;
 export const DEFAULT_MAX_PROJECT_ID = MAX_PROJECT_ID;
@@ -141,6 +145,12 @@ export function errorHandler(
   // Body parser raises PayloadTooLargeError when the request body exceeds the configured limit.
   if (err instanceof Error && "statusCode" in err && err.statusCode === 413) {
     res.status(413).json(errorBody("payload_too_large", "Request body is too large"));
+    return;
+  }
+
+  // Anomaly detection validation errors map to 400 bad_request
+  if (err instanceof Error && err.name === "AnomalyValidationError") {
+    res.status(400).json(errorBody("bad_request", err.message));
     return;
   }
 

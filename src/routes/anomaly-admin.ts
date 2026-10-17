@@ -4,8 +4,10 @@ import {
   getAnomalyConfig,
   clearHistory,
   AnomalyConfig,
+  AnomalyValidationError,
+  validateAnomalyConfig,
 } from "../lib/anomaly";
-import { parseProjectId } from "../middleware/errors";
+import { parseProjectId, badRequest } from "../middleware/errors";
 import { writeAuditLog } from "../lib/audit-logger";
 import { getCorrelationId } from "../lib/correlation";
 
@@ -23,39 +25,48 @@ const router = Router();
  * - requireAdminBearer
  * - requestSigning
  */
-router.put("/config", (req: Request, res: Response) => {
-  const oldConfig = getAnomalyConfig();
+router.put("/config", (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const oldConfig = getAnomalyConfig();
 
-  const body = (req.body ?? {}) as Record<string, unknown>;
-  const update: Partial<AnomalyConfig> = {};
-  for (const key of [
-    "sensitivityZScore",
-    "trendWindowSize",
-    "trendDeviationPct",
-    "minBaseline",
-  ] as const) {
-    if (body[key] !== undefined) update[key] = body[key] as number;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const update: Partial<Record<keyof AnomalyConfig, unknown>> = {};
+    for (const key of [
+      "sensitivityZScore",
+      "trendWindowSize",
+      "trendDeviationPct",
+      "minBaseline",
+    ] as const) {
+      if (body[key] !== undefined) update[key] = body[key];
+    }
+    const validatedUpdate = validateAnomalyConfig(update);
+    configureAnomalyDetection(validatedUpdate);
+
+    const newConfig = getAnomalyConfig();
+
+    // Record audit entry for config change (Issue #762)
+    writeAuditLog({
+      action: "anomaly_config_update",
+      correlation_id: getCorrelationId(),
+      ip: req.ip ?? null,
+      user_agent: req.headers["user-agent"] ?? null,
+      project_ids: [],
+      success: true,
+      results: {
+        old_config: oldConfig,
+        new_config: newConfig,
+        changes: validatedUpdate,
+      },
+    });
+
+    res.json({ ok: true, config: newConfig });
+  } catch (err: unknown) {
+    if (err instanceof AnomalyValidationError) {
+      next(badRequest(err.message));
+      return;
+    }
+    next(err);
   }
-  configureAnomalyDetection(update);
-
-  const newConfig = getAnomalyConfig();
-
-  // Record audit entry for config change (Issue #762)
-  writeAuditLog({
-    action: "anomaly_config_update",
-    correlation_id: getCorrelationId(),
-    ip: req.ip ?? null,
-    user_agent: req.headers["user-agent"] ?? null,
-    project_ids: [],
-    success: true,
-    results: {
-      old_config: oldConfig,
-      new_config: newConfig,
-      changes: update,
-    },
-  });
-
-  res.json({ ok: true, config: newConfig });
 });
 
 /**
