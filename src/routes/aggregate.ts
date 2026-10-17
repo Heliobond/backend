@@ -1,6 +1,14 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { parseOptionalInt, errorBody } from "../middleware/errors";
-import { loadProjectScores, computeAggregateScores, inferCategory, REGIONS, type Category, type Region } from "../lib/aggregation";
+import {
+  loadProjectScores,
+  computeAggregateScores,
+  inferCategory,
+  REGIONS,
+  type Category,
+  type Region,
+} from "../lib/aggregation";
+import { getTotalProjects } from "../lib/registry";
 
 const router = Router();
 
@@ -20,25 +28,44 @@ const VALID_REGIONS = new Set<Region>(REGIONS);
  */
 router.get("/", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const limit = Math.min(parseOptionalInt(req.query.limit as string | undefined, "limit", 20), 100);
-    const cursor = parseOptionalInt(req.query.cursor as string | undefined, "cursor", 0);
+    const rawLimit = parseOptionalInt(req.query.limit as string | undefined, "limit", 20);
+    if (rawLimit <= 0) {
+      res.status(400).json(errorBody("bad_request", "limit must be greater than 0"));
+      return;
+    }
+    const limit = Math.min(rawLimit, 100);
+
+    const rawCursor = parseOptionalInt(req.query.cursor as string | undefined, "cursor", 0);
+    if (rawCursor < 0) {
+      res.status(400).json(errorBody("bad_request", "cursor must be greater than or equal to 0"));
+      return;
+    }
+    const cursor = rawCursor;
+
     const categoryFilter = req.query.category as string | undefined;
     const regionFilter = req.query.region as string | undefined;
 
     if (categoryFilter && !VALID_CATEGORIES.has(categoryFilter as Category)) {
-      res.status(400).json(errorBody("bad_request", `category must be one of: ${[...VALID_CATEGORIES].join(", ")}`));
+      res
+        .status(400)
+        .json(
+          errorBody("bad_request", `category must be one of: ${[...VALID_CATEGORIES].join(", ")}`),
+        );
       return;
     }
 
     if (regionFilter && !VALID_REGIONS.has(regionFilter as Region)) {
-      res.status(400).json(errorBody("bad_request", `region must be one of: ${[...VALID_REGIONS].join(", ")}`));
+      res
+        .status(400)
+        .json(errorBody("bad_request", `region must be one of: ${[...VALID_REGIONS].join(", ")}`));
       return;
     }
 
-    // Build the project id list for this page (1-indexed)
-    const projectIds = Array.from({ length: limit }, (_, i) => cursor + i + 1);
+    // Retrieve all project IDs, load scores, and filter across the full set first
+    const total = await getTotalProjects();
+    const allIds = Array.from({ length: total }, (_, i) => i + 1);
 
-    let projects = loadProjectScores(projectIds);
+    let projects = loadProjectScores(allIds);
 
     if (categoryFilter) {
       projects = projects.filter((p) => p.category === categoryFilter);
@@ -47,12 +74,19 @@ router.get("/", async (req: Request, res: Response, next: NextFunction) => {
       projects = projects.filter((p) => p.region === regionFilter);
     }
 
-    const aggregate = computeAggregateScores(projects);
+    const filteredTotal = projects.length;
+    const paginated = projects.slice(cursor, cursor + limit);
+    const hasMore = cursor + limit < filteredTotal;
+
+    const aggregate = computeAggregateScores(paginated);
 
     res.json({
       ...aggregate,
-      cursor: cursor + limit,
+      total,
+      filtered_total: filteredTotal,
       limit,
+      hasMore,
+      ...(hasMore && { cursor: cursor + limit }),
     });
   } catch (err) {
     next(err);
