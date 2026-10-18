@@ -391,6 +391,69 @@ app.use("/api/investors", publicLimiter, apiKeyAuth, investorActivityRouter);
 app.use("/api/admin/api-keys", ipWhitelist, adminLimiter, apiKeysRouter);
 app.use("/api/telemetry", telemetryRouter); // legacy alias for #770
 
+// GraphQL endpoint and playground setup
+app.all(
+  "/graphql",
+  createHandler({
+    schema: graphqlSchema,
+    rootValue: graphqlRoot,
+    context: (req: any) => createGraphQLContext(req.raw) as any,
+  }),
+);
+
+app.get(["/graphql-playground", "/graphiql"], (req, res) => {
+  // Generate a nonce for inline script CSP
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const nonce = require("crypto").randomBytes(16).toString("hex");
+
+  res.setHeader("Content-Type", "text/html");
+  // Override CSP to allow inline script with nonce
+  res.setHeader(
+    "Content-Security-Policy",
+    `default-src 'self'; script-src 'self' https://unpkg.com 'nonce-${nonce}'; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; connect-src 'self'`,
+  );
+
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>GraphiQL</title>
+        <link
+          href="https://unpkg.com/graphiql@1.8.8/graphiql.min.css"
+          rel="stylesheet"
+          integrity="sha384-wsOzV0Eph4ZUUJS3E5lWAGWDmvPwKGlSAbUqoAxGs/4Xbiu5go013CHeyiHviRjk"
+          crossorigin="anonymous"
+        />
+      </head>
+      <body style="margin: 0;">
+        <div id="graphiql" style="height: 100vh;"></div>
+        <script
+          crossorigin="anonymous"
+          src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"
+          integrity="sha384-tMH8h3BGESGckSAVGZ82T9n90ztNXxvdwvdM6UoR56cYcf+0iGXBliJ29D+wZ/x8"
+        ></script>
+        <script
+          crossorigin="anonymous"
+          src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"
+          integrity="sha384-bm7MnzvK++ykSwVJ2tynSE5TRdN+xL418osEVF2DE/L/gfWHj91J2Sphe582B1Bh"
+        ></script>
+        <script
+          crossorigin="anonymous"
+          src="https://unpkg.com/graphiql@1.8.8/graphiql.min.js"
+          integrity="sha384-j7sKHA2Xh03DItLy//iDOH3EXXcIb8TZ4SmCIkPjdVZorF1a40xA9xK90NdDJGNg"
+        ></script>
+        <script nonce="${nonce}">
+          const fetcher = GraphiQL.createFetcher({ url: '/graphql' });
+          ReactDOM.render(
+            React.createElement(GraphiQL, { fetcher: fetcher }),
+            document.getElementById('graphiql'),
+          );
+        </script>
+      </body>
+    </html>
+  `);
+});
+
 // JSON 404 for anything unmatched, then the structured error handler.
 app.use(notFoundHandler);
 app.use(errorHandler);
@@ -614,52 +677,6 @@ function bootstrap(): void {
     // Real-time score updates over WebSocket (ws://<host>/ws)
     attachWebSocketServer(httpServer);
     return httpServer;
-  });
-
-  // GraphQL endpoint and playground setup
-  app.all(
-    "/graphql",
-    createHandler({
-      schema: graphqlSchema,
-      rootValue: graphqlRoot,
-      context: (req: any) => createGraphQLContext(req.raw) as any,
-    }),
-  );
-
-  app.get("/graphql-playground", (req, res) => {
-    // Generate a nonce for inline script CSP
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const nonce = require("crypto").randomBytes(16).toString("hex");
-
-    res.setHeader("Content-Type", "text/html");
-    // Override CSP to allow inline script with nonce
-    res.setHeader(
-      "Content-Security-Policy",
-      `default-src 'self'; script-src 'self' https://unpkg.com 'nonce-${nonce}'; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; connect-src 'self'`,
-    );
-
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>GraphiQL</title>
-          <link href="https://unpkg.com/graphiql/graphiql.min.css" rel="stylesheet" />
-        </head>
-        <body style="margin: 0;">
-          <div id="graphiql" style="height: 100vh;"></div>
-          <script crossorigin src="https://unpkg.com/react/umd/react.production.min.js"></script>
-          <script crossorigin src="https://unpkg.com/react-dom/umd/react-dom.production.min.js"></script>
-          <script crossorigin src="https://unpkg.com/graphiql/graphiql.min.js"></script>
-          <script nonce="${nonce}">
-            const fetcher = GraphiQL.createFetcher({ url: '/graphql' });
-            ReactDOM.render(
-              React.createElement(GraphiQL, { fetcher: fetcher }),
-              document.getElementById('graphiql'),
-            );
-          </script>
-        </body>
-      </html>
-    `);
   });
 
   // Periodically clear cached secrets so a rotated/compromised upstream
