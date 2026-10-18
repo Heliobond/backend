@@ -1,5 +1,10 @@
 import request from "supertest";
 import express, { Express } from "express";
+
+jest.mock("../lib/registry", () => ({
+  projectExists: jest.fn().mockImplementation(async (id: number) => id >= 1 && id <= 10),
+}));
+
 import comparisonRouter from "../routes/comparison";
 import { errorHandler } from "../middleware/errors";
 
@@ -83,5 +88,31 @@ describe("comparison routes", () => {
       .expect(200);
     expect(res.headers["content-type"]).toMatch(/text\/csv/);
     expect(res.text).toContain("rank,project_id");
+  });
+
+  it("GET /api/comparison — 404 for nonexistent project id", async () => {
+    const res = await request(app).get("/api/comparison?ids=1,999").expect(404);
+    expect(res.body.error.code).toBe("not_found");
+    expect(res.body.error.message).toBe("Project 999 not found");
+  });
+
+  it("GET /api/comparison/ranking — 404 for nonexistent project id", async () => {
+    const res = await request(app).get("/api/comparison/ranking?ids=999").expect(404);
+    expect(res.body.error.code).toBe("not_found");
+    expect(res.body.error.message).toBe("Project 999 not found");
+  });
+
+  it("GET /api/comparison/export — 404 for nonexistent project id", async () => {
+    const res = await request(app).get("/api/comparison/export?ids=1,999").expect(404);
+    expect(res.body.error.code).toBe("not_found");
+    expect(res.body.error.message).toBe("Project 999 not found");
+  });
+
+  it("GET /api/comparison/ranking/export — 404 for nonexistent project id", async () => {
+    const res = await request(app)
+      .get("/api/comparison/ranking/export?ids=1,999&criteria=credit_quality")
+      .expect(404);
+    expect(res.body.error.code).toBe("not_found");
+    expect(res.body.error.message).toBe("Project 999 not found");
   });
 });

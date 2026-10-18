@@ -23,6 +23,10 @@ jest.mock("../lib/analytics", () => ({
   summaryToCsv: jest.fn(),
 }));
 
+jest.mock("../lib/registry", () => ({
+  projectExists: jest.fn().mockImplementation(async (id: number) => id === 1),
+}));
+
 import {
   collectScores,
   portfolioSummary,
@@ -32,12 +36,15 @@ import {
   summaryToCsv,
 } from "../lib/analytics";
 
+import { projectExists } from "../lib/registry";
+
 const mockedCollect = collectScores as jest.Mock;
 const mockedSummary = portfolioSummary as jest.Mock;
 const mockedPerformers = rankPerformers as jest.Mock;
 const mockedDistribution = scoreDistribution as jest.Mock;
 const mockedTimeSeries = projectTimeSeries as jest.Mock;
 const mockedCsv = summaryToCsv as jest.Mock;
+const mockedProjectExists = projectExists as jest.Mock;
 
 const SCORES = [{ project_id: 1 }, { project_id: 2 }] as unknown[];
 
@@ -108,6 +115,13 @@ describe("dashboard routes (#679)", () => {
     const res = await request(app).get("/v1/dashboard/timeseries/abc");
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe("bad_request");
+  });
+
+  it("GET /timeseries/:id returns 404 for unknown project id", async () => {
+    const res = await request(app).get("/v1/dashboard/timeseries/999999");
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe("not_found");
+    expect(res.body.error.message).toBe("Project 999999 not found");
   });
 
   it("GET /export sends the CSV with the right headers", async () => {

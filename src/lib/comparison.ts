@@ -1,6 +1,7 @@
 import { getSolarData, getSatelliteData } from "../routes/iot";
 import { computeScores } from "./scoring";
-import { getHistory } from "./history";
+import { projectExists } from "./registry";
+import { ApiError } from "../middleware/errors";
 
 export interface ComparisonMetric {
   label: string;
@@ -68,7 +69,15 @@ function round(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-export function loadProjectMetrics(ids: number[]): ProjectMetrics[] {
+export async function loadProjectMetrics(ids: number[]): Promise<ProjectMetrics[]> {
+  const existenceChecks = await Promise.all(
+    ids.map(async (id) => ({ id, exists: await projectExists(id) })),
+  );
+  const missing = existenceChecks.find((item) => !item.exists);
+  if (missing) {
+    throw new ApiError(404, "not_found", `Project ${missing.id} not found`);
+  }
+
   return ids.map((id) => {
     const solar = getSolarData(id);
     const satellite = getSatelliteData(id);
@@ -87,8 +96,8 @@ export function loadProjectMetrics(ids: number[]): ProjectMetrics[] {
   });
 }
 
-export function compareProjects(ids: number[]): ComparisonResult {
-  const projects = loadProjectMetrics(ids);
+export async function compareProjects(ids: number[]): Promise<ComparisonResult> {
+  const projects = await loadProjectMetrics(ids);
 
   if (projects.length === 0) {
     return {
@@ -122,12 +131,14 @@ export function compareProjects(ids: number[]): ComparisonResult {
   };
 }
 
-export function generateRanking(ids: number[], criteria: string): RankingResult {
+export async function generateRanking(ids: number[], criteria: string): Promise<RankingResult> {
   if (!VALID_CRITERIA.has(criteria)) {
-    throw new Error(`Invalid ranking criteria "${criteria}". Valid options: ${Array.from(VALID_CRITERIA).join(", ")}`);
+    throw new Error(
+      `Invalid ranking criteria "${criteria}". Valid options: ${Array.from(VALID_CRITERIA).join(", ")}`,
+    );
   }
 
-  const projects = loadProjectMetrics(ids);
+  const projects = await loadProjectMetrics(ids);
   const sorted = [...projects].sort((a, b) => {
     const aVal = a[criteria as keyof ProjectMetrics] as number;
     const bVal = b[criteria as keyof ProjectMetrics] as number;
@@ -146,10 +157,7 @@ export function generateRanking(ids: number[], criteria: string): RankingResult 
 }
 
 export function comparisonToCsv(comparison: ComparisonResult): string {
-  const header = [
-    "project_id",
-    ...comparison.metrics.map((m) => m.label),
-  ].join(",");
+  const header = ["project_id", ...comparison.metrics.map((m) => m.label)].join(",");
 
   const rows = comparison.projects.map((p) =>
     [
@@ -180,8 +188,8 @@ export function comparisonToCsv(comparison: ComparisonResult): string {
 
 export function rankingToCsv(ranking: RankingResult): string {
   const header = "rank,project_id,score,credit_quality,green_impact";
-  const rows = ranking.rankings.map((r) =>
-    `${r.rank},${r.id},${r.score},${r.credit_quality},${r.green_impact}`,
+  const rows = ranking.rankings.map(
+    (r) => `${r.rank},${r.id},${r.score},${r.credit_quality},${r.green_impact}`,
   );
   return [header, ...rows].join("\n") + "\n";
 }

@@ -8,7 +8,13 @@ import {
   projectTimeSeries,
   summaryToCsv,
 } from "../lib/analytics";
-import { parseProjectId, parseOptionalInt } from "../middleware/errors";
+import {
+  parseProjectId,
+  parseOptionalInt,
+  ApiError,
+  MAX_U32_PROJECT_ID,
+} from "../middleware/errors";
+import { projectExists } from "../lib/registry";
 
 const router = Router();
 
@@ -38,7 +44,10 @@ router.get("/performers", async (req: Request, res: Response, next: NextFunction
 /** GET /dashboard/distribution?field=&bucket= — score distribution histogram. */
 router.get("/distribution", async (req: Request, res: Response, next: NextFunction) => {
   const field = req.query.field === "green_impact" ? "green_impact" : "credit_quality";
-  const bucket = Math.min(Math.max(parseOptionalInt(req.query.bucket as string | undefined, "bucket", 10), 1), 50);
+  const bucket = Math.min(
+    Math.max(parseOptionalInt(req.query.bucket as string | undefined, "bucket", 10), 1),
+    50,
+  );
   try {
     const scores = await collectScores();
     res.json({ field, buckets: scoreDistribution(scores, field, bucket) });
@@ -49,11 +58,22 @@ router.get("/distribution", async (req: Request, res: Response, next: NextFuncti
 });
 
 /** GET /dashboard/timeseries/:id?from=&to= — per-project score time-series. */
-router.get("/timeseries/:id", (req: Request, res: Response) => {
-  const id = parseProjectId(req.params.id, "project id");
-  const from = req.query.from !== undefined ? parseOptionalInt(req.query.from as string, "from", 0) : undefined;
-  const to = req.query.to !== undefined ? parseOptionalInt(req.query.to as string, "to", 0) : undefined;
-  res.json({ project_id: id, points: projectTimeSeries(id, from, to) });
+router.get("/timeseries/:id", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = parseProjectId(req.params.id, "project id", { max: MAX_U32_PROJECT_ID });
+    if (!(await projectExists(id))) {
+      throw new ApiError(404, "not_found", `Project ${id} not found`);
+    }
+    const from =
+      req.query.from !== undefined
+        ? parseOptionalInt(req.query.from as string, "from", 0)
+        : undefined;
+    const to =
+      req.query.to !== undefined ? parseOptionalInt(req.query.to as string, "to", 0) : undefined;
+    res.json({ project_id: id, points: projectTimeSeries(id, from, to) });
+  } catch (error) {
+    next(error);
+  }
 });
 
 /** GET /dashboard/export — CSV export of current portfolio scores. */

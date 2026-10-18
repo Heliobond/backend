@@ -661,7 +661,7 @@ Generates score distribution histogram data for charts.
 
 ### `GET /v1/dashboard/timeseries/:id`
 
-Retrieves historical score data points for a specific project. Supports `?from=` and `?to=` query filters.
+Retrieves historical score data points for a specific project. Supports `?from=` and `?to=` query filters. Returns `404 not_found` (`Project <id> not found`) if the project does not exist in the registry.
 
 ### `GET /v1/dashboard/export`
 
@@ -673,7 +673,7 @@ Exports the entire portfolio score database in CSV format (`Content-Type: text/c
 
 ### `GET /v1/comparison`
 
-Compares up to 20 projects side by side across environmental and financial metrics.
+Compares up to 20 projects side by side across environmental and financial metrics. Every requested project ID is validated against the on-chain registry; if any ID does not exist, returns `404 not_found` (`Project <id> not found`).
 
 | Param | In    | Type   | Rules                                                         |
 | :---- | :---- | :----- | :------------------------------------------------------------ |
@@ -712,7 +712,7 @@ Lists all supported comparison metric keys (`credit_quality`, `green_impact`, `p
 
 ### `GET /v1/comparison/ranking`
 
-Ranks a set of projects according to chosen criteria.
+Ranks a set of projects according to chosen criteria. Validates all requested project IDs against the on-chain registry, returning `404 not_found` if any ID is unknown.
 
 | Param      | In    | Type   | Rules                       | Default          |
 | :--------- | :---- | :----- | :-------------------------- | :--------------- |
@@ -721,7 +721,7 @@ Ranks a set of projects according to chosen criteria.
 
 ### `GET /v1/comparison/export` & `GET /v1/comparison/ranking/export`
 
-Exports project comparison or ranked analysis to CSV format.
+Exports project comparison or ranked analysis to CSV format. Validates that all requested project IDs exist in the registry, returning `404 not_found` if any ID is unknown.
 
 ---
 
