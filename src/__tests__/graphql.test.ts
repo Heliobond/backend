@@ -1,7 +1,12 @@
 import request from "supertest";
 import express, { Express } from "express";
 import { createHandler } from "graphql-http/lib/use/express";
-import { graphqlSchema, graphqlRoot, createGraphQLContext } from "../graphql/schema";
+import {
+  graphqlSchema,
+  graphqlRoot,
+  createGraphQLContext,
+  getGraphQLValidationRules,
+} from "../graphql/schema";
 import * as registry from "../lib/registry";
 import * as iot from "../routes/iot";
 import * as scoring from "../lib/scoring";
@@ -27,6 +32,7 @@ function buildApp(): Express {
       schema: graphqlSchema as any,
       rootValue: graphqlRoot,
       context: (req: any) => createGraphQLContext(req.raw) as any,
+      validationRules: getGraphQLValidationRules() as any,
     }),
   );
 

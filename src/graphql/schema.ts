@@ -10,6 +10,7 @@ import {
 import { updateImpactScore, getTotalProjects } from "../lib/registry";
 import { recordAudit } from "../lib/audit";
 import { resolveAuthContext, incrementUsage } from "../lib/apiKeys";
+export * from "./validation";
 
 // 1. GraphQL SDL Schema
 export const graphqlSchema = buildSchema(`
@@ -205,10 +206,7 @@ export const graphqlRoot = {
     const BATCH_SIZE = 1000;
     for (let offset = 0; offset < total; offset += BATCH_SIZE) {
       const batchEnd = Math.min(offset + BATCH_SIZE, total);
-      const ids = Array.from(
-        { length: batchEnd - offset },
-        (_, index) => offset + index + 1,
-      );
+      const ids = Array.from({ length: batchEnd - offset }, (_, index) => offset + index + 1);
       const batch = await Promise.all(
         ids.map(async (id) => ({
           id,

@@ -36,7 +36,12 @@ import notificationsRouter, { publicNotificationsRouter } from "./routes/notific
 import { creatorApplicationsRouter, creatorAdminRouter } from "./routes/creatorApplications";
 import oracleStatusRouter from "./routes/oracle-status";
 import { createHandler } from "graphql-http/lib/use/express";
-import { graphqlSchema, graphqlRoot, createGraphQLContext } from "./graphql/schema";
+import {
+  graphqlSchema,
+  graphqlRoot,
+  createGraphQLContext,
+  getGraphQLValidationRules,
+} from "./graphql/schema";
 import { startGrpcServer } from "./grpc/server";
 import { assignRole } from "./lib/roles";
 import { runHourlyScoreUpdate } from "./lib/scoreUpdateCron";
@@ -623,6 +628,7 @@ function bootstrap(): void {
       schema: graphqlSchema,
       rootValue: graphqlRoot,
       context: (req: any) => createGraphQLContext(req.raw) as any,
+      validationRules: getGraphQLValidationRules() as any,
     }),
   );
 
