@@ -12,25 +12,50 @@ import { RequestHandler } from "express";
  *   Referrer-Policy          — controls referrer information leakage
  *   Permissions-Policy       — restricts browser feature access
  */
+export const DEFAULT_CSP_DIRECTIVES = {
+  defaultSrc: ["'self'"],
+  scriptSrc: ["'self'", "https://unpkg.com"],
+  styleSrc: ["'self'", "'unsafe-inline'", "https://unpkg.com"],
+  imgSrc: ["'self'", "data:"],
+  connectSrc: ["'self'"],
+  fontSrc: ["'self'"],
+  objectSrc: ["'none'"],
+  frameAncestors: ["'none'"],
+  baseUri: ["'self'"],
+  formAction: ["'self'"],
+};
+
+export const DOCS_CSP_DIRECTIVES = {
+  defaultSrc: ["'self'"],
+  scriptSrc: ["'self'", "'unsafe-inline'", "https://unpkg.com"],
+  styleSrc: ["'self'", "'unsafe-inline'", "https://unpkg.com"],
+  imgSrc: ["'self'", "data:", "https://validator.swagger.io"],
+  connectSrc: ["'self'"],
+  fontSrc: ["'self'"],
+  objectSrc: ["'none'"],
+  frameAncestors: ["'none'"],
+  baseUri: ["'self'"],
+  formAction: ["'self'"],
+};
+
+/**
+ * Composed helmet middleware that sets the following security headers:
+ *   Content-Security-Policy   — restricts resource origins (scoped docs-compatible policy for /docs
+ *                               to support Swagger UI assets and initialization without disabling CSP)
+ *   X-Frame-Options           — blocks clickjacking (DENY; this is an API, never framed)
+ *   X-Content-Type-Options    — prevents MIME sniffing
+ *   Strict-Transport-Security — enforces HTTPS for 1 year
+ *   X-XSS-Protection          — legacy browser XSS filter
+ *   Referrer-Policy           — controls referrer information leakage
+ *   Permissions-Policy        — restricts browser feature access
+ */
 export const securityHeaders: RequestHandler = (req, res, next) => {
-  const isDocsPath = req.path.startsWith("/docs");
+  const isDocsPath =
+    (req.path === "/docs" || req.path.startsWith("/docs/")) && req.path !== "/docs.json";
   helmet({
-    contentSecurityPolicy: isDocsPath
-      ? false
-      : {
-          directives: {
-            defaultSrc: ["'self'"],
-            scriptSrc: ["'self'", "https://unpkg.com"],
-            styleSrc: ["'self'", "'unsafe-inline'", "https://unpkg.com"],
-            imgSrc: ["'self'", "data:"],
-            connectSrc: ["'self'"],
-            fontSrc: ["'self'"],
-            objectSrc: ["'none'"],
-            frameAncestors: ["'none'"],
-            baseUri: ["'self'"],
-            formAction: ["'self'"],
-          },
-        },
+    contentSecurityPolicy: {
+      directives: isDocsPath ? DOCS_CSP_DIRECTIVES : DEFAULT_CSP_DIRECTIVES,
+    },
     frameguard: { action: "deny" },
     noSniff: true,
     hsts: {
