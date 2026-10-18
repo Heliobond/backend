@@ -31,6 +31,36 @@ const WS_MAX_SUBSCRIPTIONS = envInt("WS_MAX_SUBSCRIPTIONS", 100);
 const WS_MSG_RATE_LIMIT = envInt("WS_MSG_RATE_LIMIT", 30);
 const WS_MSG_RATE_WINDOW_MS = 60_000;
 
+/**
+ * Maximum allowed payload size for incoming WebSocket frames across all feeds
+ * (default 64 KiB = 65,536 bytes). Bounds allocations and JSON parsing overhead
+ * from oversized frames. Configurable via WS_MAX_PAYLOAD_BYTES.
+ */
+export const WS_MAX_PAYLOAD_BYTES = envInt("WS_MAX_PAYLOAD_BYTES", 64 * 1024);
+
+/**
+ * Measure raw payload byte size without allocating intermediate strings or
+ * triggering JSON parsing on oversized buffers.
+ */
+export function getPayloadByteLength(data: unknown): number {
+  if (typeof data === "string") {
+    return Buffer.byteLength(data);
+  }
+  if (Buffer.isBuffer(data)) {
+    return data.length;
+  }
+  if (Array.isArray(data)) {
+    return data.reduce((acc, chunk) => acc + (Buffer.isBuffer(chunk) ? chunk.length : 0), 0);
+  }
+  if (data instanceof ArrayBuffer) {
+    return data.byteLength;
+  }
+  if (ArrayBuffer.isView(data)) {
+    return data.byteLength;
+  }
+  return 0;
+}
+
 const wsIpCounts = new Map<string, number>();
 
 interface RateLimitState {
@@ -111,9 +141,30 @@ function handleMessage(ws: WebSocket, data: unknown): void {
     }
   }
 
+  const byteLength = getPayloadByteLength(data);
+  if (byteLength > WS_MAX_PAYLOAD_BYTES) {
+    ws.close(1009, "payload too large");
+    return;
+  }
+
+  let text: string;
+  if (typeof data === "string") {
+    text = data;
+  } else if (Buffer.isBuffer(data)) {
+    text = data.toString("utf-8");
+  } else if (data instanceof ArrayBuffer) {
+    text = Buffer.from(data).toString("utf-8");
+  } else if (Array.isArray(data)) {
+    text = Buffer.concat(data.filter(Buffer.isBuffer)).toString("utf-8");
+  } else if (ArrayBuffer.isView(data)) {
+    text = Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf-8");
+  } else {
+    text = String(data);
+  }
+
   let msg: { action?: string; project_ids?: unknown; all?: boolean };
   try {
-    msg = JSON.parse(String(data));
+    msg = JSON.parse(text);
   } catch {
     return sendError(ws, "invalid JSON control frame");
   }
@@ -261,7 +312,7 @@ export function attachEventsWebSocketServer(server: HttpServer): WebSocketServer
 
   const maxPerIp = envInt("WS_EVENTS_MAX_PER_IP", WS_EVENTS_MAX_PER_IP_DEFAULT);
 
-  eventsWss = new WebSocketServer({ noServer: true });
+  eventsWss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD_BYTES });
 
   eventsWss.on("connection", (ws, req) => {
     const ip = ipFromRequest(req);
@@ -342,6 +393,8 @@ export function _resetEventsServerForTests(): void {
     }
   }
   clients.clear();
+  wsRateLimits.clear();
+  wsIpCounts.clear();
   if (wss) {
     try {
       wss.close();
@@ -350,6 +403,19 @@ export function _resetEventsServerForTests(): void {
     }
     wss = null;
   }
+}
+
+/** Test-only helper to invoke handleMessage directly without network sockets. */
+export function _handleMessageForTests(ws: WebSocket, data: unknown): void {
+  handleMessage(ws, data);
+}
+
+/** Test-only helper to register a mock client state for message testing. */
+export function _setClientStateForTests(
+  ws: WebSocket,
+  state: { subscriptions: Set<number>; all: boolean },
+): void {
+  clients.set(ws, state);
 }
 
 /**
@@ -362,7 +428,7 @@ export function _resetEventsServerForTests(): void {
  * can coexist without one server's registration clobbering the other's.
  */
 export function attachWebSocketServer(server: HttpServer): WebSocketServer {
-  wss = new WebSocketServer({ noServer: true });
+  wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD_BYTES });
 
   wss.on("connection", (ws, req) => {
     if (clients.size >= WS_MAX_CONNECTIONS) {

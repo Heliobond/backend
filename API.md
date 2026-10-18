@@ -1450,6 +1450,9 @@ frontend's `VaultEventStream` is the canonical consumer.
 - **Connection limits**: `WS_EVENTS_MAX_PER_IP` (default 8) concurrent
   sockets per source IP. The 9th connection is closed with code
   `1013 too many connections from this IP`.
+- **Payload limits**: `WS_MAX_PAYLOAD_BYTES` (default 64 KiB = 65,536 bytes) maximum
+  frame size. Oversized frames are rejected with close code `1009 payload too large`
+  before parsing.
 - **Heartbeat**: the server sends a WebSocket `ping` every 30s; sockets
   that fail to `pong` within 60s are terminated. Browser `WebSocket`
   answers pings automatically.
@@ -1465,6 +1468,7 @@ low latency and minimal bandwidth usage.
 
 - **Endpoint**: `ws://localhost:3001/ws` (dev) or `wss://your-domain.com/ws` (production)
 - **Protocol**: Binary frames for score updates, JSON for control messages
+- **Payload limit**: `WS_MAX_PAYLOAD_BYTES` (default 64 KiB = 65,536 bytes)
 
 ### Authentication
 
@@ -1482,6 +1486,8 @@ const ws = new WebSocket('ws://localhost:3001/ws', {
 
 **Close codes**:
 - `1008 Unauthorized`: Missing or invalid bearer token (production only)
+- `1009 Message Too Big`: Payload exceeds `WS_MAX_PAYLOAD_BYTES` (default 64 KiB = 65,536 bytes)
+- `1013 Service Overload`: Total connection limit (`WS_MAX_CONNECTIONS`), per-IP connection limit (`WS_MAX_PER_IP`), or message rate limit (`WS_MSG_RATE_LIMIT`) exceeded
 
 ### Control Frames (JSON)
 
