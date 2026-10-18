@@ -24,7 +24,7 @@ describe("OpenAPI Spec Contract Tests", () => {
     });
 
     it("should validate Error schema", () => {
-      const error = { error: "Not found" };
+      const error = { error: { code: "not_found", message: "Not found" } };
       expect(error).toSatisfySchemaInApiSpec("Error");
     });
 
