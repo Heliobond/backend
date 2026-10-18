@@ -50,9 +50,7 @@ const DEFAULT_CHAINS: ChainConfig[] = [
   },
 ];
 
-const chainRegistry = new Map<ChainId, ChainConfig>(
-  DEFAULT_CHAINS.map((c) => [c.id, c]),
-);
+const chainRegistry = new Map<ChainId, ChainConfig>(DEFAULT_CHAINS.map((c) => [c.id, c]));
 
 export function getChains(): ChainConfig[] {
   return Array.from(chainRegistry.values());
@@ -86,7 +84,7 @@ export async function broadcastToChains(
   chainIds?: ChainId[],
 ): Promise<MultiChainScoreUpdate> {
   const targets = chainIds
-    ? chainIds.map((id) => chainRegistry.get(id)).filter(Boolean) as ChainConfig[]
+    ? (chainIds.map((id) => chainRegistry.get(id)).filter(Boolean) as ChainConfig[])
     : getEnabledChains();
 
   const results: MultiChainScoreUpdate["results"] = [];
@@ -126,13 +124,15 @@ async function submitToChain(
     return updateImpactScore(projectId, creditQuality, greenImpact);
   }
 
-  // EVM chains (Ethereum, Polygon): simulate a tx hash for non-configured RPCs
-  if (!chain.rpcUrl || !chain.contractAddress) {
-    const hash = `0x${chain.id}_${projectId}_${Date.now().toString(16)}`;
-    return hash;
+  // EVM chains (Ethereum, Polygon): explicitly reject with accurate configuration/implementation status
+  if (chain.id === "ethereum" || chain.id === "polygon") {
+    if (!chain.rpcUrl || !chain.contractAddress) {
+      throw new Error(
+        `EVM chain submission not configured for ${chain.name}: missing rpcUrl or contractAddress`,
+      );
+    }
+    throw new Error(`EVM chain submission is not implemented for ${chain.name}`);
   }
 
-  // Placeholder for real EVM contract call via ethers/viem
-  const hash = `0x${Buffer.from(`${chain.id}:${projectId}:${creditQuality}:${greenImpact}:${Date.now()}`).toString("hex").slice(0, 62)}`;
-  return hash;
+  throw new Error(`Unsupported chain: ${chain.id}`);
 }
