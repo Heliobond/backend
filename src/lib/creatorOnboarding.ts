@@ -438,6 +438,9 @@ function buildUnsigned(
 ): string {
   assertContractId(params.contractId);
   assertAccount(params.sourceAccount, "sourceAccount");
+  if (!/^\d+$/.test(params.sequence) || params.sequence.length > 19) {
+    throw new CreatorValidationError("sequence must be a valid integer string up to 19 digits");
+  }
   const source = new Account(params.sourceAccount, params.sequence);
   const contract = new Contract(params.contractId);
   const tx = new TransactionBuilder(source, { fee: BASE_FEE, networkPassphrase })
@@ -479,8 +482,15 @@ export function buildCreateProjectTx(
   if (typeof params.uri !== "string" || params.uri.length === 0) {
     throw new CreatorValidationError("uri must be a non-empty string");
   }
-  if (!Number.isInteger(params.maturityDate) || params.maturityDate < 0) {
-    throw new CreatorValidationError("maturityDate must be a non-negative integer (unix seconds)");
+  if (
+    !Number.isFinite(params.maturityDate) ||
+    !Number.isInteger(params.maturityDate) ||
+    params.maturityDate < 0 ||
+    params.maturityDate > Number.MAX_SAFE_INTEGER
+  ) {
+    throw new CreatorValidationError(
+      "maturityDate must be a non-negative safe integer (unix seconds)",
+    );
   }
   if (!/^[0-9a-fA-F]{64}$/.test(params.metadataHash)) {
     throw new CreatorValidationError("metadataHash must be a 32-byte sha256 hex string");

@@ -33,6 +33,11 @@ import { notify } from "../lib/notifications";
 import { logger } from "../lib/logger";
 import { config } from "../config";
 
+export const MAX_DIGIT_STRING_LENGTH = 19;
+export const U64_MAX = 18446744073709551615n;
+export const DEFAULT_PAGE_LIMIT = 20;
+export const MAX_PAGE_LIMIT = 100;
+
 const REVIEW_STATUSES: readonly string[] = ["in_review", "approved", "rejected"];
 type ReviewStatus = Extract<CreatorApplicationStatus, "in_review" | "approved" | "rejected">;
 
@@ -146,13 +151,27 @@ creatorApplicationsRouter.get(
       }
 
       const sequence = String(req.query.sequence ?? "0");
-      if (!/^\d+$/.test(sequence))
+      if (!/^\d+$/.test(sequence)) {
         throw badRequest("sequence must be a non-negative integer string");
+      }
+      if (sequence.length > MAX_DIGIT_STRING_LENGTH) {
+        throw badRequest(`sequence must be no longer than ${MAX_DIGIT_STRING_LENGTH} digits`);
+      }
+
       const maturityRaw = String(req.query.maturity_date ?? "0");
       if (!/^\d+$/.test(maturityRaw)) {
         throw badRequest("maturity_date must be a non-negative integer (unix seconds)");
       }
+      if (maturityRaw.length > MAX_DIGIT_STRING_LENGTH) {
+        throw badRequest(`maturity_date must be no longer than ${MAX_DIGIT_STRING_LENGTH} digits`);
+      }
+      if (BigInt(maturityRaw) > U64_MAX) {
+        throw badRequest("maturity_date exceeds maximum u64 value");
+      }
       const maturityDate = Number(maturityRaw);
+      if (!Number.isFinite(maturityDate) || maturityDate > Number.MAX_SAFE_INTEGER) {
+        throw badRequest("maturity_date exceeds maximum safe integer range");
+      }
 
       const xdr = buildCreateProjectTx({
         contractId,
@@ -190,9 +209,44 @@ function applicationId(req: Request): string {
   return id;
 }
 
-/** GET /v1/admin/creators/applications — list applications. */
-creatorAdminRouter.get("/applications", (_req: Request, res: Response) => {
-  res.json({ applications: listApplications() });
+/** GET /v1/admin/creators/applications — list applications (paginated). */
+creatorAdminRouter.get("/applications", (req: Request, res: Response, next: NextFunction) => {
+  try {
+    let limit = DEFAULT_PAGE_LIMIT;
+    if (req.query.limit !== undefined) {
+      const rawLimit = String(req.query.limit).trim();
+      if (!/^\d+$/.test(rawLimit)) {
+        throw badRequest("limit must be a positive integer");
+      }
+      limit = parseInt(rawLimit, 10);
+      if (limit < 1 || limit > MAX_PAGE_LIMIT) {
+        throw badRequest(`limit must be between 1 and ${MAX_PAGE_LIMIT}`);
+      }
+    }
+
+    let offset = 0;
+    if (req.query.offset !== undefined) {
+      const rawOffset = String(req.query.offset).trim();
+      if (!/^\d+$/.test(rawOffset)) {
+        throw badRequest("offset must be a non-negative integer");
+      }
+      offset = parseInt(rawOffset, 10);
+    }
+
+    const all = listApplications();
+    const total = all.length;
+    const paginated = all.slice(offset, offset + limit);
+
+    res.json({
+      applications: paginated,
+      total,
+      limit,
+      offset,
+      has_more: offset + paginated.length < total,
+    });
+  } catch (err) {
+    fail(next, err);
+  }
 });
 
 /** GET /v1/admin/creators/applications/:id — fetch one application. */
@@ -236,6 +290,11 @@ creatorAdminRouter.patch(
           typeof body.whitelister_sequence === "string" ? body.whitelister_sequence : "0";
         if (!/^\d+$/.test(sequence)) {
           throw badRequest("whitelister_sequence must be a non-negative integer string");
+        }
+        if (sequence.length > MAX_DIGIT_STRING_LENGTH) {
+          throw badRequest(
+            `whitelister_sequence must be no longer than ${MAX_DIGIT_STRING_LENGTH} digits`,
+          );
         }
         const contractId = config.PROJECT_REGISTRY_CONTRACT_ID;
         if (!contractId) {
