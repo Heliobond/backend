@@ -1,4 +1,5 @@
-const WINDOW_MS = 60_000;
+export const ERROR_RATE_LIMIT_WINDOW_MS = 60_000;
+const WINDOW_MS = ERROR_RATE_LIMIT_WINDOW_MS;
 const CLEANUP_INTERVAL_MS = 5 * 60_000;
 
 const seen = new Map<string, number>();

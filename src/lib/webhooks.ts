@@ -16,6 +16,7 @@ export interface WebhookConfig {
   secret: string;
   max_retries: number;
   retry_delay_ms: number;
+  owner?: string;
   created_at: string;
   last_triggered_at?: string;
 }
@@ -59,11 +60,16 @@ export function stopWebhookCleanup(): void {
   }
 }
 
+export function clearWebhooks(): void {
+  webhooks.clear();
+}
+
 export function registerWebhook(
   url: string,
   secret: string,
   maxRetries = 3,
   retryDelayMs = 2000,
+  owner = "default",
 ): WebhookConfig {
   const wh: WebhookConfig = {
     id: `wh_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -71,22 +77,37 @@ export function registerWebhook(
     secret,
     max_retries: maxRetries,
     retry_delay_ms: retryDelayMs,
+    owner,
     created_at: new Date().toISOString(),
   };
   webhooks.set(wh.id, wh);
   return wh;
 }
 
-export function removeWebhook(id: string): boolean {
+export function removeWebhook(id: string, owner?: string): boolean {
+  const wh = webhooks.get(id);
+  if (!wh) return false;
+  if (owner !== undefined && wh.owner !== owner) {
+    return false;
+  }
   return webhooks.delete(id);
 }
 
-export function listWebhooks(): WebhookConfig[] {
-  return Array.from(webhooks.values());
+export function listWebhooks(owner?: string): WebhookConfig[] {
+  const all = Array.from(webhooks.values());
+  if (owner !== undefined) {
+    return all.filter((w) => w.owner === owner);
+  }
+  return all;
 }
 
-export function getWebhook(id: string): WebhookConfig | undefined {
-  return webhooks.get(id);
+export function getWebhook(id: string, owner?: string): WebhookConfig | undefined {
+  const wh = webhooks.get(id);
+  if (!wh) return undefined;
+  if (owner !== undefined && wh.owner !== owner) {
+    return undefined;
+  }
+  return wh;
 }
 
 function sign(payload: string, secret: string): string {

@@ -375,7 +375,7 @@ app.use("/api/projects/:id/price-history", publicLimiter, apiKeyAuth, priceHisto
 app.use("/api/projects", publicLimiter, apiKeyAuth, projectsRouter);
 app.use("/api/portfolio", publicLimiter, apiKeyAuth, portfolioRouter);
 app.use("/api/roles", ipWhitelist, adminLimiter, rolesRouter);
-app.use("/api/webhooks", ipWhitelist, adminLimiter, webhooksRouter);
+app.use("/api/webhooks", ipWhitelist, adminLimiter, requestSigning, webhooksRouter);
 app.use("/api/panels", ipWhitelist, adminLimiter, panelsRouter);
 app.use("/api/metadata", ipWhitelist, adminLimiter, metadataRouter);
 app.use("/api/dashboard", publicLimiter, apiKeyAuth, dashboardRouter);

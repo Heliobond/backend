@@ -8,11 +8,34 @@ import {
 } from "../lib/webhooks";
 import { badRequest } from "../middleware/errors";
 
+export const MAX_ALLOWED_RETRIES = 10;
+export const MIN_ALLOWED_RETRY_DELAY_MS = 100;
+export const MAX_ALLOWED_RETRY_DELAY_MS = 60000;
+
+export function extractWebhookOwner(req: Request): string {
+  const headerConsumer =
+    (req.headers["x-consumer-name"] as string | undefined) ||
+    (req.headers["x-consumer-id"] as string | undefined) ||
+    (req.headers["x-tenant-id"] as string | undefined);
+  if (headerConsumer && typeof headerConsumer === "string" && headerConsumer.trim()) {
+    return headerConsumer.trim();
+  }
+  const bodyOwner = (req.body as Record<string, unknown> | undefined)?.owner;
+  if (typeof bodyOwner === "string" && bodyOwner.trim()) {
+    return bodyOwner.trim();
+  }
+  const queryOwner = req.query?.owner;
+  if (typeof queryOwner === "string" && queryOwner.trim()) {
+    return queryOwner.trim();
+  }
+  return "default";
+}
+
 const router = Router();
 
 /**
  * POST /api/webhooks
- * Body: { url, secret, max_retries?, retry_delay_ms? }
+ * Body: { url, secret, max_retries?, retry_delay_ms?, owner? }
  * Registers a new webhook endpoint.
  */
 router.post("/", async (req: Request, res: Response, next: NextFunction) => {
@@ -38,17 +61,44 @@ router.post("/", async (req: Request, res: Response, next: NextFunction) => {
       throw badRequest(err instanceof Error ? err.message : "url must be a valid http/https URL");
     }
 
-    const maxRetries =
-      typeof max_retries === "number" && max_retries >= 0 ? Math.floor(max_retries) : 3;
-    const retryDelay =
-      typeof retry_delay_ms === "number" && retry_delay_ms >= 0 ? Math.floor(retry_delay_ms) : 2000;
+    let maxRetries = 3;
+    if (max_retries !== undefined) {
+      if (
+        typeof max_retries !== "number" ||
+        !Number.isFinite(max_retries) ||
+        Math.floor(max_retries) !== max_retries ||
+        max_retries < 0 ||
+        max_retries > MAX_ALLOWED_RETRIES
+      ) {
+        throw badRequest(`max_retries must be an integer between 0 and ${MAX_ALLOWED_RETRIES}`);
+      }
+      maxRetries = max_retries;
+    }
 
-    const wh = registerWebhook(validatedUrl, secret, maxRetries, retryDelay);
+    let retryDelay = 2000;
+    if (retry_delay_ms !== undefined) {
+      if (
+        typeof retry_delay_ms !== "number" ||
+        !Number.isFinite(retry_delay_ms) ||
+        Math.floor(retry_delay_ms) !== retry_delay_ms ||
+        retry_delay_ms < MIN_ALLOWED_RETRY_DELAY_MS ||
+        retry_delay_ms > MAX_ALLOWED_RETRY_DELAY_MS
+      ) {
+        throw badRequest(
+          `retry_delay_ms must be an integer between ${MIN_ALLOWED_RETRY_DELAY_MS} and ${MAX_ALLOWED_RETRY_DELAY_MS}`,
+        );
+      }
+      retryDelay = retry_delay_ms;
+    }
+
+    const owner = extractWebhookOwner(req);
+    const wh = registerWebhook(validatedUrl, secret, maxRetries, retryDelay, owner);
     res.status(201).json({
       id: wh.id,
       url: wh.url,
       max_retries: wh.max_retries,
       retry_delay_ms: wh.retry_delay_ms,
+      owner: wh.owner,
       created_at: wh.created_at,
     });
   } catch (err) {
@@ -56,19 +106,24 @@ router.post("/", async (req: Request, res: Response, next: NextFunction) => {
   }
 });
 
-router.get("/", (_req: Request, res: Response) => {
-  const list = listWebhooks().map(({ id, url, max_retries, retry_delay_ms, created_at }) => ({
-    id,
-    url,
-    max_retries,
-    retry_delay_ms,
-    created_at,
-  }));
+router.get("/", (req: Request, res: Response) => {
+  const owner = extractWebhookOwner(req);
+  const list = listWebhooks(owner).map(
+    ({ id, url, max_retries, retry_delay_ms, owner, created_at }) => ({
+      id,
+      url,
+      max_retries,
+      retry_delay_ms,
+      owner,
+      created_at,
+    }),
+  );
   res.json({ webhooks: list });
 });
 
 router.get("/:id", (req: Request, res: Response) => {
-  const wh = getWebhook(String(req.params["id"]));
+  const owner = extractWebhookOwner(req);
+  const wh = getWebhook(String(req.params["id"]), owner);
   if (!wh) {
     res.status(404).json({ error: "not_found", message: "Webhook not found" });
     return;
@@ -78,12 +133,14 @@ router.get("/:id", (req: Request, res: Response) => {
     url: wh.url,
     max_retries: wh.max_retries,
     retry_delay_ms: wh.retry_delay_ms,
+    owner: wh.owner,
     created_at: wh.created_at,
   });
 });
 
 router.delete("/:id", (req: Request, res: Response) => {
-  const removed = removeWebhook(String(req.params["id"]));
+  const owner = extractWebhookOwner(req);
+  const removed = removeWebhook(String(req.params["id"]), owner);
   if (!removed) {
     res.status(404).json({ error: "not_found", message: "Webhook not found" });
     return;
