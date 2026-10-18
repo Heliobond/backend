@@ -1334,7 +1334,41 @@ Computes and submits `update_impact_score` transactions to the Soroban smart con
 
 ### `GET /v1/admin/audit`
 
-Immutable audit log of all on-chain score updates with query filters (`?project_id=`, `?from=`, `?to=`, `?format=json|csv`).
+Immutable audit log of all on-chain score updates with bounded in-memory retention and pagination.
+
+**Query Parameters**
+- `project_id` (optional integer): Filter by project ID.
+- `from` (optional integer, unix ms): Lower timestamp boundary (inclusive).
+- `to` (optional integer, unix ms): Upper timestamp boundary (inclusive).
+- `limit` (optional integer, default `50`, min `1`, max `100`): Maximum entries to return in current page.
+- `offset` (optional integer, default `0`, min `0`): Pagination offset.
+- `format` (optional string, `json` or `csv`): Output format.
+
+**Retention & Memory Safeguards**
+- In-memory audit log is capped by `MAX_AUDIT_LOG_ENTRIES` (default: 1,000 entries) with automatic FIFO eviction when capacity is exceeded to prevent unbounded memory growth.
+
+**Response Body (JSON)**
+
+```json
+{
+  "total": 42,
+  "limit": 50,
+  "offset": 0,
+  "has_more": false,
+  "count": 42,
+  "entries": [
+    {
+      "id": 1,
+      "project_id": 10,
+      "credit_quality": 85,
+      "green_impact": 90,
+      "tx_hash": "0xabc123...",
+      "triggered_by": "api",
+      "timestamp": 1729245600000
+    }
+  ]
+}
+```
 
 ### `POST /v1/admin/batch/score-update`
 

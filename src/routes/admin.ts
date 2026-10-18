@@ -344,17 +344,30 @@ router.get(
         throw badRequest("from must be earlier than to");
       }
 
-      const entries = getAuditLog({ project_id, from, to });
+      const allEntries = getAuditLog({ project_id, from, to });
+      const total = allEntries.length;
       const format = req.query.format === "csv" ? "csv" : "json";
 
       if (format === "csv") {
         res.set("Content-Type", "text/csv");
         res.set("Content-Disposition", 'attachment; filename="audit-log.csv"');
-        res.send(auditToCsv(entries));
+        res.send(auditToCsv(allEntries));
         return;
       }
 
-      res.json({ count: entries.length, entries });
+      const rawLimit = parseOptionalInt(queryValue(req.query.limit), "limit", 50);
+      const limit = Math.max(1, Math.min(rawLimit === 0 ? 50 : rawLimit, 100));
+      const offset = parseOptionalInt(queryValue(req.query.offset), "offset", 0);
+      const entries = allEntries.slice(offset, offset + limit);
+
+      res.json({
+        total,
+        limit,
+        offset,
+        has_more: offset + entries.length < total,
+        count: entries.length,
+        entries,
+      });
     } catch (err) {
       next(err);
     }
