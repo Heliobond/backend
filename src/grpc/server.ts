@@ -22,6 +22,8 @@ const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
 
 const heliobondProto = grpc.loadPackageDefinition(packageDefinition).heliobond as any;
 
+export const GRPC_INTERNAL_ERROR_MESSAGE = "Internal server error";
+
 // Helper to authenticate metadata
 function authenticateGrpc(metadata: grpc.Metadata): { success: boolean; error?: string } {
   const authHeader = metadata.get("authorization")[0] as string | undefined;
@@ -99,100 +101,132 @@ async function getProjectScore(
     const data = getProjectDetails(project_id);
     callback(null, data);
   } catch (error) {
+    logger.error("[gRPC] getProjectScore internal error", {
+      project_id: call.request?.project_id,
+      ...logger.formatError(error),
+    });
     callback({
       code: grpc.status.INTERNAL,
-      details: error instanceof Error ? error.message : "Internal server error",
+      details: GRPC_INTERNAL_ERROR_MESSAGE,
     });
   }
 }
 
 // Server streaming handler (pushes real-time score updates)
 function streamProjectScores(call: grpc.ServerWritableStream<any, any>) {
-  const auth = authenticateGrpc(call.metadata);
-  if (!auth.success) {
-    const err = new Error(auth.error || "Authentication failed") as grpc.ServiceError;
-    err.code = grpc.status.UNAUTHENTICATED;
-    call.destroy(err);
-    return;
-  }
+  try {
+    const auth = authenticateGrpc(call.metadata);
+    if (!auth.success) {
+      const err = new Error(auth.error || "Authentication failed") as grpc.ServiceError;
+      err.code = grpc.status.UNAUTHENTICATED;
+      call.destroy(err);
+      return;
+    }
 
-  const listener = (update: { project_id: number }) => {
-    try {
-      const details = getProjectDetails(update.project_id);
-      call.write(details);
-    } catch (err) {
-      logger.error("[gRPC Stream] failed to send project details", {
+    const listener = (update: { project_id: number }) => {
+      try {
+        const details = getProjectDetails(update.project_id);
+        call.write(details);
+      } catch (err) {
+        logger.error("[gRPC Stream] failed to send project details", {
+          stream_type: "streamProjectScores",
+          project_id: update.project_id,
+          ...logger.formatError(err),
+        });
+        const streamErr = new Error(GRPC_INTERNAL_ERROR_MESSAGE) as grpc.ServiceError;
+        streamErr.code = grpc.status.INTERNAL;
+        streamErr.details = GRPC_INTERNAL_ERROR_MESSAGE;
+        call.emit("error", streamErr);
+      }
+    };
+
+    scoreEvents.on(SCORE_UPDATE_EVENT, listener);
+
+    call.on("cancelled", () => {
+      scoreEvents.off(SCORE_UPDATE_EVENT, listener);
+    });
+    call.on("close", () => {
+      scoreEvents.off(SCORE_UPDATE_EVENT, listener);
+    });
+    call.on("error", (err) => {
+      logger.error("[gRPC Stream] stream error", {
         stream_type: "streamProjectScores",
-        project_id: update.project_id,
+        error_code: (err as grpc.ServiceError).code,
         ...logger.formatError(err),
       });
-    }
-  };
-
-  scoreEvents.on(SCORE_UPDATE_EVENT, listener);
-
-  call.on("cancelled", () => {
-    scoreEvents.off(SCORE_UPDATE_EVENT, listener);
-  });
-  call.on("close", () => {
-    scoreEvents.off(SCORE_UPDATE_EVENT, listener);
-  });
-  call.on("error", (err) => {
-    logger.error("[gRPC Stream] stream error", {
-      stream_type: "streamProjectScores",
-      error_code: (err as grpc.ServiceError).code,
-      ...logger.formatError(err),
+      scoreEvents.off(SCORE_UPDATE_EVENT, listener);
     });
-    scoreEvents.off(SCORE_UPDATE_EVENT, listener);
-  });
+  } catch (error) {
+    logger.error("[gRPC Stream] initialization error", {
+      stream_type: "streamProjectScores",
+      ...logger.formatError(error),
+    });
+    const err = new Error(GRPC_INTERNAL_ERROR_MESSAGE) as grpc.ServiceError;
+    err.code = grpc.status.INTERNAL;
+    call.destroy(err);
+  }
 }
 
 // Bidirectional streaming handler
 function chatProjectScores(call: grpc.ServerDuplexStream<any, any>) {
-  const auth = authenticateGrpc(call.metadata);
-  if (!auth.success) {
-    const err = new Error(auth.error || "Authentication failed") as grpc.ServiceError;
-    err.code = grpc.status.UNAUTHENTICATED;
-    call.destroy(err);
-    return;
-  }
+  try {
+    const auth = authenticateGrpc(call.metadata);
+    if (!auth.success) {
+      const err = new Error(auth.error || "Authentication failed") as grpc.ServiceError;
+      err.code = grpc.status.UNAUTHENTICATED;
+      call.destroy(err);
+      return;
+    }
 
-  call.on("error", (err) => {
-    logger.error("[gRPC Chat] stream error", {
-      stream_type: "chatProjectScores",
-      error_code: (err as grpc.ServiceError).code,
-      ...logger.formatError(err),
-    });
-  });
-
-  call.on("data", async (request) => {
-    const { project_id } = request;
-    try {
-      const total = await getTotalProjects();
-      if (project_id < 1 || project_id > total) {
-        call.write({
-          project_id,
-          timestamp: Date.now(),
-          credit_quality: 0,
-          green_impact: 0,
-        });
-        return;
-      }
-
-      const details = getProjectDetails(project_id);
-      call.write(details);
-    } catch (err) {
-      logger.error("[gRPC Chat] data processing error", {
+    call.on("error", (err) => {
+      logger.error("[gRPC Chat] stream error", {
         stream_type: "chatProjectScores",
-        project_id: project_id,
+        error_code: (err as grpc.ServiceError).code,
         ...logger.formatError(err),
       });
-    }
-  });
+    });
 
-  call.on("end", () => {
-    call.end();
-  });
+    call.on("data", async (request) => {
+      const { project_id } = request;
+      try {
+        const total = await getTotalProjects();
+        if (project_id < 1 || project_id > total) {
+          call.write({
+            project_id,
+            timestamp: Date.now(),
+            credit_quality: 0,
+            green_impact: 0,
+          });
+          return;
+        }
+
+        const details = getProjectDetails(project_id);
+        call.write(details);
+      } catch (err) {
+        logger.error("[gRPC Chat] data processing error", {
+          stream_type: "chatProjectScores",
+          project_id: project_id,
+          ...logger.formatError(err),
+        });
+        const streamErr = new Error(GRPC_INTERNAL_ERROR_MESSAGE) as grpc.ServiceError;
+        streamErr.code = grpc.status.INTERNAL;
+        streamErr.details = GRPC_INTERNAL_ERROR_MESSAGE;
+        call.emit("error", streamErr);
+      }
+    });
+
+    call.on("end", () => {
+      call.end();
+    });
+  } catch (error) {
+    logger.error("[gRPC Chat] initialization error", {
+      stream_type: "chatProjectScores",
+      ...logger.formatError(error),
+    });
+    const err = new Error(GRPC_INTERNAL_ERROR_MESSAGE) as grpc.ServiceError;
+    err.code = grpc.status.INTERNAL;
+    call.destroy(err);
+  }
 }
 
 export function startGrpcServer(
