@@ -36,6 +36,12 @@ describe("Anomaly Detection Engine", () => {
 
     it("throws on invalid trendWindowSize", () => {
       expect(() => validateAnomalyConfig({ trendWindowSize: 0 })).toThrow(AnomalyValidationError);
+      expect(() => validateAnomalyConfig({ trendWindowSize: 1e15 })).toThrow(
+        AnomalyValidationError,
+      );
+      expect(() => validateAnomalyConfig({ trendWindowSize: 1001 })).toThrow(
+        AnomalyValidationError,
+      );
     });
 
     it("throws on invalid trendDeviationPct", () => {

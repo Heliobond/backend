@@ -37,6 +37,8 @@ const DEFAULT_CONFIG: AnomalyConfig = {
   minBaseline: 5,
 };
 
+export const MAX_TREND_WINDOW_SIZE = 1000;
+
 export class AnomalyValidationError extends Error {
   constructor(message: string) {
     super(message);
@@ -68,9 +70,12 @@ export function validateAnomalyConfig(
     if (
       typeof config.trendWindowSize !== "number" ||
       !Number.isFinite(config.trendWindowSize) ||
-      config.trendWindowSize <= 0
+      config.trendWindowSize <= 0 ||
+      config.trendWindowSize > MAX_TREND_WINDOW_SIZE
     ) {
-      throw new AnomalyValidationError("trendWindowSize must be a finite positive number");
+      throw new AnomalyValidationError(
+        `trendWindowSize must be a finite positive number not exceeding ${MAX_TREND_WINDOW_SIZE}`,
+      );
     }
     validated.trendWindowSize = config.trendWindowSize;
   }

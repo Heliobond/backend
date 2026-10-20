@@ -88,4 +88,15 @@ describe("error handling middleware", () => {
     expect(res.body.error.code).toBe("bad_request");
     expect(res.body.error.message).toContain("JSON");
   });
+
+  it("AnomalyValidationError returns 400 bad_request (#880)", async () => {
+    const app = createAppWithError(() => {
+      const err = new Error("sensitivityZScore must be a finite positive number");
+      err.name = "AnomalyValidationError";
+      throw err;
+    });
+    const res = await request(app).get("/error").expect(400);
+    expect(res.body.error.code).toBe("bad_request");
+    expect(res.body.error.message).toContain("sensitivityZScore");
+  });
 });

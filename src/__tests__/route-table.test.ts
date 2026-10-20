@@ -132,4 +132,24 @@ describe("route table (#760)", () => {
 
     expect(spurious).toEqual([]);
   });
+
+  it("POST /v1/admin/update-scores is reachable and not 404 (#829)", async () => {
+    const res = await request(app).post("/v1/admin/update-scores").set(AUTH);
+    expect(res.status).not.toBe(404);
+  });
+
+  it("GET /v1/admin/audit is reachable and not 404 (#829)", async () => {
+    const res = await request(app).get("/v1/admin/audit").set(AUTH);
+    expect(res.status).not.toBe(404);
+  });
+
+  it("GET /api/admin/audit legacy path still works (#829)", async () => {
+    const res = await request(app).get("/api/admin/audit").set(AUTH);
+    expect(res.status).not.toBe(404);
+  });
+
+  it("GET /v1/admin/feature-flags/analytics is unaffected (#829)", async () => {
+    const res = await request(app).get("/v1/admin/feature-flags/analytics");
+    expect(res.status).not.toBe(404);
+  });
 });

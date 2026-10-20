@@ -64,6 +64,17 @@ describe("idempotency key behavior", () => {
     expect(second.status).toBe("success");
   });
 
+  it("releases idempotency key when submission defers due to RpcDegradedError (#830)", async () => {
+    jest.spyOn(registry, "updateImpactScore").mockRejectedValueOnce(new registry.RpcDegradedError("degraded"));
+
+    const deferredResult = await updateScoreForProject(42);
+    expect(deferredResult.status).toBe("deferred");
+
+    // Second call in the same hour should NOT be blocked as a duplicate because key was released
+    const retryResult = await updateScoreForProject(42);
+    expect(retryResult.status).toBe("success");
+  });
+
   it("treats different project IDs as independent", async () => {
     const first = await updateScoreForProject(42);
     const second = await updateScoreForProject(43);

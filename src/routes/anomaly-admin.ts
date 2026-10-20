@@ -23,7 +23,8 @@ const router = Router();
  * - requireAdminBearer
  * - requestSigning
  */
-router.put("/config", (req: Request, res: Response) => {
+router.put("/config", (req: Request, res: Response, next: NextFunction) => {
+  try {
   const oldConfig = getAnomalyConfig();
 
   const body = (req.body ?? {}) as Record<string, unknown>;
@@ -56,6 +57,9 @@ router.put("/config", (req: Request, res: Response) => {
   });
 
   res.json({ ok: true, config: newConfig });
+  } catch (err) {
+    next(err);
+  }
 });
 
 /**

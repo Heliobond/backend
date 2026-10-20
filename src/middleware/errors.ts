@@ -132,6 +132,11 @@ export function errorHandler(
     return;
   }
 
+  if (err instanceof Error && err.name === "AnomalyValidationError") {
+    res.status(400).json(errorBody("bad_request", err.message));
+    return;
+  }
+
   // Body parser raises a SyntaxError (with a `body` field) on malformed JSON.
   if (err instanceof SyntaxError && "body" in err) {
     res.status(400).json(errorBody("bad_request", "Request body is not valid JSON"));

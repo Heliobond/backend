@@ -3,7 +3,7 @@ import { fetchSatelliteWithFallback } from "./satellite-sources";
 import { computeScores } from "./scoring";
 import { detectAnomalies } from "./anomaly";
 import { updateImpactScore, RpcDegradedError } from "./registry";
-import { generateIdempotencyKey, checkIdempotency, clearIdempotencyStore } from "./idempotency";
+import { generateIdempotencyKey, checkIdempotency, removeIdempotencyKey, clearIdempotencyStore } from "./idempotency";
 import { logger } from "./logger";
 
 /** Exposed for tests — delegates to the central idempotency store. */
@@ -141,6 +141,7 @@ export async function updateScoreForProject(projectId: number): Promise<ScoreUpd
     try {
       txHash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact, idempotencyKey);
     } catch (updateErr) {
+      removeIdempotencyKey(idempotencyKey);
       if (updateErr instanceof RpcDegradedError) {
         return {
           status: "deferred",
@@ -160,6 +161,7 @@ export async function updateScoreForProject(projectId: number): Promise<ScoreUpd
       txHash,
     };
   } catch (err) {
+    removeIdempotencyKey(idempotencyKey);
     return { status: "error", projectId, error: String(err) };
   }
 }

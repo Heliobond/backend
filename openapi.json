@@ -17,6 +17,17 @@
   ],
   "components": {
     "securitySchemes": {
+      "AdminBearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Bearer token authentication with ADMIN_API_KEY for admin endpoints."
+      },
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "API key authentication for public and consumer endpoints."
+      },
       "UserId": {
         "type": "apiKey",
         "in": "header",
@@ -691,7 +702,7 @@
         }
       }
     },
-    "/admin/score-update": {
+    "/admin/update-scores": {
       "post": {
         "summary": "Trigger a manual score update",
         "tags": [

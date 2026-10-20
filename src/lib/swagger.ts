@@ -14,6 +14,17 @@ export const openApiSpec = {
   ],
   components: {
     securitySchemes: {
+      AdminBearerAuth: {
+        type: "http" as const,
+        scheme: "bearer",
+        description: "Bearer token authentication with ADMIN_API_KEY for admin endpoints.",
+      },
+      ApiKeyAuth: {
+        type: "apiKey" as const,
+        in: "header",
+        name: "X-API-Key",
+        description: "API key authentication for public and consumer endpoints.",
+      },
       UserId: {
         type: "apiKey" as const,
         in: "header",
@@ -373,7 +384,7 @@ export const openApiSpec = {
         responses: { 200: { description: "Portfolio metrics" } },
       },
     },
-    "/admin/score-update": {
+    "/admin/update-scores": {
       post: {
         summary: "Trigger a manual score update",
         tags: ["Admin"],

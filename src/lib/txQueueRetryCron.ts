@@ -2,7 +2,7 @@ import { getSolarData } from "./iot";
 import { fetchSatelliteWithFallback } from "./satellite-sources";
 import { computeScores } from "./scoring";
 import { updateImpactScore, DuplicateSubmissionError } from "./registry";
-import { generateIdempotencyKey, checkIdempotency } from "./idempotency";
+import { generateIdempotencyKey, checkIdempotency, removeIdempotencyKey } from "./idempotency";
 import {
   getQueueSize,
   getQueueSnapshot,
@@ -89,6 +89,7 @@ export async function runTxQueueRetry(): Promise<void> {
         processed.push(item.projectId);
       } else {
         const errMsg = err instanceof Error ? err.message : String(err);
+        removeIdempotencyKey(generateIdempotencyKey(item.projectId));
         incrementRetry(item.projectId, errMsg);
 
         if (hasExceededMaxRetries(item.projectId)) {

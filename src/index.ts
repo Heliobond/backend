@@ -308,7 +308,7 @@ v1.use(versionHeaders);
 v1.use(acceptVersion);
 
 v1.use("/iot", publicLimiter, apiKeyAuth, iotRouter);
-v1.use("/admin/feature-flags/analytics", ipWhitelist, adminLimiter, requestSigning, adminRouter);
+v1.use("/admin", ipWhitelist, adminLimiter, requestSigning, adminRouter);
 v1.use("/admin/batch", ipWhitelist, adminLimiter, requestSigning, batchRouter);
 // Project sub-routes and the literal `/aggregate` path must be registered
 // before the general `/projects` mount below. Otherwise `/projects/aggregate`
