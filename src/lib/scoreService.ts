@@ -5,6 +5,7 @@ import { detectAnomalies } from "./anomaly";
 import { updateImpactScore, RpcDegradedError } from "./registry";
 import { generateIdempotencyKey, checkIdempotency, removeIdempotencyKey, clearIdempotencyStore } from "./idempotency";
 import { logger } from "./logger";
+import { recordOracleScoreUpdate } from "./prometheus";
 
 /** Exposed for tests — delegates to the central idempotency store. */
 export function resetIdempotencyState(): void {
@@ -140,6 +141,7 @@ export async function updateScoreForProject(projectId: number): Promise<ScoreUpd
     let txHash: string;
     try {
       txHash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact, idempotencyKey);
+      recordOracleScoreUpdate(projectId);
     } catch (updateErr) {
       removeIdempotencyKey(idempotencyKey);
       if (updateErr instanceof RpcDegradedError) {

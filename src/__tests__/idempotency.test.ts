@@ -7,6 +7,7 @@ import * as registry from "../lib/registry";
 import { resetIdempotencyState, updateScoreForProject } from "../lib/scoreService";
 import { checkIdempotency, getIdempotencyStoreSize } from "../lib/idempotency";
 import { config } from "../config";
+import { oracleScoreAge } from "../lib/prometheus";
 
 describe("idempotency key behavior", () => {
   beforeEach(() => {
@@ -31,9 +32,13 @@ describe("idempotency key behavior", () => {
   });
 
   it("allows the first submission to succeed", async () => {
+    const nowSpy = jest.spyOn(Date, "now").mockReturnValue(1_000);
     const result = await updateScoreForProject(42);
 
     expect(result.status).toBe("success");
+    nowSpy.mockReturnValue(3_500);
+    const metric = await oracleScoreAge.get();
+    expect(metric.values.find(({ labels }) => labels.project_id === "42")?.value).toBe(2.5);
   });
 
   it("rejects a duplicate submission within the TTL", async () => {
