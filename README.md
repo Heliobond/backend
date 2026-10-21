@@ -290,7 +290,7 @@ Configure OpenTelemetry exporters in your environment to send data to your prefe
 | Runtime | Node.js 20 |
 | Language | TypeScript |
 | HTTP framework | Express 5 |
-| Stellar SDK | `@stellar/stellar-sdk` v15 |
+| Stellar SDK | `@stellar/stellar-sdk` v17.1.0 |
 | Scheduler | `node-cron` v4 |
 | Package manager / test runner | Bun |
 | Test framework | Jest + ts-jest + Supertest |
