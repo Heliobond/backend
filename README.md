@@ -276,7 +276,7 @@ Create a `.env` file (see `.env.example`):
 | `RPC_URL`                      | No       | `https://soroban-testnet.stellar.org` | Stellar RPC endpoint                                                  |
 | `PORT`                         | No       | `3001`                                | HTTP port the server listens on                                       |
 | `FRONTEND_URL`                 | No       | `http://localhost:3000`               | Origin allowed by CORS                                                |
-| `ADMIN_API_KEY`                | No       | —                                     | Bearer token for `/api/admin/*`. If unset, auth is skipped (dev only) |
+| `ADMIN_API_KEY`                | No       | —                                     | Bearer token for `/v1/admin/*` and other admin-gated routes. If unset, the server starts but admin endpoints fail closed with `500 server_misconfigured` |
 | `RATE_LIMIT_WINDOW_MS`         | No       | `60000`                               | Public rate-limit window (ms)                                         |
 | `RATE_LIMIT_MAX`               | No       | `100`                                 | Public max requests per IP per window                                 |
 | `RATE_LIMIT_ADMIN_WINDOW_MS`   | No       | `RATE_LIMIT_WINDOW_MS`                | Admin rate-limit window (ms)                                          |
