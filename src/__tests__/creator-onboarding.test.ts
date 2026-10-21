@@ -79,6 +79,13 @@ describe("creator onboarding pipeline (#771)", () => {
 
   beforeEach(() => {
     process.env.ADMIN_API_KEY = ADMIN_KEY;
+    // The creator-onboarding tests focus on the metadata + review +
+    // whitelist flow, not auth. walletAuth now defaults to requiring a
+    // signed wallet challenge (#832), so these tests opt out explicitly
+    // to keep the per-case `submit()` helper on address-only semantics.
+    // The "wallet signature option" describe below sets this back to
+    // "true" to exercise the signed path.
+    process.env.WALLET_AUTH_REQUIRE_SIGNATURE = "false";
     resetCreatorApplications();
     setMetadataPinner(null);
     auditLines = [];
