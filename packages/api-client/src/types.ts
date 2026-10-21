@@ -590,7 +590,7 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  "/admin/score-update": {
+  "/admin/update-scores": {
     parameters: {
       query?: never;
       header?: never;
