@@ -904,15 +904,69 @@
         }
       }
     },
-    "/portfolio": {
+    "/portfolio/{address}": {
       "get": {
         "summary": "Get portfolio summary",
         "tags": [
           "Portfolio"
         ],
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "address",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Stellar account (G...) or contract (C...) strkey"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Pagination cursor from a previous response's next_cursor"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            },
+            "description": "Maximum number of events to return (1-200)"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Portfolio metrics"
+          },
+          "400": {
+            "description": "Invalid address or pagination parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "429": {
             "description": "Too many requests",

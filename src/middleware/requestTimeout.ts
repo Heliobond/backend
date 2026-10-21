@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from "express";
+import { errorBody } from "./errors";
 
 const DEFAULT_TIMEOUT_MS = parseInt(process.env.REQUEST_TIMEOUT_MS || "30000", 10);
 const ADMIN_TIMEOUT_MS = parseInt(process.env.ADMIN_REQUEST_TIMEOUT_MS || "60000", 10);
@@ -49,7 +50,7 @@ export function createRequestTimeout(
     const timer = setTimeout(() => {
       clearTimer();
       if (!res.headersSent) {
-        res.status(408).json({ error: "request_timeout", message });
+        res.status(408).json(errorBody("request_timeout", message));
       }
       controller.abort(new Error("request_timeout"));
       req.destroy();

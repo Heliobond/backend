@@ -18,6 +18,5 @@ load-tests
 eslint.config.mjs
 jest.config.ts
 tsconfig.test.json
-bun.lock
 tmp-*
 docs

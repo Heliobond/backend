@@ -10,7 +10,7 @@ import {
   validateWeights,
 } from "../lib/scoring-formula";
 import { getSolarData, getSatelliteData } from "./iot";
-import { parseProjectId, badRequest } from "../middleware/errors";
+import { parseProjectId, badRequest, errorBody } from "../middleware/errors";
 
 const router = Router();
 
@@ -29,15 +29,17 @@ router.post("/", (req: Request, res: Response) => {
   };
 
   if (!id || typeof id !== "string") {
-    return res.status(400).json({ error: "id is required" });
+    return res.status(400).json(errorBody("bad_request", "id is required"));
   }
   if (!name || typeof name !== "string") {
-    return res.status(400).json({ error: "name is required" });
+    return res.status(400).json(errorBody("bad_request", "name is required"));
   }
 
   const result = createFormula(id, name, weights ?? {}, description);
   if (!result.valid) {
-    return res.status(400).json({ error: "validation failed", errors: result.errors });
+    return res.status(400).json({
+      error: { code: "bad_request", message: "validation failed", errors: result.errors },
+    });
   }
 
   res.status(201).json(result.formula);
@@ -46,28 +48,28 @@ router.post("/", (req: Request, res: Response) => {
 /** GET /v1/scoring/formulas/:id — get a formula */
 router.get("/:id", (req: Request, res: Response) => {
   const formula = getFormula(String(req.params.id));
-  if (!formula) return res.status(404).json({ error: "formula not found" });
+  if (!formula) return res.status(404).json(errorBody("not_found", "formula not found"));
   res.json(formula);
 });
 
 /** DELETE /v1/scoring/formulas/:id — delete a formula */
 router.delete("/:id", (req: Request, res: Response) => {
   const deleted = deleteFormula(String(req.params.id));
-  if (!deleted) return res.status(404).json({ error: "formula not found" });
+  if (!deleted) return res.status(404).json(errorBody("not_found", "formula not found"));
   res.json({ ok: true });
 });
 
 /** POST /v1/scoring/formulas/:id/activate — set as active formula */
 router.post("/:id/activate", (req: Request, res: Response) => {
   const ok = setActiveFormula(String(req.params.id));
-  if (!ok) return res.status(404).json({ error: "formula not found" });
+  if (!ok) return res.status(404).json(errorBody("not_found", "formula not found"));
   res.json({ ok: true, active: String(req.params.id) });
 });
 
 /** POST /v1/scoring/formulas/validate — validate weights without saving */
 router.post("/validate", (req: Request, res: Response) => {
   const { weights } = req.body as { weights?: Record<string, number> };
-  if (!weights) return res.status(400).json({ error: "weights required" });
+  if (!weights) return res.status(400).json(errorBody("bad_request", "weights required"));
   res.json(validateWeights(weights));
 });
 
@@ -79,7 +81,7 @@ router.get("/:id/preview/:projectId", (req: Request, res: Response, next: NextFu
   try {
     const projectId = parseProjectId(req.params.projectId, "project id");
     const formula = getFormula(String(req.params.id));
-    if (!formula) return res.status(404).json({ error: "formula not found" });
+    if (!formula) return res.status(404).json(errorBody("not_found", "formula not found"));
 
     const solar = getSolarData(projectId);
     const satellite = getSatelliteData(projectId);

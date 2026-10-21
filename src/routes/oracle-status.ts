@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { register } from "../lib/prometheus";
 import { logger } from "../lib/logger";
-import { getTotalProjects } from "../lib/stellar/project-registry";
+import { getTotalProjects } from "../lib/registry";
 
 const router = Router();
 
@@ -34,7 +34,8 @@ function percentileFromBuckets(buckets: { le: number; count: number }[], q: numb
     .map(([le, count]) => ({ le, count }))
     .sort((a, b) => a.le - b.le);
 
-  const total = sorted.find((b) => b.le === Infinity)?.count ?? sorted[sorted.length - 1]?.count ?? 0;
+  const total =
+    sorted.find((b) => b.le === Infinity)?.count ?? sorted[sorted.length - 1]?.count ?? 0;
   if (total === 0) return null;
 
   const target = q * total;

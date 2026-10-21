@@ -83,7 +83,7 @@ describe("chains routes", () => {
       .post("/v1/chains/broadcast/1")
       .send({ chains: ["ethereum"] })
       .expect(501);
-    expect(res.body.error).toContain("only Stellar");
+    expect(res.body.error.message).toContain("only Stellar");
   });
 
   it("POST /v1/chains/broadcast/:projectId broadcasts to Stellar", async () => {

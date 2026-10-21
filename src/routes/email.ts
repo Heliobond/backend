@@ -11,7 +11,7 @@ import {
   sendDigest,
   Frequency,
 } from "../lib/email";
-import { badRequest } from "../middleware/errors";
+import { badRequest, errorBody } from "../middleware/errors";
 
 const router = Router();
 
@@ -44,10 +44,7 @@ function handlePublicUnsubscribe(req: Request, res: Response): void {
   }
   const removed = unsubscribeByToken(token);
   if (!removed) {
-    res.status(404).json({
-      error: "not_found",
-      message: "Unknown or already-used unsubscribe token",
-    });
+    res.status(404).json(errorBody("not_found", "Unknown or already-used unsubscribe token"));
     return;
   }
   res.json({ unsubscribed: true });
@@ -132,7 +129,9 @@ router.put("/templates", (req: Request, res: Response) => {
   res.json(upsertTemplate({ name, subject, body }));
 });
 
-function isValidScoreChange(change: unknown): change is { project_id: number; credit_quality_delta: number; green_impact_delta: number } {
+function isValidScoreChange(
+  change: unknown,
+): change is { project_id: number; credit_quality_delta: number; green_impact_delta: number } {
   return (
     typeof change === "object" &&
     change !== null &&
@@ -151,12 +150,12 @@ router.post("/digest", async (req: Request, res: Response, next: NextFunction) =
   if (frequency !== "daily" && frequency !== "weekly") {
     throw badRequest("frequency must be 'daily' or 'weekly'");
   }
-  
+
   // Validate changes array
   if (changes !== undefined && !Array.isArray(changes)) {
     throw badRequest("changes must be an array");
   }
-  
+
   const validatedChanges = Array.isArray(changes)
     ? changes.filter((c) => {
         if (!isValidScoreChange(c)) {
@@ -166,7 +165,7 @@ router.post("/digest", async (req: Request, res: Response, next: NextFunction) =
         return true;
       })
     : [];
-  
+
   try {
     const sent = await sendDigest(frequency, validatedChanges);
     res.json({ frequency, sent });

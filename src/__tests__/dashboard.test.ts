@@ -23,6 +23,12 @@ jest.mock("../lib/analytics", () => ({
   summaryToCsv: jest.fn(),
 }));
 
+// Factory mock avoids loading the real registry module, which throws at import
+// time when PROJECT_REGISTRY_CONTRACT_ID is unset (e.g. in CI).
+jest.mock("../lib/registry", () => ({
+  projectExists: jest.fn().mockResolvedValue(true),
+}));
+
 import {
   collectScores,
   portfolioSummary,
@@ -123,6 +129,6 @@ describe("dashboard routes (#679)", () => {
     mockedCollect.mockRejectedValueOnce(new Error("db down"));
     const res = await request(app).get("/v1/dashboard/summary");
     expect(res.status).toBe(500);
-    expect(res.body.error.code).toBe("INTERNAL_ERROR");
+    expect(res.body.error.code).toBe("internal_error");
   });
 });

@@ -7,7 +7,7 @@ import {
   effectiveCapacityKw,
   PanelValidationError,
 } from "../lib/panels";
-import { parseProjectId, badRequest } from "../middleware/errors";
+import { parseProjectId, badRequest, errorBody } from "../middleware/errors";
 
 const router = Router();
 
@@ -26,7 +26,7 @@ router.get("/:id", (req: Request, res: Response) => {
   const id = parseProjectId(req.params.id, "project id");
   const config = getPanelConfig(id);
   if (!config) {
-    res.status(404).json({ error: "not_found", message: "No panel configuration for this project" });
+    res.status(404).json(errorBody("not_found", "No panel configuration for this project"));
     return;
   }
   res.json(present(config));

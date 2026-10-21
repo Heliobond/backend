@@ -54,7 +54,7 @@ import { attachWebSocketServer } from "./lib/websocket";
 import { rpcPool } from "./lib/stellar";
 import { openApiSpec } from "./lib/swagger";
 import { requestLogger } from "./middleware/requestLogger";
-import { errorHandler, notFoundHandler } from "./middleware/errors";
+import { errorHandler, notFoundHandler, errorBody } from "./middleware/errors";
 import { sanitizeInputs } from "./middleware/sanitize";
 import { securityHeaders, permissionsHeaders } from "./middleware/securityHeaders";
 import { publicLimiter, adminLimiter, parseTrustProxy } from "./middleware/rateLimit";
@@ -228,32 +228,50 @@ app.get("/v1/admin/secrets/status", ipWhitelist, adminLimiter, requireAdminBeare
 });
 
 // ── Migration management ──────────────────────────────────────────────────
-app.get("/v1/admin/migrations", ipWhitelist, adminLimiter, requireAdminBearer, async (_req, res, next) => {
-  try {
-    const status = await getMigrationStatus();
-    res.json(status);
-  } catch (err) {
-    next(err);
-  }
-});
+app.get(
+  "/v1/admin/migrations",
+  ipWhitelist,
+  adminLimiter,
+  requireAdminBearer,
+  async (_req, res, next) => {
+    try {
+      const status = await getMigrationStatus();
+      res.json(status);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
-app.post("/v1/admin/migrations/up", ipWhitelist, adminLimiter, requireAdminBearer, async (_req, res, next) => {
-  try {
-    const result = await runMigrations();
-    res.json(result);
-  } catch (err) {
-    next(err);
-  }
-});
+app.post(
+  "/v1/admin/migrations/up",
+  ipWhitelist,
+  adminLimiter,
+  requireAdminBearer,
+  async (_req, res, next) => {
+    try {
+      const result = await runMigrations();
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
-app.post("/v1/admin/migrations/rollback", ipWhitelist, adminLimiter, requireAdminBearer, async (_req, res, next) => {
-  try {
-    const result = await rollbackMigration();
-    res.json(result);
-  } catch (err) {
-    next(err);
-  }
-});
+app.post(
+  "/v1/admin/migrations/rollback",
+  ipWhitelist,
+  adminLimiter,
+  requireAdminBearer,
+  async (_req, res, next) => {
+    try {
+      const result = await rollbackMigration();
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 // ── Log level management ───────────────────────────────────────────────────
 app.get("/v1/admin/logging/level", ipWhitelist, adminLimiter, requireAdminBearer, (_req, res) => {
@@ -263,7 +281,7 @@ app.get("/v1/admin/logging/level", ipWhitelist, adminLimiter, requireAdminBearer
 app.put("/v1/admin/logging/level", ipWhitelist, adminLimiter, requireAdminBearer, (req, res) => {
   const { level } = req.body as { level?: string };
   if (!level) {
-    res.status(400).json({ error: "missing_level", message: "Log level is required" });
+    res.status(400).json(errorBody("missing_level", "Log level is required"));
     return;
   }
   try {
@@ -272,14 +290,20 @@ app.put("/v1/admin/logging/level", ipWhitelist, adminLimiter, requireAdminBearer
   } catch (err) {
     res
       .status(400)
-      .json({ error: "invalid_level", message: err instanceof Error ? err.message : String(err) });
+      .json(errorBody("invalid_level", err instanceof Error ? err.message : String(err)));
   }
 });
 
 // ── Feature flag analytics ───────────────────────────────────────────────
-app.get("/v1/admin/feature-flags/analytics", ipWhitelist, adminLimiter, requireAdminBearer, (_req, res) => {
-  res.json(getFlagAnalytics());
-});
+app.get(
+  "/v1/admin/feature-flags/analytics",
+  ipWhitelist,
+  adminLimiter,
+  requireAdminBearer,
+  (_req, res) => {
+    res.json(getFlagAnalytics());
+  },
+);
 
 // Register feature flag CRUD routes under /v1/admin
 const flagAdminRouter = express.Router();

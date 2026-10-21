@@ -8,7 +8,7 @@ import {
   broadcastToChains,
   ChainId,
 } from "../lib/multichain";
-import { badRequest, parseProjectId } from "../middleware/errors";
+import { badRequest, parseProjectId, errorBody } from "../middleware/errors";
 import { ipWhitelist } from "../middleware/ipWhitelist";
 import { requireAdminBearer } from "../middleware/requireAdminBearer";
 import { requestSigning } from "../middleware/requestSigning";
@@ -40,7 +40,7 @@ router.get("/", (_req: Request, res: Response) => {
 /** GET /v1/chains/:id — get chain config (public, see note on `GET /`). */
 router.get("/:id", (req: Request, res: Response) => {
   const chain = getChain(req.params.id as ChainId);
-  if (!chain) return res.status(404).json({ error: "chain not found" });
+  if (!chain) return res.status(404).json(errorBody("not_found", "chain not found"));
   res.json(chain);
 });
 
@@ -59,10 +59,12 @@ router.patch("/:id", ...adminAuth, async (req: Request, res: Response, next: Nex
 
     if (chains !== undefined) {
       if (!Array.isArray(chains)) {
-        return res.status(400).json({ error: "chains must be an array of chain identifiers" });
+        return res
+          .status(400)
+          .json(errorBody("bad_request", "chains must be an array of chain identifiers"));
       }
       if (chains.length === 0) {
-        return res.status(400).json({ error: "chains array must not be empty" });
+        return res.status(400).json(errorBody("bad_request", "chains array must not be empty"));
       }
     }
 
@@ -130,7 +132,7 @@ router.patch("/:id", ...adminAuth, async (req: Request, res: Response, next: Nex
       contractAddress,
       name,
     });
-    if (!ok) return res.status(404).json({ error: "chain not found" });
+    if (!ok) return res.status(404).json(errorBody("not_found", "chain not found"));
     res.json({ ok: true, chain: getChain(req.params.id as ChainId) });
   } catch (err) {
     next(err);
@@ -157,9 +159,14 @@ router.post(
       // fabricating a fake transaction hash.
       const targetChains = (chains ?? getEnabledChains().map((c) => c.id)) as ChainId[];
       if (targetChains.some((id) => id !== "stellar")) {
-        return res.status(501).json({
-          error: "EVM chain submission not implemented; only Stellar is currently supported.",
-        });
+        return res
+          .status(501)
+          .json(
+            errorBody(
+              "not_implemented",
+              "EVM chain submission not implemented; only Stellar is currently supported.",
+            ),
+          );
       }
 
       const solar = getSolarData(projectId);

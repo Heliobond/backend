@@ -44,7 +44,8 @@ describe("API versioning middleware", () => {
   it("rejects an unsupported Accept-Version header", async () => {
     const res = await request(app).get("/v1/ping").set("Accept-Version", "99");
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/unsupported api version/i);
+    expect(res.body.error.code).toBe("unsupported_version");
+    expect(res.body.error.message).toMatch(/unsupported api version/i);
   });
 
   it("serves the v1 route at /api/v1 and sets the version headers", async () => {

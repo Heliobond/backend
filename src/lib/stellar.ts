@@ -197,10 +197,12 @@ async function _attemptSubmit(
 
   // Each retry starts from the prepared transaction's operations and fee, but
   // refreshes its sequence from the ledger before signing.
+  // (`in` rather than `instanceof Transaction`: FeeBumpTransaction has no
+  // sequence, and tests mock the SDK without the Transaction class.)
   const firstEntry = accountResponse.entries?.[0];
-  if (firstEntry && firstEntry.val.type === "account") {
+  if ("sequence" in tx && firstEntry && firstEntry.val.type === "account") {
     const nextSequence = firstEntry.val.account.seqNum + 1n;
-    tx.toEnvelope().v1().tx().seqNum(xdr.Int64.fromString(nextSequence.toString()));
+    tx.sequence = nextSequence.toString();
   }
 
   tx.sign(keypair);
