@@ -16,13 +16,16 @@ function ipToNumber(ip: string): number {
 function cidrMatch(ip: string, cidr: CidrRange): boolean {
   const ipNum = ipToNumber(ip);
   const networkNum = ipToNumber(cidr.network);
-  const mask = ~((1 << (32 - cidr.prefix)) - 1) >>> 0;
+  const mask = cidr.prefix === 0 ? 0 : (0xffffffff << (32 - cidr.prefix)) >>> 0;
   return (ipNum & mask) === (networkNum & mask);
 }
 
 function parseCidr(cidrString: string): CidrRange {
   const [network, prefixStr] = cidrString.trim().split("/");
-  const prefix = prefixStr ? parseInt(prefixStr, 10) : 32;
+  if (prefixStr !== undefined && !/^\d{1,2}$/.test(prefixStr)) {
+    throw new Error(`Invalid CIDR prefix: ${prefixStr}`);
+  }
+  const prefix = prefixStr ? Number(prefixStr) : 32;
 
   if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(network)) {
     throw new Error(`Invalid IP address: ${network}`);
@@ -70,6 +73,12 @@ export function refreshIPWhitelist(): void {
 
 export function ipWhitelist(req: Request, res: Response, next: NextFunction): void {
   if (allowedIPs.length === 0) {
+    if (process.env.NODE_ENV === "production") {
+      res
+        .status(500)
+        .json(errorBody("server_misconfigured", "ADMIN_IP_WHITELIST is not configured"));
+      return;
+    }
     return next();
   }
 

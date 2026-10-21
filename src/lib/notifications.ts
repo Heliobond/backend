@@ -103,6 +103,8 @@ export interface PreferenceInput {
   project_ids?: number[];
 }
 
+const MAX_PROJECT_IDS = 100;
+
 export async function updatePreferences(
   address: string,
   input: PreferenceInput,
@@ -121,6 +123,9 @@ export async function updatePreferences(
     !(Number.isFinite(input.score_change_threshold) && input.score_change_threshold >= 0)
   ) {
     throw new Error("score_change_threshold must be a non-negative number");
+  }
+  if (input.project_ids && input.project_ids.length > MAX_PROJECT_IDS) {
+    throw new Error(`project_ids cannot contain more than ${MAX_PROJECT_IDS} items`);
   }
   if (input.project_ids && !input.project_ids.every((n) => Number.isInteger(n) && n >= 1)) {
     throw new Error("project_ids must contain only positive integers");

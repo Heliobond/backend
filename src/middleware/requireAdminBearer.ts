@@ -6,7 +6,7 @@ import { timingSafeCompare } from "../lib/timing-safe";
  * constant-time comparison so the check is not vulnerable to timing attacks.
  *
  * Behaviour:
- *  - If ADMIN_API_KEY is not set, the request is passed through (dev/test mode).
+ *  - If ADMIN_API_KEY is not set, the server fails closed.
  *  - If the Authorization header does not exactly match `Bearer <ADMIN_API_KEY>`,
  *    a 401 is returned immediately.
  *
@@ -17,12 +17,7 @@ import { timingSafeCompare } from "../lib/timing-safe";
 export function requireAdminBearer(req: Request, res: Response, next: NextFunction): void {
   const apiKey = process.env.ADMIN_API_KEY;
   if (!apiKey) {
-    if (process.env.NODE_ENV === "production") {
-      res.status(500).json({ error: "server_misconfigured", message: "ADMIN_API_KEY is not set" });
-      return;
-    }
-    console.warn("[requireAdminBearer] ADMIN_API_KEY is not set — skipping auth (non-production)");
-    next();
+    res.status(500).json({ error: "server_misconfigured", message: "ADMIN_API_KEY is not set" });
     return;
   }
 

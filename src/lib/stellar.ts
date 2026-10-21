@@ -122,7 +122,6 @@ export function resetAdminKeypairCache(): void {
 // ── FIXED SEQUENCE & CONCURRENCY QUEUE MANAGEMENT ───────────────────────────
 let submissionQueue = Promise.resolve();
 // Track the latest local sequence number to prevent simultaneous thread collisions
-let localSequenceTracker: bigint | null = null;
 
 /** Re-exported so registry/cron can catch it for queue-deferral logic. */
 export class RpcDegradedError extends Error {
@@ -196,19 +195,12 @@ async function _attemptSubmit(
 
   const accountResponse = await client.getLedgerEntries(accountKey);
 
-  // Fetch the latest sequence from ledger state when available and use the
-  // higher of (chain, local tracker). A fresh or unregistered account returns
-  // no entry — fall back to the sequence the transaction was prepared with.
+  // Each retry starts from the prepared transaction's operations and fee, but
+  // refreshes its sequence from the ledger before signing.
   const firstEntry = accountResponse.entries?.[0];
   if (firstEntry && firstEntry.val.type === "account") {
-    const onChainSequence = firstEntry.val.account.seqNum;
-
-    if (localSequenceTracker === null || onChainSequence > localSequenceTracker) {
-      localSequenceTracker = onChainSequence;
-    }
-
-    // Just track the sequence, use the transaction as-is since it was already prepared with proper operations
-    localSequenceTracker = onChainSequence;
+    const nextSequence = firstEntry.val.account.seqNum + 1n;
+    tx.toEnvelope().v1().tx().seqNum(xdr.Int64.fromString(nextSequence.toString()));
   }
 
   tx.sign(keypair);
@@ -220,20 +212,7 @@ async function _attemptSubmit(
 
   if (result.status === "ERROR") {
     const errorString = JSON.stringify(result.errorResult);
-    const isSequenceConflict =
-      errorString.includes("tx_bad_seq") || errorString.includes("ERR_BAD_SEQ");
-
-    if (isSequenceConflict) {
-      // Force re-fetch from chain on next attempt
-      localSequenceTracker = null;
-    }
-
     throw new Error(`Send error: ${errorString}`);
-  }
-
-  // Successful dispatch – increment local tracker
-  if (localSequenceTracker !== null) {
-    localSequenceTracker += 1n;
   }
 
   // 2. Poll for confirmation
