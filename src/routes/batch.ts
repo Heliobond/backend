@@ -7,6 +7,8 @@ import { computeScores } from "../lib/scoring";
 import { updateImpactScore, getTotalProjects, RpcDegradedError } from "../lib/registry";
 import { withProjectLock } from "../lib/request-queue";
 import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
+import { generateIdempotencyKey, checkIdempotency } from "../lib/idempotency";
+import { enqueue } from "../lib/tx-queue";
 import { badRequest, maxProjectId } from "../middleware/errors";
 import { parseContractError } from "../lib/contractErrors";
 
@@ -66,18 +68,40 @@ router.post("/score-update", async (req: Request, res: Response) => {
         const solar = getSolarData(projectId);
         const satellite = getSatelliteData(projectId);
         const scores = computeScores({ solar, satellite });
+
+        // Idempotency: the batch path previously called updateImpactScore
+        // without a key, so a batch overlapping the hourly cron in the
+        // same clock-hour double-submitted update_impact_score on-chain.
+        // Match the key scoreService.updateScoreForProject uses so both
+        // paths collide in the same store (#833).
+        const idempotencyKey = generateIdempotencyKey(projectId);
+        const { isDuplicate, recordedAt } = checkIdempotency(idempotencyKey);
+        if (isDuplicate) {
+          markCompleted(projectId);
+          return {
+            project_id: projectId,
+            skipped: true,
+            skip_reason: `duplicate submission rejected — key="${idempotencyKey}" recordedAt=${recordedAt}`,
+          };
+        }
+
         let tx_hash: string;
         try {
-          tx_hash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact);
+          tx_hash = await updateImpactScore(
+            projectId,
+            scores.credit_quality,
+            scores.green_impact,
+            idempotencyKey,
+          );
         } catch (updateErr) {
           if (updateErr instanceof RpcDegradedError) {
-            recordScoreHistory(projectId, scores.credit_quality, scores.green_impact);
-            triggerWebhooks({
-              project_id: projectId,
-              ...scores,
-              tx_hash: "deferred",
-              timestamp: Date.now(),
-            });
+            // Queue the scores for later retry. Previously this path
+            // recorded history and fired investor webhooks with
+            // `tx_hash: "deferred"` — a transaction that never happened —
+            // and skipped the queue entirely, so the deferred update was
+            // silently lost (#833). Mirror the cron behavior: enqueue
+            // only, no history, no webhooks until a real tx_hash exists.
+            enqueue(projectId, scores.credit_quality, scores.green_impact, "RPC degraded");
             markCompleted(projectId);
             return { project_id: projectId, tx_hash: "deferred", ...scores };
           }

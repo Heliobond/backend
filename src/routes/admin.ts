@@ -8,6 +8,7 @@ import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-dete
 import { withProjectLock } from "../lib/request-queue";
 import { updateScoreForProject } from "../lib/scoreService";
 import { getTotalProjects } from "../lib/registry";
+import { enqueue } from "../lib/tx-queue";
 import { logger } from "../lib/logger";
 import { config } from "../config";
 import { requireApiKeyRole, extractApiKeyRole } from "../middleware/requireApiKeyRole";
@@ -222,6 +223,17 @@ router.post(
 
               if (scoreResult.status === "deferred") {
                 logger.warn(`[oracle] project ${projectId}: RPC degraded, score queued for later`);
+                // The log line previously claimed the score was queued without
+                // actually calling enqueue — operator-triggered updates during
+                // an RPC blip were silently dropped. Mirror the cron path:
+                // put the scores on the shared tx-queue so runTxQueueRetry
+                // picks them up (#833).
+                enqueue(
+                  projectId,
+                  scoreResult.creditQuality,
+                  scoreResult.greenImpact,
+                  "RPC degraded",
+                );
                 markCompleted(projectId);
                 return {
                   skipped: false,
@@ -332,7 +344,8 @@ router.post(
  */
 router.get("/audit", (req: Request, res: Response, next: NextFunction) => {
   try {
-    const project_id = parseOptionalInt(req.query.project_id as string | undefined, "project_id", 0) || undefined;
+    const project_id =
+      parseOptionalInt(req.query.project_id as string | undefined, "project_id", 0) || undefined;
     const from = parseOptionalInt(req.query.from as string | undefined, "from", 0) || undefined;
     const to = parseOptionalInt(req.query.to as string | undefined, "to", 0) || undefined;
     const limit = parseOptionalInt(req.query.limit as string | undefined, "limit", 50);
@@ -354,7 +367,7 @@ router.get("/audit", (req: Request, res: Response, next: NextFunction) => {
 
     if (format === "csv") {
       res.set("Content-Type", "text/csv");
-      res.set("Content-Disposition", "attachment; filename=\"audit-log.csv\"");
+      res.set("Content-Disposition", 'attachment; filename="audit-log.csv"');
       res.send(auditToCsv(allEntries));
       return;
     }

@@ -6,6 +6,7 @@ import { resetIdempotencyState } from "../lib/scoreService";
 import * as registry from "../lib/registry";
 import * as iot from "../routes/iot";
 import * as scoring from "../lib/scoring";
+import * as txQueue from "../lib/tx-queue";
 
 jest.mock("../lib/registry", () => {
   class RpcDegradedError extends Error {
@@ -22,6 +23,9 @@ jest.mock("../lib/registry", () => {
 });
 jest.mock("../routes/iot");
 jest.mock("../lib/scoring");
+jest.mock("../lib/tx-queue", () => ({
+  enqueue: jest.fn(),
+}));
 jest.mock("../config", () => ({
   config: {
     ADMIN_API_KEY: "test-key",
@@ -299,6 +303,24 @@ describe("admin routes", () => {
         (r: { project_id: number; tx_hash: string }) => r.project_id === 2,
       );
       expect(deferredResult.tx_hash).toBe("deferred");
+    });
+
+    it("enqueues the deferred score for later retry (#833)", async () => {
+      const RpcDegradedError = (
+        registry as unknown as { RpcDegradedError: new (msg?: string) => Error }
+      ).RpcDegradedError;
+      (registry.updateImpactScore as jest.Mock).mockRejectedValueOnce(
+        new RpcDegradedError("RPC is degraded"),
+      );
+
+      await request(app)
+        .post("/api/admin/update-scores")
+        .set(AUTH_HEADER)
+        .send({ project_ids: [1] })
+        .expect(200);
+
+      expect(txQueue.enqueue).toHaveBeenCalledTimes(1);
+      expect(txQueue.enqueue).toHaveBeenCalledWith(1, 85, 70, "RPC degraded");
     });
 
     it("isolates per-project errors without aborting the batch", async () => {
