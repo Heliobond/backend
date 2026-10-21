@@ -237,6 +237,28 @@ green_impact   = clamp(
 
 ---
 
+## Anomaly Detection
+
+Each sensor reading (`efficiency_pct`, `power_output_kw`, `forest_density_pct`,
+`ndvi_score`) is checked against a rolling per-project baseline before it is
+scored. Detection starts once `minBaseline` readings are recorded.
+
+| Alert type    | Trigger                                                                                   |
+| ------------- | ----------------------------------------------------------------------------------------- |
+| `outlier`     | Value is more than `sensitivityZScore` standard deviations from the baseline mean         |
+| `step_change` | Baseline is flat (zero std dev, e.g. a stuck sensor) and the new value differs; always `high` |
+| `trend`       | Value deviates more than `trendDeviationPct`% from the older half of the window           |
+
+Severity is `low`, `medium` or `high` at 1x, 1.5x and 2x the relevant threshold.
+The score pipeline blocks updates only on `high` severity alerts.
+
+Readings flagged as `outlier` or `step_change` are kept out of the baseline so
+sustained bad data cannot drag it toward acceptance. After `minBaseline`
+consecutive flagged readings the new level is treated as real and the baseline
+restarts from it.
+
+---
+
 ## Rate Limiting
 
 All API endpoints are rate-limited to prevent abuse and protect against fee-drain attacks on Soroban transactions.

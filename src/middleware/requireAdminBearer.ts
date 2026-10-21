@@ -1,13 +1,15 @@
 import { Request, Response, NextFunction } from "express";
 import { timingSafeCompare } from "../lib/timing-safe";
 import { errorBody } from "./errors";
+import { logger } from "../lib/logger";
 
 /**
  * Shared middleware that enforces the ADMIN_API_KEY bearer token using a
  * constant-time comparison so the check is not vulnerable to timing attacks.
  *
  * Behaviour:
- *  - If ADMIN_API_KEY is not set, the server fails closed.
+ *  - If ADMIN_API_KEY is not set, the server fails closed in every environment
+ *    (including staging) with a 500 `server_misconfigured`.
  *  - If the Authorization header does not exactly match `Bearer <ADMIN_API_KEY>`,
  *    a 401 is returned immediately.
  *
@@ -18,7 +20,11 @@ import { errorBody } from "./errors";
 export function requireAdminBearer(req: Request, res: Response, next: NextFunction): void {
   const apiKey = process.env.ADMIN_API_KEY;
   if (!apiKey) {
-    res.status(500).json(errorBody("server_misconfigured", "ADMIN_API_KEY is not set"));
+    logger.error("ADMIN_API_KEY is not set; rejecting admin request", {
+      code: "server_misconfigured",
+      path: req.path,
+    });
+    res.status(500).json({ error: "server_misconfigured", message: "ADMIN_API_KEY is not set" });
     return;
   }
 

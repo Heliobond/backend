@@ -48,7 +48,21 @@ describe("websocket authenticate()", () => {
     expect(authenticate(req({}))).toBe(false);
   });
 
-  it("skips auth outside production when WS_AUTH_TOKEN is unset", () => {
+  it("fails closed in staging when WS_AUTH_TOKEN is unset", () => {
+    process.env.NODE_ENV = "staging";
+    expect(authenticate(req({}))).toBe(false);
+  });
+
+  it("fails closed when NODE_ENV is unset and WS_AUTH_TOKEN is unset", () => {
+    expect(authenticate(req({}))).toBe(false);
+  });
+
+  it("skips auth in test when WS_AUTH_TOKEN is unset", () => {
+    process.env.NODE_ENV = "test";
+    expect(authenticate(req({}))).toBe(true);
+  });
+
+  it("skips auth in development when WS_AUTH_TOKEN is unset", () => {
     process.env.NODE_ENV = "development";
     expect(authenticate(req({}))).toBe(true);
   });

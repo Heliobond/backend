@@ -87,11 +87,23 @@ export const circuitBreakerState = new client.Gauge({
   registers: [register],
 });
 
+const oracleScoreUpdatedAt = new Map<string, number>();
+
+export function recordOracleScoreUpdate(projectId: number): void {
+  oracleScoreUpdatedAt.set(String(projectId), Date.now());
+}
+
 // ── Oracle SLO metrics ──────────────────────────────────────────────────────
 export const oracleScoreAge = new client.Gauge({
   name: "oracle_score_age_seconds",
   help: "Age of the last score update for a project (seconds since last_update_timestamp)",
   labelNames: ["project_id"] as const,
+  collect() {
+    const now = Date.now();
+    for (const [projectId, updatedAt] of oracleScoreUpdatedAt) {
+      this.set({ project_id: projectId }, (now - updatedAt) / 1000);
+    }
+  },
   registers: [register],
 });
 

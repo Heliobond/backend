@@ -186,8 +186,8 @@ app.get("/metrics", async (_req, res) => {
 });
 
 // ── Readiness ────────────────────────────────────────────────────────────────
-app.get("/ready", (_req, res) => {
-  const readiness = getReadiness();
+app.get("/ready", async (_req, res) => {
+  const readiness = await getReadiness();
   res.status(readiness.status === "ready" ? 200 : 503).json(readiness);
 });
 

@@ -1,4 +1,5 @@
 import { CircuitBreaker } from "../lib/circuit-breaker";
+import { circuitBreakerState } from "../lib/prometheus";
 
 jest.mock("../lib/logger", () => ({
   logger: {
@@ -24,6 +25,8 @@ describe("CircuitBreaker", () => {
 
     expect(breaker.getState()).toBe("OPEN");
     expect(breaker.getMetrics().consecutiveFailures).toBe(2);
+    const metric = await circuitBreakerState.get();
+    expect(metric.values.find(({ labels }) => labels.name === "CircuitBreaker")?.value).toBe(2);
   });
 
   it("rejects requests immediately when the circuit is open", async () => {
