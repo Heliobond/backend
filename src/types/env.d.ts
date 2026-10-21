@@ -55,7 +55,7 @@ declare namespace NodeJS {
     ADMIN_REQUEST_MAX_AGE_MS?: string;
     /** Optional initial admin identity for RBAC bootstrap. */
     INITIAL_ADMIN_USER_ID?: string;
-    /** Token required to open a /ws connection; falls back to ADMIN_API_KEY. */
+    /** Token required to open a /ws connection; never falls back to ADMIN_API_KEY. Unset is allowed only when NODE_ENV is "development" or "test". */
     WS_AUTH_TOKEN?: string;
     /** "true" requires a signed wallet challenge on creator endpoints. Default: false */
     WALLET_AUTH_REQUIRE_SIGNATURE?: string;

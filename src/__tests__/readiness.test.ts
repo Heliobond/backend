@@ -1,5 +1,10 @@
 import request from "supertest";
 import express from "express";
+
+jest.mock("../lib/db", () => ({
+  pool: { query: jest.fn(async () => ({})) },
+}));
+
 import { getHealth, getReadiness } from "../lib/health";
 
 describe("Health and Readiness Endpoints", () => {
@@ -8,8 +13,8 @@ describe("Health and Readiness Endpoints", () => {
   beforeAll(() => {
     app = express();
     app.get("/health", async (_req, res) => res.json(await getHealth()));
-    app.get("/ready", (_req, res) => {
-      const readiness = getReadiness();
+    app.get("/ready", async (_req, res) => {
+      const readiness = await getReadiness();
       res.status(readiness.status === "ready" ? 200 : 503).json(readiness);
     });
   });
@@ -18,7 +23,7 @@ describe("Health and Readiness Endpoints", () => {
     it("should return 200 with health status", async () => {
       const response = await request(app).get("/health");
       expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty("status", "ok");
+      expect(["ok", "degraded"]).toContain(response.body.status);
       expect(response.body).toHaveProperty("uptime_seconds");
       expect(response.body).toHaveProperty("started_at");
     });

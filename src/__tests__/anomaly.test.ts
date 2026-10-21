@@ -80,7 +80,7 @@ describe("Anomaly Detection Engine", () => {
       expect(res.metrics.efficiency_pct.zScore).toBe(0);
     });
 
-    it("does not detect outlier if stdDev is 0 (all historical values are identical)", () => {
+    it("flags a step change if stdDev is 0 (all historical values are identical)", () => {
       for (let i = 0; i < 5; i++) {
         detectAnomalies(1, baseReadings);
       }
@@ -88,11 +88,31 @@ describe("Anomaly Detection Engine", () => {
       const outlierReadings = { ...baseReadings, power_output_kw: 1000 };
       const res = detectAnomalies(1, outlierReadings);
 
-      // Since stdDev is 0, zScore is 0, so no outlier alert should be raised
-      const outlierAlert = res.anomalies.find(
-        (a) => a.type === "outlier" && a.metric === "power_output_kw",
+      const alert = res.anomalies.find(
+        (a) => a.type === "step_change" && a.metric === "power_output_kw",
       );
-      expect(outlierAlert).toBeUndefined();
+      expect(alert).toBeDefined();
+      expect(alert?.severity).toBe("high");
+    });
+
+    it("does not flag a flat baseline when the value is unchanged", () => {
+      for (let i = 0; i < 6; i++) detectAnomalies(1, baseReadings);
+      const res = detectAnomalies(1, baseReadings);
+      expect(res.anomalies).toHaveLength(0);
+    });
+
+    it("keeps flagged outliers out of the baseline", () => {
+      for (let i = 0; i < 5; i++) detectAnomalies(1, baseReadings);
+      detectAnomalies(1, { ...baseReadings, power_output_kw: 1000 });
+      const res = detectAnomalies(1, baseReadings);
+      expect(res.metrics.power_output_kw.mean).toBe(500);
+    });
+
+    it("emits low severity for a trend just over the threshold", () => {
+      for (let i = 0; i < 5; i++) detectAnomalies(1, baseReadings);
+      const res = detectAnomalies(1, { ...baseReadings, efficiency_pct: 63 }); // -21.25%
+      const t = res.anomalies.find((a) => a.type === "trend" && a.metric === "efficiency_pct");
+      expect(t?.severity).toBe("low");
     });
 
     it("detects outlier anomaly with actual stdDev", () => {

@@ -82,13 +82,27 @@ export function encodeScoreUpdate(update: ScoreUpdate): Buffer {
  *
  * Auth requires a dedicated WS_AUTH_TOKEN and never falls back to ADMIN_API_KEY
  * — that key gates every admin REST endpoint and must not be reachable over the
- * WebSocket upgrade path. When WS_AUTH_TOKEN is unset the connection is refused
- * in production and allowed elsewhere (dev/test only).
+ * WebSocket upgrade path. When WS_AUTH_TOKEN is unset the connection is allowed
+ * only when NODE_ENV is explicitly "development" or "test". Every other value
+ * (production, staging, unset, ...) is refused so pre-prod environments are
+ * never left open by a missing secret.
  */
 export function authenticate(req: IncomingMessage): boolean {
   const expected = process.env.WS_AUTH_TOKEN;
   if (!expected) {
-    return (process.env.NODE_ENV || "development").toLowerCase() !== "production";
+    const env = (process.env.NODE_ENV ?? "").toLowerCase();
+    if (env === "development" || env === "test") {
+      logger.warn("WS_AUTH_TOKEN is not set; allowing unauthenticated /ws connection", {
+        nodeEnv: env,
+        code: "ws_auth_disabled",
+      });
+      return true;
+    }
+    logger.error("WS_AUTH_TOKEN is not set; refusing /ws connection", {
+      nodeEnv: env || "(unset)",
+      code: "server_misconfigured",
+    });
+    return false;
   }
   const header = req.headers.authorization;
   const token = header?.startsWith("Bearer ") ? header.slice(7) : undefined;

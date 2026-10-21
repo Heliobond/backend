@@ -6,7 +6,7 @@ export interface AnomalyConfig {
 }
 
 export interface AnomalyAlert {
-  type: "outlier" | "trend";
+  type: "outlier" | "step_change" | "trend";
   metric: string;
   value: number;
   baseline: number;
@@ -134,6 +134,18 @@ function getHistory(projectId: number, metric: MetricKey): number[] {
   return vals;
 }
 
+// Consecutive outlier rejections per project/metric
+const rejectionStreaks = new Map<number, Map<MetricKey, number>>();
+
+function setStreak(projectId: number, metric: MetricKey, count: number): void {
+  let m = rejectionStreaks.get(projectId);
+  if (!m) {
+    m = new Map();
+    rejectionStreaks.set(projectId, m);
+  }
+  m.set(metric, count);
+}
+
 function pushHistory(projectId: number, metric: MetricKey, value: number): void {
   const vals = getHistory(projectId, metric);
   vals.push(value);
@@ -175,7 +187,23 @@ function detectOutlier(
   const zScore = sd > 0 ? (value - avg) / sd : 0;
 
   let alert: AnomalyAlert | null = null;
-  if (Math.abs(zScore) > config.sensitivityZScore) {
+  if (sd === 0) {
+    // Flat baseline (e.g. stuck sensor): z-score is undefined, so any deviation is a step change
+    if (value !== avg) {
+      const deviationPct =
+        avg !== 0 ? ((value - avg) / Math.abs(avg)) * 100 : Math.sign(value) * 100;
+      alert = {
+        type: "step_change",
+        metric,
+        value,
+        baseline: avg,
+        deviation: deviationPct,
+        severity: "high",
+        timestamp: Date.now(),
+        message: `${metric} value ${value.toFixed(2)} departs from flat baseline ${avg.toFixed(2)}`,
+      };
+    }
+  } else if (Math.abs(zScore) > config.sensitivityZScore) {
     alert = {
       type: "outlier",
       metric,
@@ -211,7 +239,7 @@ function detectTrend(
       value,
       baseline,
       deviation: deviationPct,
-      severity: Math.abs(deviationPct) > config.trendDeviationPct * 2 ? "high" : "medium",
+      severity: severity(deviationPct, config.trendDeviationPct),
       timestamp: Date.now(),
       message: `${metric} shows ${deviationPct > 0 ? "upward" : "downward"} trend of ${Math.abs(deviationPct).toFixed(1)}% from historical baseline`,
     };
@@ -259,8 +287,22 @@ export function detectAnomalies(
 
     metricResults[metric] = { value, mean: avg, stdDev: sd, zScore };
 
-    // Record into history after detection so current value doesn't skew its own check
-    pushHistory(projectId, metric, value);
+    // Record into history after detection so current value doesn't skew its own check.
+    // Flagged outliers are kept out so sustained bad readings can't drag the baseline toward
+    // acceptance; after minBaseline consecutive rejections the new level is treated as real.
+    if (outlierAlert) {
+      const rejected = (rejectionStreaks.get(projectId)?.get(metric) ?? 0) + 1;
+      if (rejected >= cfg.minBaseline) {
+        getHistory(projectId, metric).length = 0;
+        setStreak(projectId, metric, 0);
+        pushHistory(projectId, metric, value);
+      } else {
+        setStreak(projectId, metric, rejected);
+      }
+    } else {
+      setStreak(projectId, metric, 0);
+      pushHistory(projectId, metric, value);
+    }
   }
 
   return { projectId, timestamp: Date.now(), anomalies, metrics: metricResults };
@@ -269,7 +311,9 @@ export function detectAnomalies(
 export function clearHistory(projectId?: number): void {
   if (projectId !== undefined) {
     historyStore.delete(projectId);
+    rejectionStreaks.delete(projectId);
   } else {
     historyStore.clear();
+    rejectionStreaks.clear();
   }
 }

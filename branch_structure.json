@@ -1,0 +1,18 @@
+{
+  "default_branch": "main",
+  "branches": [
+    "fix/txqueue-retry-validation-guards",
+    "main",
+    "origin"
+  ],
+  "parent": {
+    "fix/txqueue-retry-validation-guards": "main",
+    "main": null,
+    "origin": "main"
+  },
+  "order": [
+    "main",
+    "fix/txqueue-retry-validation-guards",
+    "origin"
+  ]
+}
