@@ -4,7 +4,7 @@ groups:
     rules:
       # Score Freshness Alert
       - alert: OracleScoreStaleness
-        expr: (time() - oracle_score_age_seconds) > 7200
+        expr: oracle_score_age_seconds > 7200
         for: 5m
         labels:
           severity: warning
@@ -13,6 +13,16 @@ groups:
           summary: "Oracle score is stale for project {{ $labels.project_id }}"
           description: "Project {{ $labels.project_id }} has not been updated in {{ $value }} seconds (threshold: 7200s / 2 hours)"
           runbook_url: "https://github.com/Heliobond/backend/blob/main/docs/SLO.md#score-staleness"
+
+      - alert: StellarRpcCircuitBreakerOpen
+        expr: circuit_breaker_state{name="StellarRPC"} == 2
+        for: 1m
+        labels:
+          severity: critical
+          component: oracle
+        annotations:
+          summary: "Stellar RPC circuit breaker is open"
+          description: "The Stellar RPC circuit breaker has opened after repeated failures."
 
       # Submission Failure Rate Alert
       - alert: OracleSubmissionFailureRate

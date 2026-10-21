@@ -1,6 +1,12 @@
 import { logger } from "./logger";
+import { circuitBreakerState } from "./prometheus";
 
 export type BreakerState = "CLOSED" | "OPEN" | "HALF_OPEN";
+const BREAKER_STATE_VALUE: Record<BreakerState, number> = {
+  CLOSED: 0,
+  HALF_OPEN: 1,
+  OPEN: 2,
+};
 
 export interface CircuitBreakerConfig {
   failureThreshold: number;
@@ -42,6 +48,7 @@ export class CircuitBreaker {
       recoveryTimeoutMs: config.recoveryTimeoutMs ?? 30_000,
       name: config.name ?? "CircuitBreaker",
     };
+    circuitBreakerState.set({ name: this.config.name }, 0);
   }
 
   /** Execute fn, applying circuit-breaker logic. Falls back to fallback() when OPEN. */
@@ -118,6 +125,7 @@ export class CircuitBreaker {
       consecutiveFailures: this.consecutiveFailures,
     });
     this.state = next;
+    circuitBreakerState.set({ name: this.config.name }, BREAKER_STATE_VALUE[next]);
     this.lastStateChange = Date.now();
   }
 
@@ -144,6 +152,7 @@ export class CircuitBreaker {
     this.consecutiveFailures = 0;
     this.openedAt = null;
     this.halfOpenTrialInFlight = false;
+    circuitBreakerState.set({ name: this.config.name }, 0);
     this.lastStateChange = Date.now();
   }
 }
