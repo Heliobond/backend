@@ -557,9 +557,9 @@ function bootstrap(): void {
   // where gRPC is running but HTTP isn't (or vice versa).
   let grpcServer: grpc.Server | null = null;
 
-app.get("/graphql-playground", (req, res) => {
-  res.setHeader("Content-Type", "text/html");
-  res.send(`
+  app.get("/graphql-playground", (req, res) => {
+    res.setHeader("Content-Type", "text/html");
+    res.send(`
     <!DOCTYPE html>
     <html>
       <head>
@@ -598,10 +598,19 @@ app.get("/graphql-playground", (req, res) => {
       </body>
     </html>
   `);
-});
+  });
 
+  // Coordinated HTTP + gRPC startup. The block was previously bare at the
+  // top level of `bootstrap` (which is `void`) and parsed with a stray
+  // `});` close — tsc reported TS1128 at the next statement and prettier
+  // refused to parse the file at all. Wrap it in a self-executing async
+  // IIFE so the awaits are inside an async context and the structural
+  // mismatch is gone. The resulting promise is held in `serverPromise`
+  // so `gracefulShutdown.closeHttpServer` can still await the http
+  // server instance.
+  const serverPromise: Promise<import("http").Server> = (async () => {
     // First, start HTTP server
-    const httpServer = await new Promise<any>((resolve, reject) => {
+    const httpServer = await new Promise<import("http").Server>((resolve, reject) => {
       const server = app.listen(PORT, () => {
         logger.info(`[startup] HTTP server listening on port ${PORT}`);
         resolve(server);
@@ -638,6 +647,11 @@ app.get("/graphql-playground", (req, res) => {
     // Real-time score updates over WebSocket (ws://<host>/ws)
     attachWebSocketServer(httpServer);
     return httpServer;
+  })();
+
+  serverPromise.catch((err) => {
+    logger.error("[startup] unhandled startup failure", logger.formatError(err));
+    process.exit(1);
   });
 
   // GraphQL endpoint and playground setup
