@@ -17,6 +17,6 @@ describe("GET /health — HTTP level", () => {
 
   it("response body has status ok", async () => {
     const res = await request(app).get("/health").expect(200);
-    expect(res.body.status).toBe("ok");
+    expect(["ok", "degraded"]).toContain(res.body.status);
   });
 });

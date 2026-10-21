@@ -24,7 +24,7 @@ jest.mock("../lib/satellite-sources", () => ({
 }));
 
 jest.mock("../lib/db", () => ({
-  pool: { query: jest.fn(async () => ({})), totalCount: 1 },
+  pool: { query: jest.fn(async () => ({})), totalCount: 0 },
 }));
 
 jest.mock("../lib/migrations", () => ({
@@ -38,6 +38,7 @@ jest.mock("../lib/feature-flags", () => ({
 import { getHealth, getReadiness, recordCronRun } from "../lib/health";
 import * as stellar from "../lib/stellar";
 import * as satellite from "../lib/satellite-sources";
+import * as db from "../lib/db";
 
 describe("health endpoint dependency checks (#277)", () => {
   beforeEach(() => {
@@ -67,6 +68,25 @@ describe("health endpoint dependency checks (#277)", () => {
     it("returns status ok when all deps are healthy", async () => {
       const health = await getHealth();
       expect(health.status).toBe("ok");
+    });
+
+    it("returns degraded status when the database is unavailable", async () => {
+      (db.pool.query as jest.Mock).mockRejectedValueOnce(new Error("database unavailable"));
+      const health = await getHealth();
+      expect(health.status).toBe("degraded");
+      expect(health.database.connected).toBe(false);
+    });
+
+    it("returns degraded status when the RPC pool has no healthy connections", async () => {
+      (stellar.rpcPool.getMetrics as jest.Mock).mockReturnValue({
+        active: 0,
+        idle: 0,
+        total: 2,
+        healthy: 0,
+        waitingQueue: 0,
+      });
+      const health = await getHealth();
+      expect(health.status).toBe("degraded");
     });
 
     it("includes rpc_status in health report", async () => {
@@ -124,14 +144,14 @@ describe("health endpoint dependency checks (#277)", () => {
   });
 
   describe("readiness with degraded dependencies", () => {
-    it("returns not_ready when circuit breaker is OPEN", () => {
+    it("returns not_ready when circuit breaker is OPEN", async () => {
       (stellar.rpcBreaker.getState as jest.Mock).mockReturnValue("OPEN");
-      const readiness = getReadiness();
+      const readiness = await getReadiness();
       expect(readiness.status).toBe("not_ready");
       expect(readiness.checks.rpc_circuit).toBe(false);
     });
 
-    it("returns not_ready when the RPC connection pool has no healthy connections", () => {
+    it("returns not_ready when the RPC connection pool has no healthy connections", async () => {
       (stellar.rpcPool.getMetrics as jest.Mock).mockReturnValue({
         active: 0,
         idle: 0,
@@ -139,26 +159,34 @@ describe("health endpoint dependency checks (#277)", () => {
         healthy: 0,
         waitingQueue: 0,
       });
-      const readiness = getReadiness();
+      const readiness = await getReadiness();
       expect(readiness.status).toBe("not_ready");
     });
 
-    it("returns not_ready when satellite has consecutive failures", () => {
+    it("returns not_ready when satellite has consecutive failures", async () => {
       (satellite.getOutageState as jest.Mock).mockReturnValue({ consecutiveFailures: 5 });
-      const readiness = getReadiness();
+      const readiness = await getReadiness();
       expect(readiness.status).toBe("not_ready");
       expect(readiness.checks.satellite).toBe(false);
     });
 
-    it("returns ready when all checks pass", () => {
+    it("checks the database even when its lazy pool has no clients", async () => {
       (stellar.rpcBreaker.getState as jest.Mock).mockReturnValue("CLOSED");
       (satellite.getOutageState as jest.Mock).mockReturnValue({ consecutiveFailures: 0 });
-      const readiness = getReadiness();
+      const readiness = await getReadiness();
       expect(readiness.checks).toMatchObject({
         database: true,
         satellite: true,
         rpc_circuit: true,
       });
+      expect(db.pool.query).toHaveBeenCalledWith("SELECT 1");
+    });
+
+    it("returns not_ready when the database query fails", async () => {
+      (db.pool.query as jest.Mock).mockRejectedValueOnce(new Error("database unavailable"));
+      const readiness = await getReadiness();
+      expect(readiness.status).toBe("not_ready");
+      expect(readiness.checks.database).toBe(false);
     });
   });
 
@@ -191,6 +219,16 @@ describe("health endpoint dependency checks (#277)", () => {
       recordCronRun("indexer", "error");
       const health = await getHealth();
       expect(health.last_cron_run).toMatchObject({ name: "indexer", status: "error" });
+    });
+
+    it("retains the latest run for each cron job", async () => {
+      recordCronRun("score-update", "success");
+      recordCronRun("tx-queue", "error");
+      const health = await getHealth();
+      expect(health.last_cron_runs).toMatchObject({
+        "score-update": { name: "score-update", status: "success" },
+        "tx-queue": { name: "tx-queue", status: "error" },
+      });
     });
   });
 
