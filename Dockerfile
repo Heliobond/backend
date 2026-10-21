@@ -1,15 +1,33 @@
 # ── Build stage ──────────────────────────────────────────────────────────────
-FROM node:20-alpine AS builder
+# bun.lock is the canonical lockfile (CI installs with `bun install
+# --frozen-lockfile`); there is no package-lock.json, so `npm ci` cannot work.
+FROM oven/bun:1-alpine AS builder
 
 WORKDIR /app
 
-COPY package*.json ./
-RUN npm ci --ignore-scripts
+# Skip the husky prepare hook — it needs a .git checkout that images lack.
+ENV HUSKY=0
+
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
 
 COPY tsconfig.json ./
 COPY src ./src
 
-RUN npm run build
+RUN bun run build
+
+# ── Production dependency stage ─────────────────────────────────────────────
+# Prod-only install for the Node runtime image below.
+FROM oven/bun:1-alpine AS prod-deps
+
+WORKDIR /app
+
+ENV HUSKY=0
+
+# --ignore-scripts: the `prepare` hook runs `husky`, which is a devDependency
+# and therefore absent from a --production install.
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile --production --ignore-scripts && bun pm cache rm
 
 # ── Production stage ──────────────────────────────────────────────────────────
 FROM node:20-alpine AS production
@@ -25,8 +43,8 @@ ENV NODE_OPTIONS="--max-old-space-size=384"
 
 WORKDIR /app
 
-COPY package*.json ./
-RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+COPY --from=prod-deps /app/node_modules ./node_modules
+COPY package.json ./
 
 COPY --from=builder /app/dist ./dist
 
