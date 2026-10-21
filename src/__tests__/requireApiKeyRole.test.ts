@@ -125,8 +125,8 @@ describe("requireApiKeyRole middleware", () => {
         .set("Authorization", "Bearer read-only-token");
 
       expect(res.status).toBe(403);
-      expect(res.body.error).toBe("forbidden");
-      expect(res.body.message).toBe("This action requires the 'admin:write' role or higher");
+      expect(res.body.error.code).toBe("forbidden");
+      expect(res.body.error.message).toBe("This action requires the 'admin:write' role or higher");
       expect(mockHasRolePermission).toHaveBeenCalledWith("admin:read", "admin:write");
     });
 
@@ -139,7 +139,7 @@ describe("requireApiKeyRole middleware", () => {
         .set("Authorization", "Bearer invalid-token");
 
       expect(res.status).toBe(403);
-      expect(res.body.error).toBe("forbidden");
+      expect(res.body.error.code).toBe("forbidden");
       expect(mockHasRolePermission).toHaveBeenCalledWith(undefined, "admin:write");
     });
 
@@ -149,7 +149,7 @@ describe("requireApiKeyRole middleware", () => {
       const res = await request(app).get("/admin-write");
 
       expect(res.status).toBe(403);
-      expect(res.body.error).toBe("forbidden");
+      expect(res.body.error.code).toBe("forbidden");
       expect(mockHasRolePermission).toHaveBeenCalledWith(undefined, "admin:write");
     });
 
@@ -192,16 +192,16 @@ describe("requireApiKeyRole middleware", () => {
       const res = await request(app).get("/protected").set("Authorization", "Bearer invalid-token");
 
       expect(res.status).toBe(401);
-      expect(res.body.error).toBe("unauthorized");
-      expect(res.body.message).toBe("Missing or invalid bearer token");
+      expect(res.body.error.code).toBe("unauthorized");
+      expect(res.body.error.message).toBe("Missing or invalid bearer token");
     });
 
     it("should return 401 when no Authorization header is present", async () => {
       const res = await request(app).get("/protected");
 
       expect(res.status).toBe(401);
-      expect(res.body.error).toBe("unauthorized");
-      expect(res.body.message).toBe("Missing or invalid bearer token");
+      expect(res.body.error.code).toBe("unauthorized");
+      expect(res.body.error.message).toBe("Missing or invalid bearer token");
     });
   });
 });

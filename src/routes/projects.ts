@@ -62,6 +62,7 @@ interface ProjectDetailData {
   ndvi_score: number;
   timestamp: number;
   funding: number;
+  funding_source: string;
 }
 
 /** Nested detail shape the frontend's `ProjectWithDetail` expects (#768). */

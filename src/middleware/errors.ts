@@ -150,5 +150,5 @@ export function errorHandler(
   }
 
   logger.error("[error] unhandled error", logger.formatError(err));
-  res.status(500).json(errorBody("INTERNAL_ERROR", "An unexpected error occurred"));
+  res.status(500).json(errorBody("internal_error", "An unexpected error occurred"));
 }

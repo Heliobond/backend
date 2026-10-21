@@ -23,7 +23,7 @@ import {
   tasksToCsv,
   historyToCsv,
 } from "../lib/maintenance-tracking";
-import { badRequest, parseProjectId, parseOptionalInt } from "../middleware/errors";
+import { badRequest, parseProjectId, parseOptionalInt, errorBody } from "../middleware/errors";
 
 const router = Router();
 
@@ -204,7 +204,7 @@ router.get("/tasks/:taskId", (req: Request, res: Response, next: NextFunction) =
   try {
     const task = getTask(req.params.taskId as string);
     if (!task) {
-      res.status(404).json({ error: "not_found", message: "Task not found" });
+      res.status(404).json(errorBody("not_found", "Task not found"));
       return;
     }
     res.json(task);
@@ -268,7 +268,7 @@ router.delete("/tasks/:taskId", (req: Request, res: Response, next: NextFunction
   try {
     const removed = deleteTask(req.params.taskId as string);
     if (!removed) {
-      res.status(404).json({ error: "not_found", message: "Task not found" });
+      res.status(404).json(errorBody("not_found", "Task not found"));
       return;
     }
     res.json({ removed: true });

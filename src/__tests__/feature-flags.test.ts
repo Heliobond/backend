@@ -340,7 +340,7 @@ describe("feature flags", () => {
       expect(res.status).toBe(500);
       expect(res.body).toEqual({
         error: {
-          code: "INTERNAL_ERROR",
+          code: "internal_error",
           message: "An unexpected error occurred",
         },
       });
@@ -371,7 +371,7 @@ describe("feature flags", () => {
       expect(res.status).toBe(500);
       expect(res.body).toEqual({
         error: {
-          code: "INTERNAL_ERROR",
+          code: "internal_error",
           message: "An unexpected error occurred",
         },
       });

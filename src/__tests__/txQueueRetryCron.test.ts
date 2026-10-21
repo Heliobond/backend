@@ -30,6 +30,7 @@ jest.mock("../lib/scoring", () => ({
 jest.mock("../lib/idempotency", () => ({
   generateIdempotencyKey: jest.fn(),
   checkIdempotency: jest.fn(),
+  removeIdempotencyKey: jest.fn(),
 }));
 
 jest.mock("../lib/stellar", () => ({

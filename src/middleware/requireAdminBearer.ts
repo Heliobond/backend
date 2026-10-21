@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { timingSafeCompare } from "../lib/timing-safe";
+import { errorBody } from "./errors";
 
 /**
  * Shared middleware that enforces the ADMIN_API_KEY bearer token using a
@@ -17,13 +18,13 @@ import { timingSafeCompare } from "../lib/timing-safe";
 export function requireAdminBearer(req: Request, res: Response, next: NextFunction): void {
   const apiKey = process.env.ADMIN_API_KEY;
   if (!apiKey) {
-    res.status(500).json({ error: "server_misconfigured", message: "ADMIN_API_KEY is not set" });
+    res.status(500).json(errorBody("server_misconfigured", "ADMIN_API_KEY is not set"));
     return;
   }
 
   const provided = req.headers.authorization ?? "";
   if (!timingSafeCompare(provided, `Bearer ${apiKey}`)) {
-    res.status(401).json({ error: "unauthorized", message: "Missing or invalid bearer token" });
+    res.status(401).json(errorBody("unauthorized", "Missing or invalid bearer token"));
     return;
   }
 

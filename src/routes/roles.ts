@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import { assignRole, removeRole, listRoles, type Role } from "../lib/roles";
 import { requireAdminBearer } from "../middleware/requireAdminBearer";
-import { badRequest } from "../middleware/errors";
+import { badRequest, errorBody } from "../middleware/errors";
 
 const router = Router();
 
@@ -32,7 +32,7 @@ router.get("/", (_req: Request, res: Response) => {
 router.delete("/:userId", (req: Request, res: Response) => {
   const removed = removeRole(String(req.params["userId"]));
   if (!removed) {
-    res.status(404).json({ error: "not_found", message: "User has no assigned role" });
+    res.status(404).json(errorBody("not_found", "User has no assigned role"));
     return;
   }
   res.json({ removed: true });

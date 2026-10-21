@@ -90,8 +90,7 @@ describe("requestTimeout middleware", () => {
 
     expect(res.status).toHaveBeenCalledWith(408);
     expect(res.json).toHaveBeenCalledWith({
-      error: "request_timeout",
-      message: "Request timed out",
+      error: { code: "request_timeout", message: "Request timed out" },
     });
     expect(signal.aborted).toBe(true);
     expect(req.destroy).toHaveBeenCalledTimes(1);

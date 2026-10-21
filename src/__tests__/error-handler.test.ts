@@ -17,7 +17,7 @@ function createAppWithError(throwFn: () => void) {
 }
 
 describe("error handling middleware", () => {
-  it("unhandled error returns 500 with JSON body and INTERNAL_ERROR code", async () => {
+  it("unhandled error returns 500 with JSON body and internal_error code", async () => {
     const app = createAppWithError(() => {
       throw new Error("something broke");
     });
@@ -25,7 +25,7 @@ describe("error handling middleware", () => {
     expect(res.headers["content-type"]).toMatch(/json/);
     expect(res.body).toEqual({
       error: {
-        code: "INTERNAL_ERROR",
+        code: "internal_error",
         message: "An unexpected error occurred",
       },
     });
@@ -69,7 +69,7 @@ describe("error handling middleware", () => {
     app.use(errorHandler);
 
     const res = await request(app).get("/async-error").expect(500);
-    expect(res.body.error.code).toBe("INTERNAL_ERROR");
+    expect(res.body.error.code).toBe("internal_error");
     expect(res.body.error.message).toBe("An unexpected error occurred");
   });
 

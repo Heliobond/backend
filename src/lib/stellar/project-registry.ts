@@ -73,11 +73,10 @@ export class ProjectRegistryService {
       logger.debug(`[project-registry] Fetching project data for: ${projectId}`);
 
       return {
-        projectId,
-        creditQuality: 80,
-        greenImpact: 85,
-        lastUpdated: Math.floor(Date.now() / 1000) - 7200,
-        confidence: 90,
+        id: projectId,
+        name: `Project ${projectId}`,
+        impact_score: 80,
+        last_update_timestamp: Math.floor(Date.now() / 1000) - 7200,
       };
     } catch (error: any) {
       logger.error(`[project-registry] Failed to fetch project ${projectId}:`, error);
@@ -174,6 +173,7 @@ export class ProjectRegistryService {
 
       return {
         success: true,
+        skipped: false,
         transactionHash: `tx_${projectId}_${Date.now()}`,
       };
     } catch (error: any) {
