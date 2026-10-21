@@ -30,6 +30,8 @@ jest.mock("../lib/scoring", () => ({
 jest.mock("../lib/idempotency", () => ({
   generateIdempotencyKey: jest.fn(),
   checkIdempotency: jest.fn(),
+  removeIdempotencyKey: jest.fn(),
+  clearIdempotencyStore: jest.fn(),
 }));
 
 jest.mock("../lib/stellar", () => ({
@@ -376,5 +378,65 @@ describe("runTxQueueRetry", () => {
 
     expect(mockUpdateImpactScore).toHaveBeenCalled();
     expect(getQueueSize()).toBe(0);
+  });
+
+  describe("input guards", () => {
+    const setup = (satellite: Record<string, unknown>, solarTs = Date.now()) => {
+      mockIsRpcAvailable.mockReturnValue(true);
+      mockGetSolarData.mockReturnValue({
+        power_output_kw: 750,
+        efficiency_pct: 75,
+        max_power_kw: 1000,
+        timestamp: solarTs,
+      });
+      mockFetchSatelliteWithFallback.mockResolvedValue({
+        forest_density_pct: 70,
+        ndvi_score: 0.7,
+        timestamp: Date.now(),
+        source: "test",
+        dataSource: "live" as const,
+        ...satellite,
+      } as never);
+      mockComputeScores.mockReturnValue({ credit_quality: 75, green_impact: 72 });
+      mockGenerateIdempotencyKey.mockReturnValue("idempotency-key-1");
+      mockCheckIdempotency.mockReturnValue({ isDuplicate: false });
+      mockUpdateImpactScore.mockResolvedValue("tx_hash_abc123");
+    };
+
+    it.each([
+      ["conservative-fallback", { dataSource: "conservative-fallback", forest_density_pct: 50 }],
+      ["cache", { dataSource: "cache" }],
+      ["stale satellite", { timestamp: Date.now() - 10 * 3_600_000 }],
+    ])("does not submit on %s data and keeps the item queued", async (_name, satellite) => {
+      enqueue(1, 80, 70, "RPC unavailable");
+      setup(satellite);
+
+      await runTxQueueRetry();
+
+      expect(mockUpdateImpactScore).not.toHaveBeenCalled();
+      expect(getQueueSize()).toBe(1);
+      expect(getQueueSnapshot()[0].retryCount).toBe(1);
+    });
+
+    it("does not submit on a stale solar reading", async () => {
+      enqueue(1, 80, 70, "RPC unavailable");
+      setup({}, Date.now() - 10 * 3_600_000);
+
+      await runTxQueueRetry();
+
+      expect(mockUpdateImpactScore).not.toHaveBeenCalled();
+      expect(getQueueSize()).toBe(1);
+    });
+
+    it("drops a guard-blocked item once it exceeds max retries", async () => {
+      enqueue(1, 80, 70, "RPC unavailable");
+      getQueueSnapshot()[0].retryCount = 9;
+      setup({ dataSource: "conservative-fallback" });
+
+      await runTxQueueRetry();
+
+      expect(mockUpdateImpactScore).not.toHaveBeenCalled();
+      expect(getQueueSize()).toBe(0);
+    });
   });
 });
