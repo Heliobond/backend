@@ -411,12 +411,36 @@ export const openApiSpec = {
         },
       },
     },
-    "/portfolio": {
+    "/portfolio/{address}": {
       get: {
         summary: "Get portfolio summary",
         tags: ["Portfolio"],
+        security: [{ ApiKeyAuth: [] }],
+        parameters: [
+          {
+            name: "address",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Stellar account (G...) or contract (C...) strkey",
+          },
+          {
+            name: "cursor",
+            in: "query",
+            schema: { type: "string" },
+            description: "Pagination cursor from a previous response's next_cursor",
+          },
+          {
+            name: "limit",
+            in: "query",
+            schema: { type: "integer", minimum: 1, maximum: 200 },
+            description: "Maximum number of events to return (1-200)",
+          },
+        ],
         responses: {
           200: { description: "Portfolio metrics" },
+          400: errorResponse("Invalid address or pagination parameters"),
+          401: errorResponse("Unauthorized"),
           429: errorResponse("Too many requests"),
           500: errorResponse("Internal server error"),
         },

@@ -23,7 +23,9 @@ const api = createApiClient({
 // Fully typed API calls
 const projects = await api.GET("/projects");
 const project = await api.GET("/projects/{id}", { params: { path: { id: 1 } } });
-const portfolio = await api.GET("/portfolio");
+const portfolio = await api.GET("/portfolio/{address}", {
+  params: { path: { address: "GCFIRY65OQE7DFP5KLNS2PF2LVZMUZYJX4OZIEQ36N2IQANUB5XVYOJR" } },
+});
 ```
 
 ## Regenerating
