@@ -1212,17 +1212,35 @@ Triggers an on-demand digest dispatch to subscribers.
 
 ### `GET /v1/chains` & `GET /v1/chains/:id`
 
-Lists configured blockchains (Stellar, Polygon, Ethereum, etc.) and active RPC status.
+Lists configured blockchains (Stellar, Polygon, Ethereum, etc.) and active RPC
+status. **Public read**: no authentication required. The chain registry does
+not expose secret material and is also surfaced via `/v1/status/oracle`.
 
 ### `PATCH /v1/chains/:id`
 
-Updates configuration for a specific chain network (`enabled`, `rpcUrl`, `contractAddress`, `name`).
+Updates configuration for a specific chain network (`enabled`, `rpcUrl`,
+`contractAddress`, `name`). **Admin only**: requires IP whitelist, admin
+bearer token, and HMAC request signing (`ipWhitelist` + `requireAdminBearer` +
+`requestSigning`), matching sibling admin routers like `/v1/satellite-sources`
+and `/v1/admin/api-keys`.
+
+Payload is validated before any config is applied: `rpcUrl` must be an
+http(s) URL that does not resolve to private, loopback, link-local, or
+metadata address ranges (defense-in-depth SSRF check via
+`lib/ssrf.validatePublicUrl`). `contractAddress` must be a valid Stellar
+contract strkey. `enabled` must be a boolean. `name` must be a non-empty
+string of at most 200 characters.
 
 ### `POST /v1/chains/broadcast/:projectId`
 
-Broadcasts computed project impact scores to Stellar. EVM chains (Ethereum,
-Polygon) do not have a submission implementation yet: requesting one returns
-`501 Not Implemented` rather than a synthetic transaction hash.
+Broadcasts computed project impact scores to Stellar. **Admin only**: same
+auth stack as `PATCH /v1/chains/:id` — this endpoint signs and submits a
+Soroban transaction with `ADMIN_SECRET_KEY`, so unauthenticated access would
+let any caller spend the oracle signer's XLM.
+
+EVM chains (Ethereum, Polygon) do not have a submission implementation yet:
+requesting one returns `501 Not Implemented` rather than a synthetic
+transaction hash.
 
 On success the response contains per-chain results with a `status` of
 `submitted`, `failed`, or `not_implemented`. `txHash` is only populated for
