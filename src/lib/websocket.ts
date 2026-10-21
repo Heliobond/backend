@@ -4,6 +4,16 @@ import { WebSocketServer, WebSocket } from "ws";
 import { timingSafeCompare } from "./timing-safe";
 import { vaultEventEmitter, VAULT_EVENT, type VaultEvent } from "./vaultEvents";
 import { logger } from "./logger";
+import { parseTrustProxy } from "../middleware/rateLimit";
+import { config } from "../config";
+
+// proxy-addr ships with express and has no @types package. The runtime
+// signature is `proxyaddr(req, trust) -> string`; we accept the same
+// trust values as Express ("trust proxy") and let the library handle
+// the chain-walking semantics, so the WebSocket path and the HTTP
+// middleware resolve client IPs identically.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const proxyAddr: (req: unknown, trust: unknown) => string = require("proxy-addr");
 
 export interface ScoreUpdate {
   project_id: number;
@@ -208,10 +218,22 @@ function envInt(name: string, fallback: number): number {
 }
 
 function ipFromRequest(req: IncomingMessage): string {
-  const fwd = req.headers["x-forwarded-for"];
-  if (typeof fwd === "string" && fwd.length > 0) {
-    const first = fwd.split(",")[0].trim();
-    if (first) return first;
+  // Resolve the client IP the same way the HTTP middleware does
+  // (`express-rate-limit` and `ipWhitelist` both read `req.ip`, which goes
+  // through `proxy-addr` with the app-level `trust proxy` setting). The
+  // previous implementation always took the leftmost `X-Forwarded-For`
+  // entry, which is the hop a direct client inserts itself; sending a
+  // random XFF per connection defeated `WS_MAX_PER_IP` and
+  // `WS_EVENTS_MAX_PER_IP` (#834). When `TRUST_PROXY` is unset or
+  // literally `false`, `proxy-addr` ignores XFF entirely and returns the
+  // direct socket address, so attackers can no longer bypass the limits
+  // by spoofing the header.
+  const trust = parseTrustProxy(process.env.TRUST_PROXY || config.TRUST_PROXY || "false");
+  try {
+    const resolved = proxyAddr(req, trust);
+    if (resolved) return resolved;
+  } catch {
+    // fall through to the socket address
   }
   return req.socket.remoteAddress ?? "unknown";
 }

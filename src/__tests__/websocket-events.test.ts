@@ -185,6 +185,75 @@ describe("/ws/events browser stream (#767)", () => {
     ws.terminate();
   });
 
+  it("spoofed X-Forwarded-For does not bypass WS_EVENTS_MAX_PER_IP when TRUST_PROXY is unset (#834)", async () => {
+    process.env.WS_EVENTS_MAX_PER_IP = "2";
+    // TRUST_PROXY is unset by default; the WS path must therefore ignore
+    // the client-controlled X-Forwarded-For header and count every
+    // connection under the real socket address (127.0.0.1 here).
+    delete process.env.TRUST_PROXY;
+    _resetEventsServerForTests();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    server = createServer();
+    attachWebSocketServer(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+    const url = `ws://127.0.0.1:${port(server)}/ws/events`;
+    const withSpoofedXff = (xff: string) =>
+      new WebSocket(url, { headers: { "x-forwarded-for": xff } });
+
+    // The two allowed connections open and stay open; the third gets a
+    // close(1013) from the server after a successful upgrade handshake.
+    const a = await connect(url);
+    const b = withSpoofedXff("2.2.2.2");
+    await new Promise<void>((resolve, reject) => {
+      b.once("open", () => resolve());
+      b.once("error", reject);
+    });
+    const c = withSpoofedXff("3.3.3.3");
+    const { code } = await closed(c);
+    expect(code).toBe(1013);
+
+    a.close();
+    b.close();
+    delete process.env.WS_EVENTS_MAX_PER_IP;
+  });
+
+  it("honours X-Forwarded-For once TRUST_PROXY is enabled (#834)", async () => {
+    process.env.WS_EVENTS_MAX_PER_IP = "1";
+    process.env.TRUST_PROXY = "true";
+    _resetEventsServerForTests();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    server = createServer();
+    attachWebSocketServer(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+    const url = `ws://127.0.0.1:${port(server)}/ws/events`;
+    const withXff = (xff: string) => new WebSocket(url, { headers: { "x-forwarded-for": xff } });
+
+    // With trust-proxy=true and the leftmost XFF honoured, two different
+    // client IPs each get their own one-connection budget.
+    const a = withXff("5.5.5.5");
+    await new Promise<void>((resolve, reject) => {
+      a.once("open", () => resolve());
+      a.once("error", reject);
+    });
+    const b = withXff("6.6.6.6");
+    await new Promise<void>((resolve, reject) => {
+      b.once("open", () => resolve());
+      b.once("error", reject);
+    });
+    // A third connection from client 5.5.5.5 is rejected: the per-IP
+    // limit now applies to the trusted XFF value, not the socket address.
+    const c = withXff("5.5.5.5");
+    const { code } = await closed(c);
+    expect(code).toBe(1013);
+
+    a.close();
+    b.close();
+    delete process.env.WS_EVENTS_MAX_PER_IP;
+    delete process.env.TRUST_PROXY;
+  });
+
   it("the authenticated /ws feed still rejects unauthenticated upgrade requests", async () => {
     // `authenticate` returns true in dev/test when `WS_AUTH_TOKEN` is
     // unset; force production semantics so the reject-on-no-bearer path
