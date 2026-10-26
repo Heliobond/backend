@@ -54,32 +54,6 @@ router.get("/:id", (req: Request, res: Response) => {
  */
 router.patch("/:id", ...adminAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const projectId = parseProjectId(req.params.projectId, "project id");
-    const { chains } = req.body as { chains?: string[] };
-
-    if (chains !== undefined) {
-      if (!Array.isArray(chains)) {
-        return res
-          .status(400)
-          .json(errorBody("bad_request", "chains must be an array of chain identifiers"));
-      }
-      if (chains.length === 0) {
-        return res.status(400).json(errorBody("bad_request", "chains array must not be empty"));
-      }
-    }
-
-    const targetChains = (chains ?? getEnabledChains().map((c) => c.id)) as ChainId[];
-
-    const solar = getSolarData(projectId);
-    const satellite = getSatelliteData(projectId);
-    const scores = computeScores({ solar, satellite });
-
-    const result = await broadcastToChains(
-      projectId,
-      scores.credit_quality,
-      scores.green_impact,
-      targetChains,
-    );
     const body = req.body as {
       enabled?: unknown;
       rpcUrl?: unknown;
