@@ -73,20 +73,16 @@ describe("computeAggregateScores", () => {
     expect(result.by_region.east.count).toBe(1);
   });
 
-  it("trend contains three periods in order", () => {
-    const projects = [makeProject(1, 80, 70)];
-    const result = computeAggregateScores(projects);
-    expect(result.trend).toHaveLength(3);
-    expect(result.trend[0].period).toBe("current");
-    expect(result.trend[1].period).toBe("last_hour");
-    expect(result.trend[2].period).toBe("last_day");
-  });
-
-  it("trend past periods are not higher than current", () => {
+  it("trend contains only the current snapshot (#874: no synthetic past periods)", () => {
     const projects = [makeProject(1, 80, 70), makeProject(2, 75, 65)];
     const result = computeAggregateScores(projects);
-    expect(result.trend[1].avg_green_impact).toBeLessThanOrEqual(result.trend[0].avg_green_impact);
-    expect(result.trend[2].avg_green_impact).toBeLessThanOrEqual(result.trend[1].avg_green_impact);
+    expect(result.trend).toEqual([
+      {
+        period: "current",
+        avg_credit_quality: result.weighted_avg_credit_quality,
+        avg_green_impact: result.weighted_avg_green_impact,
+      },
+    ]);
   });
 
   it("trend values are clamped to >= 0", () => {

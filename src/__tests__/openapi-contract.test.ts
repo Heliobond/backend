@@ -79,7 +79,7 @@ describe("OpenAPI Spec Contract Tests", () => {
         "/projects/{id}/history",
         "/projects/{id}/history/trend",
         "/portfolio/{address}",
-        "/admin/score-update",
+        "/admin/update-scores",
         "/admin/batch/score-update",
         "/admin/batch/{batchId}/status",
         "/roles",

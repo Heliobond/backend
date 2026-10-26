@@ -6,6 +6,7 @@ import { getHealth } from "../lib/health";
 import { resetIdempotencyState } from "../lib/scoreService";
 import { errorHandler, notFoundHandler } from "../middleware/errors";
 import * as registry from "../lib/registry";
+import { pool as dbPool } from "../lib/db";
 
 // Factory mock avoids loading the real registry module, which throws at import
 // time when PROJECT_REGISTRY_CONTRACT_ID is unset (e.g. in CI).
@@ -49,8 +50,11 @@ describe("HTTP integration", () => {
 
   describe("GET /health", () => {
     it("returns status ok", async () => {
+      // getHealth pings PostgreSQL; stub it so the check reflects a healthy DB.
+      const query = jest.spyOn(dbPool, "query").mockResolvedValue({ rows: [] } as never);
       const res = await request(app).get("/health").expect(200);
       expect(res.body.status).toBe("ok");
+      query.mockRestore();
     });
   });
 

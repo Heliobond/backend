@@ -4,6 +4,7 @@ import adminRouter from "../routes/admin";
 import iotRouter from "../routes/iot";
 import { errorHandler } from "../middleware/errors";
 import { getHealth } from "../lib/health";
+import { pool as dbPool } from "../lib/db";
 
 jest.mock("../lib/registry", () => ({
   updateImpactScore: jest.fn(),
@@ -19,11 +20,12 @@ jest.mock("../lib/registry", () => ({
 // real validation path returns structured errors, which an auto-mock router
 // would bypass (requests would fall through to the error handler).
 jest.mock("../lib/scoring");
-jest.mock("../config", () => ({
-  config: {
-    ADMIN_API_KEY: "test-key",
-  },
-}));
+// Keep the real config (getHealth needs the RPC pool settings) and only
+// override the admin key.
+jest.mock("../config", () => {
+  const actual = jest.requireActual("../config");
+  return { config: { ...actual.config, ADMIN_API_KEY: "test-key" } };
+});
 
 function buildAdminApp(): Express {
   const app = express();
@@ -87,6 +89,8 @@ describe("error response consistency", () => {
   });
 
   it("does not add an error property to the health check payload", async () => {
+    // getHealth pings PostgreSQL; stub it so the payload reflects a healthy DB.
+    const query = jest.spyOn(dbPool, "query").mockResolvedValue({ rows: [] } as never);
     const app = express();
     app.get("/health", async (_req, res) => res.json(await getHealth()));
 
@@ -94,5 +98,6 @@ describe("error response consistency", () => {
 
     expect(res.body).not.toHaveProperty("error");
     expect(res.body.status).toBe("ok");
+    query.mockRestore();
   });
 });
