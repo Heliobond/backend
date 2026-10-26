@@ -94,5 +94,9 @@
     "typescript": "6.0.3",
     "typescript-eslint": "8.70.1",
     "yaml": "2.9.1"
+  },
+  "overrides": {
+    "handlebars": "4.7.10",
+    "proxy-addr": "2.0.8"
   }
 }
