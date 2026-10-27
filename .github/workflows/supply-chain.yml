@@ -1,0 +1,58 @@
+name: Supply-chain changes
+
+# Blocks a PR that changes package.json scripts or dependencies, lockfiles,
+# hooks, workflows, Docker or tool configs until a maintainer applies the
+# `supply-chain-reviewed` label. A new push ignores the label, so the
+# maintainer removes and re-adds it after reviewing the new commits. The
+# changes are printed as plain text in the job summary, where tab padding
+# shows up instead of rendering as a blank line (PR #969).
+#
+# This uses the `pull_request` event, not `pull_request_target`, so fork code
+# never gets secrets or a write token. The checker is read from the base
+# branch, so a PR cannot weaken the check that is run on it.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+# No job inherits a token grant; each one declares the minimum it needs.
+permissions: {}
+
+concurrency:
+  group: supply-chain-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review-gate:
+    name: supply-chain review gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+      PR_ACTION: ${{ github.event.action }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Load the checker from the base branch
+        run: |
+          f=scripts/check-supply-chain-changes.mjs
+          if ! git show "$BASE_SHA:$f" > "$RUNNER_TEMP/check-supply-chain-changes.mjs" 2>/dev/null; then
+            # Only the PR that introduces the checker gets here.
+            echo "::warning::$f is not on the base branch; using this PR's copy"
+            cp "$f" "$RUNNER_TEMP/check-supply-chain-changes.mjs"
+          fi
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Report and gate supply-chain changes
+        run: node "$RUNNER_TEMP/check-supply-chain-changes.mjs" "$BASE_SHA" "$HEAD_SHA"

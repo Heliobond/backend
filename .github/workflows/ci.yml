@@ -6,19 +6,70 @@ on:
   pull_request:
     branches: [main]
 
+# No job inherits a token grant; each one declares the minimum it needs.
+permissions: {}
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  test:
+  # Runs before anything installs, builds or executes the PR's code. PR #969's
+  # payload ran on a runner the moment CI called `bun run build`; these checks
+  # would have failed first. On a PR the checkers are read from the base
+  # branch, so a PR cannot weaken the checks that run on it.
+  security-gates:
+    name: pre-install security gates
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Load the checkers from the base branch
+        run: |
+          mkdir -p "$RUNNER_TEMP/checks"
+          for f in check-hidden-content.mjs lockfile-lint.mjs; do
+            if [ -n "$BASE_SHA" ] && git show "$BASE_SHA:scripts/$f" > "$RUNNER_TEMP/checks/$f" 2>/dev/null; then
+              echo "using base-branch scripts/$f"
+            else
+              # Only the PR that introduces a checker, or a push to main, gets here.
+              echo "::warning::scripts/$f is not on the base branch; using this commit's copy"
+              cp "scripts/$f" "$RUNNER_TEMP/checks/$f"
+            fi
+          done
+
+      # Tab padding, Trojan Source characters, obfuscated code, new root scripts.
+      - name: Hidden-content check
+        run: node "$RUNNER_TEMP/checks/check-hidden-content.mjs"
+
+      # Every dependency from the npm registry with an integrity hash; bun.lock only.
+      - name: Lockfile lint
+        run: node "$RUNNER_TEMP/checks/lockfile-lint.mjs"
+
+  test:
+    needs: security-gates
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Install bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.x"
 
@@ -70,14 +121,22 @@ jobs:
       - name: Test
         run: bun run test
 
+      - name: Test the security checks
+        run: node --test 'scripts/*.test.mjs'
+
   openapi-client:
+    needs: security-gates
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Install bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.x"
 
@@ -109,26 +168,32 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@4bfa242aa49c5f7c6770b98670d354a7dfac05f8 # v3.39.1
         with:
           languages: javascript
           queries: security-extended
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@4bfa242aa49c5f7c6770b98670d354a7dfac05f8 # v3.39.1
         with:
           fail-on: high
 
   lint-workflows:
     name: Lint Workflows
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Run actionlint
-        uses: reviewdog/action-actionlint@v1
+        uses: reviewdog/action-actionlint@cfa6a621f27735ccc88d35af9d0608692fd9b9f7 # v1.80.8
         with:
           actionlint_flags: "-color"
