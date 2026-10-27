@@ -42,7 +42,7 @@ describe("runtime version pinning (#207)", () => {
 
     it.each(workflows)("%s pins a bun-version for every setup-bun step", (workflow) => {
       const content = read(path.join(".github", "workflows", workflow));
-      const setupSteps = content.match(/uses: oven-sh\/setup-bun@v\d+[\s\S]*?(?=\n\n|\n {6}- |$)/g);
+      const setupSteps = content.match(/uses: oven-sh\/setup-bun@(?:v\d+|[0-9a-f]{40})[\s\S]*?(?=\n\n|\n {6}- |$)/g);
 
       expect(setupSteps).not.toBeNull();
       for (const step of setupSteps ?? []) {
