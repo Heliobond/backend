@@ -41,7 +41,7 @@ describe("satellite-sources routes", () => {
       .send({ name: "custom-source" })
       .expect(400);
 
-    expect(res.body.error).toBe("fetchUrl is required");
+    expect(res.body.error.message).toBe("fetchUrl is required");
   });
 
   it("POST /v1/satellite-sources — 400 for an invalid URL", async () => {
@@ -50,7 +50,7 @@ describe("satellite-sources routes", () => {
       .send({ name: "custom-source", fetchUrl: "not-a-url" })
       .expect(400);
 
-    expect(res.body.error).toBe("url must be a valid http/https URL");
+    expect(res.body.error.message).toBe("url must be a valid http/https URL");
   });
 
   it("POST /v1/satellite-sources — 400 for non-http(s) protocols", async () => {
@@ -59,7 +59,7 @@ describe("satellite-sources routes", () => {
       .send({ name: "custom-source", fetchUrl: "ftp://example.com/data" })
       .expect(400);
 
-    expect(res.body.error).toBe("url must be a valid http/https URL");
+    expect(res.body.error.message).toBe("url must be a valid http/https URL");
   });
 
   it("POST /v1/satellite-sources — 400 for loopback URLs (SSRF)", async () => {
@@ -68,7 +68,7 @@ describe("satellite-sources routes", () => {
       .send({ name: "custom-source", fetchUrl: "http://127.0.0.1:8080/data" })
       .expect(400);
 
-    expect(res.body.error).toBe(
+    expect(res.body.error.message).toBe(
       "url must not point to a private, loopback, link-local, or metadata address",
     );
   });
@@ -79,7 +79,7 @@ describe("satellite-sources routes", () => {
       .send({ name: "custom-source", fetchUrl: "http://10.0.0.1/data" })
       .expect(400);
 
-    expect(res.body.error).toBe(
+    expect(res.body.error.message).toBe(
       "url must not point to a private, loopback, link-local, or metadata address",
     );
   });
@@ -90,7 +90,7 @@ describe("satellite-sources routes", () => {
       .send({ name: "custom-source", fetchUrl: "http://169.254.169.254/latest/meta-data" })
       .expect(400);
 
-    expect(res.body.error).toBe(
+    expect(res.body.error.message).toBe(
       "url must not point to a private, loopback, link-local, or metadata address",
     );
   });
@@ -101,7 +101,7 @@ describe("satellite-sources routes", () => {
       .send({ name: "custom-source", fetchUrl: "http://[::1]/data" })
       .expect(400);
 
-    expect(res.body.error).toBe(
+    expect(res.body.error.message).toBe(
       "url must not point to a private, loopback, link-local, or metadata address",
     );
   });

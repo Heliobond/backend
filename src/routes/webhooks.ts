@@ -6,7 +6,7 @@ import {
   getWebhook,
   validateWebhookUrl,
 } from "../lib/webhooks";
-import { badRequest } from "../middleware/errors";
+import { badRequest, errorBody } from "../middleware/errors";
 
 const router = Router();
 
@@ -48,12 +48,22 @@ router.post("/", async (req: Request, res: Response, next: NextFunction) => {
     }
 
     if (max_retries !== undefined) {
-      if (typeof max_retries !== "number" || !Number.isInteger(max_retries) || max_retries < 0 || max_retries > 10) {
+      if (
+        typeof max_retries !== "number" ||
+        !Number.isInteger(max_retries) ||
+        max_retries < 0 ||
+        max_retries > 10
+      ) {
         throw badRequest("max_retries must be an integer between 0 and 10");
       }
     }
     if (retry_delay_ms !== undefined) {
-      if (typeof retry_delay_ms !== "number" || !Number.isInteger(retry_delay_ms) || retry_delay_ms < 0 || retry_delay_ms > 60000) {
+      if (
+        typeof retry_delay_ms !== "number" ||
+        !Number.isInteger(retry_delay_ms) ||
+        retry_delay_ms < 0 ||
+        retry_delay_ms > 60000
+      ) {
         throw badRequest("retry_delay_ms must be an integer between 0 and 60000");
       }
     }
@@ -93,7 +103,7 @@ router.get("/:id", (req: Request, res: Response) => {
   const owner = getOwner(req);
   const wh = getWebhook(String(req.params["id"]));
   if (!wh || (owner && wh.owner && wh.owner !== owner)) {
-    res.status(404).json({ error: "not_found", message: "Webhook not found" });
+    res.status(404).json(errorBody("not_found", "Webhook not found"));
     return;
   }
   res.json({
@@ -110,12 +120,12 @@ router.delete("/:id", (req: Request, res: Response) => {
   const id = String(req.params["id"]);
   const wh = getWebhook(id);
   if (!wh || (owner && wh.owner && wh.owner !== owner)) {
-    res.status(404).json({ error: "not_found", message: "Webhook not found" });
+    res.status(404).json(errorBody("not_found", "Webhook not found"));
     return;
   }
   const removed = removeWebhook(id);
   if (!removed) {
-    res.status(404).json({ error: "not_found", message: "Webhook not found" });
+    res.status(404).json(errorBody("not_found", "Webhook not found"));
     return;
   }
   res.json({ removed: true });

@@ -74,7 +74,7 @@ Legacy unversioned `/api/*` routes are deprecated and maintained for backward co
 
 Replace the `/api` prefix with `/v1` (e.g. `/api/projects` → `/v1/projects`). Notes:
 
-- Auth is not identical between the two mounts (for example `/api/portfolio` requires an API key while `/v1/portfolio` does not; admin routes on `/v1` additionally require request signing). Follow the `/v1` requirements.
+- Auth is the same on both mounts: `/api/portfolio` and `/v1/portfolio` both require an API key (`401` without one); admin routes on `/v1` additionally require request signing. Follow the `/v1` requirements.
 - Legacy traffic is counted in the Prometheus metric `legacy_api_requests_total{path}`; check it to find remaining callers.
 - On and after **2027-01-01T00:00:00Z** every `/api/*` request returns `410 Gone` with a `Link: </v1/...>; rel="successor-version"` header and a JSON body pointing at the `/v1` equivalent. The mounts are then deleted; see [docs/LEGACY_API_REMOVAL.md](docs/LEGACY_API_REMOVAL.md).
 
@@ -525,6 +525,9 @@ simulated share price is seeded from the address, so `current_value` is
 deterministic per `(address, clock hour)` — the same address returns the same
 value within a clock hour, and `current_value` stays between `1.5x` and `2.0x`
 of `current_shares`.
+
+**Auth:** An API key is required on both the `/v1` and legacy `/api` mounts
+(`401 unauthorized` without one).
 
 **Response `200`**
 
@@ -1331,9 +1334,11 @@ Computes and submits `update_impact_score` transactions to the Soroban smart con
 
 **Headers**
 
-| Header          | Required                       | Value                    |
-| :-------------- | :----------------------------- | :----------------------- |
-| `Authorization` | Yes (when `ADMIN_API_KEY` set) | `Bearer <ADMIN_API_KEY>` |
+| Header          | Required | Value                    |
+| :-------------- | :------- | :----------------------- |
+| `Authorization` | Yes      | `Bearer <ADMIN_API_KEY>` |
+
+If `ADMIN_API_KEY` is unset the endpoint fails closed with `500 server_misconfigured`.
 
 **Request Body (optional)**
 

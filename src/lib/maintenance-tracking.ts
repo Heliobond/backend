@@ -1,6 +1,9 @@
 export type TaskStatus = "scheduled" | "in_progress" | "completed" | "cancelled";
 export type TaskPriority = "low" | "medium" | "high" | "critical";
 
+/** Whitelist of assignable task priorities (#875). */
+const validPriorities: TaskPriority[] = ["low", "medium", "high", "critical"];
+
 export interface MaintenanceTask {
   id: string;
   project_id: number;
@@ -91,8 +94,22 @@ function todayDate(): string {
   return new Date().toISOString().split("T")[0];
 }
 
-function validateTaskInput(input: TaskInput): Omit<MaintenanceTask, "id" | "status" | "completed_date" | "actual_cost" | "notes" | "created_at" | "updated_at"> {
-  const { project_id, title, description, action_type, priority, scheduled_date, assigned_to, estimated_cost } = input;
+function validateTaskInput(
+  input: TaskInput,
+): Omit<
+  MaintenanceTask,
+  "id" | "status" | "completed_date" | "actual_cost" | "notes" | "created_at" | "updated_at"
+> {
+  const {
+    project_id,
+    title,
+    description,
+    action_type,
+    priority,
+    scheduled_date,
+    assigned_to,
+    estimated_cost,
+  } = input;
 
   if (typeof project_id !== "number" || !Number.isInteger(project_id) || project_id < 1) {
     throw new Error("project_id must be a positive integer");
@@ -106,7 +123,6 @@ function validateTaskInput(input: TaskInput): Omit<MaintenanceTask, "id" | "stat
   if (typeof action_type !== "string" || action_type.trim().length === 0) {
     throw new Error("action_type must be a non-empty string");
   }
-  const validPriorities: TaskPriority[] = ["low", "medium", "high", "critical"];
   if (typeof priority !== "string" || !validPriorities.includes(priority as TaskPriority)) {
     throw new Error(`priority must be one of: ${validPriorities.join(", ")}`);
   }
@@ -116,7 +132,11 @@ function validateTaskInput(input: TaskInput): Omit<MaintenanceTask, "id" | "stat
   if (typeof assigned_to !== "string" || assigned_to.trim().length === 0) {
     throw new Error("assigned_to must be a non-empty string");
   }
-  if (typeof estimated_cost !== "number" || !Number.isFinite(estimated_cost) || estimated_cost < 0) {
+  if (
+    typeof estimated_cost !== "number" ||
+    !Number.isFinite(estimated_cost) ||
+    estimated_cost < 0
+  ) {
     throw new Error("estimated_cost must be a non-negative finite number");
   }
 
@@ -196,10 +216,19 @@ export function updateTask(id: string, patch: TaskPatch): MaintenanceTask {
     ...(typeof patch.title === "string" ? { title: patch.title.trim() } : {}),
     ...(typeof patch.description === "string" ? { description: patch.description.trim() } : {}),
     ...(typeof patch.action_type === "string" ? { action_type: patch.action_type.trim() } : {}),
-    ...(typeof patch.priority === "string" && validPriorities.includes(patch.priority as TaskPriority) ? { priority: patch.priority as TaskPriority } : {}),
-    ...(typeof patch.scheduled_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(patch.scheduled_date) ? { scheduled_date: patch.scheduled_date } : {}),
+    ...(typeof patch.priority === "string" &&
+    validPriorities.includes(patch.priority as TaskPriority)
+      ? { priority: patch.priority as TaskPriority }
+      : {}),
+    ...(typeof patch.scheduled_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(patch.scheduled_date)
+      ? { scheduled_date: patch.scheduled_date }
+      : {}),
     ...(typeof patch.assigned_to === "string" ? { assigned_to: patch.assigned_to.trim() } : {}),
-    ...(typeof patch.estimated_cost === "number" && Number.isFinite(patch.estimated_cost) && patch.estimated_cost >= 0 ? { estimated_cost: patch.estimated_cost } : {}),
+    ...(typeof patch.estimated_cost === "number" &&
+    Number.isFinite(patch.estimated_cost) &&
+    patch.estimated_cost >= 0
+      ? { estimated_cost: patch.estimated_cost }
+      : {}),
     updated_at: now(),
   };
 
@@ -235,9 +264,10 @@ export function completeTask(
 
   const effBeforeVal = effBefore ?? null;
   const effAfterVal = effAfter ?? null;
-  const effectiveness = (effBeforeVal !== null && effAfterVal !== null && effBeforeVal !== 0)
-    ? Math.round(((effAfterVal - effBeforeVal) / effBeforeVal) * 10000) / 100
-    : null;
+  const effectiveness =
+    effBeforeVal !== null && effAfterVal !== null && effBeforeVal !== 0
+      ? Math.round(((effAfterVal - effBeforeVal) / effBeforeVal) * 10000) / 100
+      : null;
 
   const record: MaintenanceRecord = {
     id: `mh_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -341,9 +371,10 @@ export function recordManualMaintenance(
   efficiencyAfter?: number,
   notes?: string,
 ): MaintenanceRecord {
-  const effectiveness = (efficiencyBefore !== undefined && efficiencyAfter !== undefined && efficiencyBefore !== 0)
-    ? Math.round(((efficiencyAfter - efficiencyBefore) / efficiencyBefore) * 10000) / 100
-    : null;
+  const effectiveness =
+    efficiencyBefore !== undefined && efficiencyAfter !== undefined && efficiencyBefore !== 0
+      ? Math.round(((efficiencyAfter - efficiencyBefore) / efficiencyBefore) * 10000) / 100
+      : null;
 
   const record: MaintenanceRecord = {
     id: `mh_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -394,17 +425,21 @@ function escapeCsv(val: string): string {
 }
 
 export function tasksToCsv(tasks: MaintenanceTask[]): string {
-  const header = "id,project_id,title,action_type,priority,status,scheduled_date,completed_date,assigned_to,estimated_cost,actual_cost,notes";
-  const rows = tasks.map((t) =>
-    `${t.id},${t.project_id},${escapeCsv(t.title)},${escapeCsv(t.action_type)},${t.priority},${t.status},${t.scheduled_date},${t.completed_date ?? ""},${escapeCsv(t.assigned_to)},${t.estimated_cost},${t.actual_cost ?? ""},${escapeCsv(t.notes)}`,
+  const header =
+    "id,project_id,title,action_type,priority,status,scheduled_date,completed_date,assigned_to,estimated_cost,actual_cost,notes";
+  const rows = tasks.map(
+    (t) =>
+      `${t.id},${t.project_id},${escapeCsv(t.title)},${escapeCsv(t.action_type)},${t.priority},${t.status},${t.scheduled_date},${t.completed_date ?? ""},${escapeCsv(t.assigned_to)},${t.estimated_cost},${t.actual_cost ?? ""},${escapeCsv(t.notes)}`,
   );
   return [header, ...rows].join("\n") + "\n";
 }
 
 export function historyToCsv(records: MaintenanceRecord[]): string {
-  const header = "id,project_id,task_id,action_type,description,completed_date,cost,efficiency_before,efficiency_after,effectiveness_pct,notes";
-  const rows = records.map((r) =>
-    `${r.id},${r.project_id},${r.task_id ?? ""},${escapeCsv(r.action_type)},${escapeCsv(r.description)},${r.completed_date},${r.cost},${r.efficiency_before ?? ""},${r.efficiency_after ?? ""},${r.effectiveness_pct ?? ""},${escapeCsv(r.notes)}`,
+  const header =
+    "id,project_id,task_id,action_type,description,completed_date,cost,efficiency_before,efficiency_after,effectiveness_pct,notes";
+  const rows = records.map(
+    (r) =>
+      `${r.id},${r.project_id},${r.task_id ?? ""},${escapeCsv(r.action_type)},${escapeCsv(r.description)},${r.completed_date},${r.cost},${r.efficiency_before ?? ""},${r.efficiency_after ?? ""},${r.effectiveness_pct ?? ""},${escapeCsv(r.notes)}`,
   );
   return [header, ...rows].join("\n") + "\n";
 }

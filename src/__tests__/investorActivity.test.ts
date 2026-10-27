@@ -15,7 +15,9 @@ const app = express();
 app.use("/v1/investors", investorActivityRouter);
 app.use(errorHandler);
 
-const ADDRESS = `G${"A".repeat(55)}`;
+// Checksum-valid G-address: the routes run StrKey.decodeEd25519PublicKey, which
+// rejects fabricated addresses like "G" + "A".repeat(55).
+const ADDRESS = "GAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQDZ7H";
 
 describe("GET /v1/investors/:address/activity", () => {
   beforeEach(() => getActivity.mockResolvedValue({ events: [], next_cursor: null }));

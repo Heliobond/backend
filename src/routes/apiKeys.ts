@@ -9,7 +9,7 @@ import {
   getRotationStatus,
   onRotation,
 } from "../lib/apiKeys";
-import { badRequest } from "../middleware/errors";
+import { badRequest, errorBody } from "../middleware/errors";
 import { logger } from "../lib/logger";
 import { requireAdminBearer } from "../middleware/requireAdminBearer";
 
@@ -31,14 +31,23 @@ onRotation((notification) => {
 router.post("/", (req: Request, res: Response, next: NextFunction) => {
   try {
     const { consumer_name, rate_limit, rotation_interval_days } = req.body;
-    if (!consumer_name || typeof consumer_name !== "string" || consumer_name.trim().length === 0 || consumer_name.length > 128) {
+    if (
+      !consumer_name ||
+      typeof consumer_name !== "string" ||
+      consumer_name.trim().length === 0 ||
+      consumer_name.length > 128
+    ) {
       throw badRequest("consumer_name is required and must be a string up to 128 characters");
     }
 
     let parsedRateLimit: number | undefined;
     if (rate_limit !== undefined) {
       parsedRateLimit = Number(rate_limit);
-      if (!Number.isInteger(parsedRateLimit) || parsedRateLimit <= 0 || parsedRateLimit > 1_000_000) {
+      if (
+        !Number.isInteger(parsedRateLimit) ||
+        parsedRateLimit <= 0 ||
+        parsedRateLimit > 1_000_000
+      ) {
         throw badRequest("rate_limit must be a positive integer up to 1000000");
       }
     }
@@ -46,7 +55,11 @@ router.post("/", (req: Request, res: Response, next: NextFunction) => {
     let parsedRotationInterval: number | undefined;
     if (rotation_interval_days !== undefined) {
       parsedRotationInterval = Number(rotation_interval_days);
-      if (!Number.isInteger(parsedRotationInterval) || parsedRotationInterval <= 0 || parsedRotationInterval > 3650) {
+      if (
+        !Number.isInteger(parsedRotationInterval) ||
+        parsedRotationInterval <= 0 ||
+        parsedRotationInterval > 3650
+      ) {
         throw badRequest("rotation_interval_days must be a positive integer up to 3650");
       }
     }
@@ -106,14 +119,16 @@ router.post("/:id/rotate", (req: Request, res: Response, next: NextFunction) => 
       const parsed = Number(body.grace_period_ms);
       const MAX_GRACE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
       if (!Number.isInteger(parsed) || parsed < 0 || parsed > MAX_GRACE_MS) {
-        throw badRequest(`grace_period_ms must be an integer between 0 and ${MAX_GRACE_MS} (30 days)`);
+        throw badRequest(
+          `grace_period_ms must be an integer between 0 and ${MAX_GRACE_MS} (30 days)`,
+        );
       }
       grace_period_ms = parsed;
     }
 
     const rotated = rotateApiKey(id, grace_period_ms);
     if (!rotated) {
-      return res.status(404).json({ error: "not_found", message: "Active API key not found" });
+      return res.status(404).json(errorBody("not_found", "Active API key not found"));
     }
     res.json(rotated);
   } catch (error) {
@@ -127,7 +142,7 @@ router.delete("/:id", (req: Request, res: Response, next: NextFunction) => {
     const id = String(req.params.id);
     const revoked = revokeApiKey(id);
     if (!revoked) {
-      return res.status(404).json({ error: "not_found", message: "API key not found" });
+      return res.status(404).json(errorBody("not_found", "API key not found"));
     }
     res.json({ success: true, message: "API key revoked successfully" });
   } catch (error) {
@@ -141,7 +156,7 @@ router.get("/:id/usage", (req: Request, res: Response, next: NextFunction) => {
     const id = String(req.params.id);
     const keyDetails = getApiKeyDetails(id);
     if (!keyDetails) {
-      return res.status(404).json({ error: "not_found", message: "API key not found" });
+      return res.status(404).json(errorBody("not_found", "API key not found"));
     }
     res.json({
       id: keyDetails.id,

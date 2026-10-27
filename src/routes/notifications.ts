@@ -1,5 +1,5 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { badRequest } from "../middleware/errors";
+import { badRequest, errorBody } from "../middleware/errors";
 import { walletAuth } from "../middleware/walletAuth";
 import {
   getPreferences,
@@ -18,7 +18,7 @@ const MAX_PROJECT_IDS = 100;
 
 function requireAddressOwner(req: Request, res: Response, next: NextFunction): void {
   if (req.walletAddress !== req.params.address) {
-    res.status(403).json({ error: "forbidden", message: "Wallet signature does not match address" });
+    res.status(403).json(errorBody("forbidden", "Wallet signature does not match address"));
     return;
   }
   next();
@@ -29,7 +29,9 @@ function address(req: Request): string {
   try {
     validateStellarAddress(a);
   } catch (err) {
-    throw badRequest(err instanceof Error ? err.message : "address must be a valid Stellar address");
+    throw badRequest(
+      err instanceof Error ? err.message : "address must be a valid Stellar address",
+    );
   }
   return a;
 }
@@ -45,7 +47,7 @@ export const publicNotificationsRouter = Router();
 publicNotificationsRouter.get("/confirm", (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!confirmEmail(queryToken(req))) {
-      res.status(404).json({ error: "not_found", message: "Unknown or already-used confirmation token" });
+      res.status(404).json(errorBody("not_found", "Unknown or already-used confirmation token"));
       return;
     }
     res.json({ confirmed: true });
@@ -58,7 +60,7 @@ publicNotificationsRouter.get("/confirm", (req: Request, res: Response, next: Ne
 publicNotificationsRouter.get("/unsubscribe", (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!unsubscribe(queryToken(req))) {
-      res.status(404).json({ error: "not_found", message: "Unknown unsubscribe token" });
+      res.status(404).json(errorBody("not_found", "Unknown unsubscribe token"));
       return;
     }
     res.json({ unsubscribed: true });
@@ -76,9 +78,7 @@ router.get(
     try {
       const prefs = getPreferences(address(req));
       if (!prefs) {
-        res
-          .status(404)
-          .json({ error: "not_found", message: "No preferences registered for this address" });
+        res.status(404).json(errorBody("not_found", "No preferences registered for this address"));
         return;
       }
       res.json(prefs);

@@ -7,7 +7,7 @@ import {
   registerSource,
   getCustomFetchUrl,
 } from "../lib/satellite-sources";
-import { parseProjectId, badRequest } from "../middleware/errors";
+import { parseProjectId, badRequest, errorBody } from "../middleware/errors";
 import { validatePublicUrl } from "../lib/ssrf";
 
 const router = Router();
@@ -43,7 +43,7 @@ router.patch("/:name", (req: Request, res: Response) => {
   }
 
   const ok = configureSource(String(req.params.name), { enabled, priority });
-  if (!ok) return res.status(404).json({ error: "source not found" });
+  if (!ok) return res.status(404).json(errorBody("not_found", "source not found"));
 
   res.json({ ok: true, sources: getSources() });
 });
@@ -120,20 +120,26 @@ router.post("/", async (req: Request, res: Response) => {
 
   const NAME_RE = /^[a-z0-9_-]{1,64}$/i;
   if (!name || typeof name !== "string" || !NAME_RE.test(name.trim())) {
-    return res.status(400).json({ error: "name must be 1-64 characters (alphanumeric, dash, underscore)" });
+    return res
+      .status(400)
+      .json(
+        errorBody("bad_request", "name must be 1-64 characters (alphanumeric, dash, underscore)"),
+      );
   }
 
   const cleanName = name.trim();
   if (cleanName === "sentinel-2" || cleanName === "landsat-8") {
-    return res.status(400).json({ error: `Cannot replace built-in source "${cleanName}"` });
+    return res
+      .status(400)
+      .json(errorBody("bad_request", `Cannot replace built-in source "${cleanName}"`));
   }
 
   if (priority !== undefined && (!Number.isInteger(priority) || priority < 1)) {
-    return res.status(400).json({ error: "priority must be a positive integer" });
+    return res.status(400).json(errorBody("bad_request", "priority must be a positive integer"));
   }
 
   if (!fetchUrl || typeof fetchUrl !== "string") {
-    return res.status(400).json({ error: "fetchUrl is required" });
+    return res.status(400).json(errorBody("bad_request", "fetchUrl is required"));
   }
 
   // SSRF guard: only allow http/https URLs that resolve to public addresses.
@@ -143,7 +149,12 @@ router.post("/", async (req: Request, res: Response) => {
   } catch (err) {
     return res
       .status(400)
-      .json({ error: err instanceof Error ? err.message : "fetchUrl must be a valid URL" });
+      .json(
+        errorBody(
+          "bad_request",
+          err instanceof Error ? err.message : "fetchUrl must be a valid URL",
+        ),
+      );
   }
 
   const sourcePriority = typeof priority === "number" ? priority : 99;
@@ -159,7 +170,9 @@ router.post("/", async (req: Request, res: Response) => {
       validatedUrl,
     );
   } catch (err) {
-    return res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    return res
+      .status(400)
+      .json(errorBody("bad_request", err instanceof Error ? err.message : String(err)));
   }
 
   res.status(201).json({ ok: true, name: cleanName, priority: sourcePriority });

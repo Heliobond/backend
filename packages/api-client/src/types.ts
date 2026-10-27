@@ -538,7 +538,7 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  "/portfolio": {
+  "/portfolio/{address}": {
     parameters: {
       query?: never;
       header?: never;
@@ -548,9 +548,17 @@ export interface paths {
     /** Get portfolio summary */
     get: {
       parameters: {
-        query?: never;
+        query?: {
+          /** @description Pagination cursor from a previous response's next_cursor */
+          cursor?: string;
+          /** @description Maximum number of events to return (1-200) */
+          limit?: number;
+        };
         header?: never;
-        path?: never;
+        path: {
+          /** @description Stellar account (G...) or contract (C...) strkey */
+          address: string;
+        };
         cookie?: never;
       };
       requestBody?: never;
@@ -561,6 +569,24 @@ export interface paths {
             [name: string]: unknown;
           };
           content?: never;
+        };
+        /** @description Invalid address or pagination parameters */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            "application/json": components["schemas"]["Error"];
+          };
+        };
+        /** @description Unauthorized */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            "application/json": components["schemas"]["Error"];
+          };
         };
         /** @description Too many requests */
         429: {

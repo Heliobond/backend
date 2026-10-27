@@ -9,7 +9,7 @@ import { withProjectLock } from "../lib/request-queue";
 import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
 import { generateIdempotencyKey, checkIdempotency } from "../lib/idempotency";
 import { enqueue } from "../lib/tx-queue";
-import { badRequest, maxProjectId } from "../middleware/errors";
+import { badRequest, maxProjectId, errorBody } from "../middleware/errors";
 import { parseContractError } from "../lib/contractErrors";
 
 const router = Router();
@@ -143,7 +143,7 @@ router.post("/score-update", async (req: Request, res: Response) => {
 router.get("/:batchId/status", (req: Request, res: Response) => {
   const job = getJob(String(req.params["batchId"]));
   if (!job) {
-    res.status(404).json({ error: "not_found", message: "Batch job not found" });
+    res.status(404).json(errorBody("not_found", "Batch job not found"));
     return;
   }
   res.json({

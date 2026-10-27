@@ -43,10 +43,8 @@ describe("benchmarking routes", () => {
   });
 
   it("GET /api/benchmarking/benchmarks/:id — 404 for unknown benchmark", async () => {
-    const res = await request(app)
-      .get("/api/benchmarking/benchmarks/nonexistent")
-      .expect(404);
-    expect(res.body.error).toBe("not_found");
+    const res = await request(app).get("/api/benchmarking/benchmarks/nonexistent").expect(404);
+    expect(res.body.error.code).toBe("not_found");
   });
 
   it("POST /api/benchmarking/benchmarks — creates a custom benchmark with admin auth", async () => {
@@ -73,7 +71,7 @@ describe("benchmarking routes", () => {
         thresholds: { poor: 10, fair: 30, good: 50, excellent: 80 },
       })
       .expect(401);
-    expect(res.body.error).toBe("unauthorized");
+    expect(res.body.error.code).toBe("unauthorized");
   });
 
   it("POST /api/benchmarking/benchmarks — 400 for missing fields", async () => {
@@ -95,7 +93,7 @@ describe("benchmarking routes", () => {
         thresholds: { poor: 80, fair: 70, good: 90, excellent: 95 },
       })
       .expect(400);
-    expect(res.body.error).toBe("bad_request");
+    expect(res.body.error.code).toBe("bad_request");
   });
 
   it("POST /api/benchmarking/benchmarks — 400 when a built-in benchmark id is reused", async () => {
@@ -109,7 +107,7 @@ describe("benchmarking routes", () => {
         thresholds: { poor: 20, fair: 40, good: 60, excellent: 80 },
       })
       .expect(400);
-    expect(res.body.error).toBe("bad_request");
+    expect(res.body.error.code).toBe("bad_request");
   });
 
   it("GET /api/benchmarking/:id — evaluates all benchmarks for a project", async () => {

@@ -20,7 +20,6 @@ and take neighbouring services down with it.
 | Memory       | 512 MB   | 256 MB      | `docker-compose.yml`               |
 | CPU          | 0.5 core | 0.25 core   | `docker-compose.yml`               |
 | V8 heap      | 384 MB   | n/a         | `NODE_OPTIONS` in the `Dockerfile` |
-| Redis memory | 256 MB   | 64 MB       | `docker-compose.yml`               |
 
 ### Why the heap ceiling is lower than the memory limit
 
@@ -33,9 +32,6 @@ limit, the kernel OOM killer sends SIGKILL and you get nothing: no stack, no log
 line, just a restart. With the ceiling set below the limit, V8 throws
 `JavaScript heap out of memory` first and you get a stack trace pointing at what
 was allocating.
-
-Redis is capped independently with `--maxmemory 192mb` and an `allkeys-lru`
-eviction policy, so it evicts rather than growing into its own container limit.
 
 ### Running with the limits
 

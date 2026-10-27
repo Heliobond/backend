@@ -15,9 +15,12 @@ export function acceptVersion(req: Request, res: Response, next: NextFunction): 
   const requested = req.headers["accept-version"] as string | undefined;
   if (requested && !SUPPORTED_VERSIONS.includes(requested)) {
     res.status(400).json({
-      error: "Unsupported API version",
-      requested,
-      supported: SUPPORTED_VERSIONS,
+      error: {
+        code: "unsupported_version",
+        message: `Unsupported API version: ${requested}. Supported versions: ${SUPPORTED_VERSIONS.join(", ")}`,
+        requested,
+        supported: SUPPORTED_VERSIONS,
+      },
     });
     return;
   }
@@ -29,10 +32,7 @@ export const LEGACY_SUNSET_DATE = new Date("2027-01-01T00:00:00Z");
 export function deprecationHeaders(_req: Request, res: Response, next: NextFunction): void {
   res.setHeader("Deprecation", "true");
   res.setHeader("Sunset", "2027-01-01T00:00:00Z");
-  res.setHeader(
-    "Link",
-    '</v1>; rel="successor-version"'
-  );
+  res.setHeader("Link", '</v1>; rel="successor-version"');
   next();
 }
 

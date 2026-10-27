@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { timingSafeCompare } from "../lib/timing-safe";
+import { errorBody } from "./errors";
 import { logger } from "../lib/logger";
 
 /**
@@ -29,7 +30,7 @@ export function requireAdminBearer(req: Request, res: Response, next: NextFuncti
 
   const provided = req.headers.authorization ?? "";
   if (!timingSafeCompare(provided, `Bearer ${apiKey}`)) {
-    res.status(401).json({ error: "unauthorized", message: "Missing or invalid bearer token" });
+    res.status(401).json(errorBody("unauthorized", "Missing or invalid bearer token"));
     return;
   }
 

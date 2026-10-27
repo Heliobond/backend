@@ -31,11 +31,16 @@ function buildApp(): Express {
   return app;
 }
 
+const AUTH = { Authorization: "Bearer test-admin-key" };
+
 describe("chains routes", () => {
   let app: Express;
 
+  const originalAdminKey = process.env.ADMIN_API_KEY;
+
   beforeEach(() => {
     jest.clearAllMocks();
+    process.env.ADMIN_API_KEY = "test-admin-key";
     app = buildApp();
     (multichain.getChains as jest.Mock).mockReturnValue([stellarChain]);
     (multichain.getEnabledChains as jest.Mock).mockReturnValue([stellarChain]);
@@ -52,6 +57,11 @@ describe("chains routes", () => {
       credit_quality: 85,
       green_impact: 70,
     });
+  });
+
+  afterAll(() => {
+    if (originalAdminKey === undefined) delete process.env.ADMIN_API_KEY;
+    else process.env.ADMIN_API_KEY = originalAdminKey;
   });
 
   it("GET /v1/chains lists configured chains", async () => {
@@ -71,19 +81,19 @@ describe("chains routes", () => {
 
   it("PATCH /v1/chains/:id configures a chain or returns 404", async () => {
     (multichain.configureChain as jest.Mock).mockReturnValue(true);
-    const ok = await request(app).patch("/v1/chains/stellar").send({ enabled: false }).expect(200);
+    const ok = await request(app).patch("/v1/chains/stellar").set(AUTH).send({ enabled: false }).expect(200);
     expect(ok.body.ok).toBe(true);
 
     (multichain.configureChain as jest.Mock).mockReturnValue(false);
-    await request(app).patch("/v1/chains/unknown").send({ enabled: false }).expect(404);
+    await request(app).patch("/v1/chains/unknown").set(AUTH).send({ enabled: false }).expect(404);
   });
 
   it("POST /v1/chains/broadcast/:projectId rejects non-Stellar chains", async () => {
     const res = await request(app)
-      .post("/v1/chains/broadcast/1")
+      .post("/v1/chains/broadcast/1").set(AUTH)
       .send({ chains: ["ethereum"] })
       .expect(501);
-    expect(res.body.error).toContain("only Stellar");
+    expect(res.body.error.message).toContain("only Stellar");
   });
 
   it("POST /v1/chains/broadcast/:projectId broadcasts to Stellar", async () => {
@@ -93,7 +103,7 @@ describe("chains routes", () => {
       txHash: "abc123",
     });
     const res = await request(app)
-      .post("/v1/chains/broadcast/1")
+      .post("/v1/chains/broadcast/1").set(AUTH)
       .send({ chains: ["stellar"] })
       .expect(200);
     expect(res.body.txHash).toBe("abc123");
@@ -118,8 +128,6 @@ describe("chains routes — admin auth stack (#831)", () => {
     if (originalAdminKey === undefined) delete process.env.ADMIN_API_KEY;
     else process.env.ADMIN_API_KEY = originalAdminKey;
   });
-
-  const AUTH = { Authorization: "Bearer test-admin-key" };
 
   it("PATCH /v1/chains/:id rejects an unauthenticated request", async () => {
     await request(app).patch("/v1/chains/stellar").send({ enabled: false }).expect(401);
@@ -149,9 +157,9 @@ describe("chains routes — PATCH input validation (#831)", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    // Keep ADMIN_API_KEY unset so requireAdminBearer passes through in the
-    // test env — this suite focuses on the validator, not on auth.
-    delete process.env.ADMIN_API_KEY;
+    // requireAdminBearer fails closed without a key, so authenticate every
+    // request — this suite focuses on the validator, not on auth.
+    process.env.ADMIN_API_KEY = "test-admin-key";
     app = buildApp();
     (multichain.configureChain as jest.Mock).mockReturnValue(true);
     (multichain.getChain as jest.Mock).mockReturnValue(stellarChain);
@@ -164,7 +172,7 @@ describe("chains routes — PATCH input validation (#831)", () => {
 
   it("rejects an rpcUrl that resolves to a loopback address", async () => {
     await request(app)
-      .patch("/v1/chains/stellar")
+      .patch("/v1/chains/stellar").set(AUTH)
       .send({ rpcUrl: "http://127.0.0.1/rpc" })
       .expect(400);
     expect(multichain.configureChain).not.toHaveBeenCalled();
@@ -172,19 +180,19 @@ describe("chains routes — PATCH input validation (#831)", () => {
 
   it("rejects an rpcUrl that is not an http(s) URL", async () => {
     await request(app)
-      .patch("/v1/chains/stellar")
+      .patch("/v1/chains/stellar").set(AUTH)
       .send({ rpcUrl: "file:///etc/passwd" })
       .expect(400);
     expect(multichain.configureChain).not.toHaveBeenCalled();
   });
 
   it("rejects a non-string rpcUrl", async () => {
-    await request(app).patch("/v1/chains/stellar").send({ rpcUrl: 42 }).expect(400);
+    await request(app).patch("/v1/chains/stellar").set(AUTH).send({ rpcUrl: 42 }).expect(400);
   });
 
   it("rejects a contractAddress that is not a valid Stellar contract strkey", async () => {
     await request(app)
-      .patch("/v1/chains/stellar")
+      .patch("/v1/chains/stellar").set(AUTH)
       .send({ contractAddress: "not-a-strkey" })
       .expect(400);
     expect(multichain.configureChain).not.toHaveBeenCalled();
@@ -192,7 +200,7 @@ describe("chains routes — PATCH input validation (#831)", () => {
 
   it("accepts a valid contractAddress strkey", async () => {
     const valid = "CADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQP5KR";
-    await request(app).patch("/v1/chains/stellar").send({ contractAddress: valid }).expect(200);
+    await request(app).patch("/v1/chains/stellar").set(AUTH).send({ contractAddress: valid }).expect(200);
     expect(multichain.configureChain).toHaveBeenCalledWith(
       "stellar",
       expect.objectContaining({ contractAddress: valid }),
@@ -200,13 +208,13 @@ describe("chains routes — PATCH input validation (#831)", () => {
   });
 
   it("rejects a non-boolean enabled value", async () => {
-    await request(app).patch("/v1/chains/stellar").send({ enabled: "yes" }).expect(400);
+    await request(app).patch("/v1/chains/stellar").set(AUTH).send({ enabled: "yes" }).expect(400);
   });
 
   it("rejects an empty or overlong name", async () => {
-    await request(app).patch("/v1/chains/stellar").send({ name: "" }).expect(400);
+    await request(app).patch("/v1/chains/stellar").set(AUTH).send({ name: "" }).expect(400);
     await request(app)
-      .patch("/v1/chains/stellar")
+      .patch("/v1/chains/stellar").set(AUTH)
       .send({ name: "x".repeat(201) })
       .expect(400);
   });
