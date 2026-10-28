@@ -165,7 +165,10 @@ export async function runHourlyScoreUpdate(): Promise<void> {
               credit_quality_delta: recent[1].credit_quality - recent[0].credit_quality,
               green_impact_delta: recent[1].green_impact - recent[0].green_impact,
             };
-            await sendAlertIfSignificant(change);
+            // Email alert when this update moved scores significantly (#22, #979).
+            await sendAlertIfSignificant(change).catch((err) =>
+              logger.error("[cron] email alert failed", logger.formatError(err)),
+            );
             // Investor notifications (#661); never let a delivery failure fail the score update.
             await notify({
               type: "score_changed",

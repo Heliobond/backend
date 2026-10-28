@@ -87,7 +87,7 @@ jest.mock("../config", () => ({
   },
 }));
 
-import { recordScoreHistory } from "../lib/history";
+import { recordScoreHistory, getHistory } from "../lib/history";
 import { triggerWebhooks } from "../lib/webhooks";
 import { runHourlyScoreUpdate } from "../lib/scoreUpdateCron";
 import { resetIdempotencyState } from "../lib/scoreService";
@@ -101,7 +101,8 @@ import { getSolarData } from "../lib/iot";
 import { fetchSatelliteWithFallback } from "../lib/satellite-sources";
 import { computeScores } from "../lib/scoring";
 import { recordCronRun } from "../lib/health";
-import { markFailed } from "../lib/duplicate-detection";
+import { markCompleted, markFailed } from "../lib/duplicate-detection";
+import { sendAlertIfSignificant } from "../lib/email";
 
 describe("runHourlyScoreUpdate (cron job execution flow)", () => {
   beforeEach(() => {
@@ -200,6 +201,24 @@ describe("runHourlyScoreUpdate (cron job execution flow)", () => {
 
     expect(recordScoreHistory).toHaveBeenCalledTimes(1);
     expect(triggerWebhooks).toHaveBeenCalledTimes(1);
+  });
+
+  it("increments successCount and completes successfully when sendAlertIfSignificant throws (Issue #979)", async () => {
+    (getTotalProjects as jest.Mock).mockResolvedValue(1);
+    (getHistory as jest.Mock).mockReturnValue([
+      { credit_quality: 50, green_impact: 60 },
+      { credit_quality: 75, green_impact: 80 },
+    ]);
+    (sendAlertIfSignificant as jest.Mock).mockRejectedValueOnce(
+      new Error("Email template rendering failed"),
+    );
+
+    await runHourlyScoreUpdate();
+
+    expect(sendAlertIfSignificant).toHaveBeenCalledTimes(1);
+    expect(markCompleted).toHaveBeenCalledWith(1);
+    expect(markFailed).not.toHaveBeenCalledWith(1);
+    expect(recordCronRun).toHaveBeenCalledWith("score-update", "success");
   });
 
   // ── #765: skip inactive / paused projects ────────────────────────────────
