@@ -55,6 +55,7 @@ import { computeScores } from "../lib/scoring";
 import { updateImpactScore, DuplicateSubmissionError } from "../lib/registry";
 import { generateIdempotencyKey, checkIdempotency } from "../lib/idempotency";
 import { isRpcAvailable } from "../lib/stellar";
+import { logger } from "../lib/logger";
 
 const mockGetSolarData = getSolarData as jest.MockedFunction<typeof getSolarData>;
 const mockFetchSatelliteWithFallback = fetchSatelliteWithFallback as jest.MockedFunction<
@@ -378,5 +379,119 @@ describe("runTxQueueRetry", () => {
 
     expect(mockUpdateImpactScore).toHaveBeenCalled();
     expect(getQueueSize()).toBe(0);
+  });
+
+  describe("freshness, anomaly and fallback gates (#980)", () => {
+    it("skips retry and leaves item in queue when satellite data source is conservative-fallback", async () => {
+      enqueue(1, 80, 70, "RPC unavailable");
+
+      mockIsRpcAvailable.mockReturnValue(true);
+      mockGetSolarData.mockReturnValue({
+        power_output_kw: 750,
+        efficiency_pct: 75,
+        max_power_kw: 1000,
+        timestamp: Date.now(),
+      });
+      mockFetchSatelliteWithFallback.mockResolvedValue({
+        forest_density_pct: 50,
+        ndvi_score: 0.5,
+        timestamp: Date.now(),
+        source: "test",
+        dataSource: "conservative-fallback" as const,
+      });
+
+      await runTxQueueRetry();
+
+      expect(mockUpdateImpactScore).not.toHaveBeenCalled();
+      expect(getQueueSize()).toBe(1);
+    });
+
+    it("skips retry and leaves item in queue when satellite data source is cache", async () => {
+      enqueue(1, 80, 70, "RPC unavailable");
+
+      mockIsRpcAvailable.mockReturnValue(true);
+      mockGetSolarData.mockReturnValue({
+        power_output_kw: 750,
+        efficiency_pct: 75,
+        max_power_kw: 1000,
+        timestamp: Date.now(),
+      });
+      mockFetchSatelliteWithFallback.mockResolvedValue({
+        forest_density_pct: 70,
+        ndvi_score: 0.7,
+        timestamp: Date.now(),
+        source: "test",
+        dataSource: "cache" as const,
+      });
+
+      await runTxQueueRetry();
+
+      expect(mockUpdateImpactScore).not.toHaveBeenCalled();
+      expect(getQueueSize()).toBe(1);
+    });
+
+    it("skips retry and leaves item in queue when reading is stale", async () => {
+      enqueue(1, 80, 70, "RPC unavailable");
+
+      mockIsRpcAvailable.mockReturnValue(true);
+      mockGetSolarData.mockReturnValue({
+        power_output_kw: 750,
+        efficiency_pct: 75,
+        max_power_kw: 1000,
+        timestamp: Date.now() - 3 * 3_600_000, // 3h old (> 2h threshold)
+      });
+      mockFetchSatelliteWithFallback.mockResolvedValue({
+        forest_density_pct: 70,
+        ndvi_score: 0.7,
+        timestamp: Date.now(),
+        source: "test",
+        dataSource: "live" as const,
+      });
+
+      await runTxQueueRetry();
+
+      expect(mockUpdateImpactScore).not.toHaveBeenCalled();
+      expect(getQueueSize()).toBe(1);
+    });
+
+    it("logs summary distinguishing retried, duplicate, and dropped counts", async () => {
+      enqueue(1, 80, 70, "RPC unavailable");
+      enqueue(2, 80, 70, "duplicate item");
+      enqueue(3, 80, 70, "failing item");
+
+      // Item 3 has exceeded max retries
+      const snapshot = getQueueSnapshot();
+      snapshot.find((i) => i.projectId === 3)!.retryCount = 10;
+
+      mockIsRpcAvailable.mockReturnValue(true);
+      mockGetSolarData.mockReturnValue({
+        power_output_kw: 750,
+        efficiency_pct: 75,
+        max_power_kw: 1000,
+        timestamp: Date.now(),
+      });
+      mockFetchSatelliteWithFallback.mockResolvedValue({
+        forest_density_pct: 70,
+        ndvi_score: 0.7,
+        timestamp: Date.now(),
+        source: "test",
+        dataSource: "live" as const,
+      });
+      mockComputeScores.mockReturnValue({ credit_quality: 75, green_impact: 72 });
+      mockGenerateIdempotencyKey.mockImplementation((id) => `key-${id}`);
+      mockCheckIdempotency.mockImplementation((key) => ({
+        isDuplicate: key === "key-2",
+      }));
+      mockUpdateImpactScore.mockImplementation(async (id) => {
+        if (id === 1) return "tx-success";
+        throw new Error("RPC timeout");
+      });
+
+      await runTxQueueRetry();
+
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.stringContaining("1 retried, 1 duplicate, 1 dropped"),
+      );
+    });
   });
 });

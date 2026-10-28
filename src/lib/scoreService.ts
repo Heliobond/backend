@@ -3,7 +3,12 @@ import { fetchSatelliteWithFallback } from "./satellite-sources";
 import { computeScores } from "./scoring";
 import { detectAnomalies } from "./anomaly";
 import { updateImpactScore, RpcDegradedError } from "./registry";
-import { generateIdempotencyKey, checkIdempotency, removeIdempotencyKey, clearIdempotencyStore } from "./idempotency";
+import {
+  generateIdempotencyKey,
+  checkIdempotency,
+  removeIdempotencyKey,
+  clearIdempotencyStore,
+} from "./idempotency";
 import { logger } from "./logger";
 import { recordOracleScoreUpdate } from "./prometheus";
 
@@ -61,11 +66,76 @@ export interface ScoreUpdateSkipped {
   reason: string;
 }
 
+export interface InputValidationResult {
+  valid: boolean;
+  reason?: string;
+}
+
+/**
+ * Validates freshness and anomalies of solar and satellite inputs before
+ * computing scores or submitting them to the Soroban contract (#980).
+ */
+export function validateScoreInputs(
+  projectId: number,
+  solar: { efficiency_pct: number; power_output_kw: number; timestamp?: unknown },
+  satellite: {
+    forest_density_pct: number;
+    ndvi_score: number;
+    dataSource?: string;
+    timestamp?: unknown;
+  },
+): InputValidationResult {
+  const maxAge = maxReadingAgeMs();
+  const solarAge = readingAgeMs(solar.timestamp);
+  const satAge = readingAgeMs(satellite.timestamp);
+  if (solarAge !== null && solarAge > maxAge) {
+    logger.warn(`[score] skipping project ${projectId}: stale solar reading`, { solarAge, maxAge });
+    return { valid: false, reason: `stale solar reading (age ${solarAge}ms > max ${maxAge}ms)` };
+  }
+  if (satAge !== null && satAge > maxAge) {
+    logger.warn(`[score] skipping project ${projectId}: stale satellite reading`, {
+      satAge,
+      maxAge,
+    });
+    return { valid: false, reason: `stale satellite reading (age ${satAge}ms > max ${maxAge}ms)` };
+  }
+  const dataSource = satellite.dataSource;
+  if (dataSource === "conservative-fallback") {
+    logger.warn(
+      `[score] skipping project ${projectId}: satellite sources down, only conservative fallback available`,
+    );
+    return { valid: false, reason: "satellite sources unavailable (conservative fallback)" };
+  }
+  if (dataSource === "cache") {
+    logger.warn(`[score] skipping project ${projectId}: only cached satellite data available`);
+    return { valid: false, reason: "stale satellite data (served from cache)" };
+  }
+
+  const anomalyResult = detectAnomalies(projectId, {
+    efficiency_pct: solar.efficiency_pct,
+    power_output_kw: solar.power_output_kw,
+    forest_density_pct: satellite.forest_density_pct,
+    ndvi_score: satellite.ndvi_score,
+  });
+  const blocking = anomalyResult.anomalies.filter((a) => a.severity === "high");
+  if (blocking.length > 0) {
+    const detail = blocking.map((a) => `${a.metric}:${a.type}`).join(", ");
+    logger.warn(`[score] skipping project ${projectId}: high-severity anomaly`, { detail });
+    return { valid: false, reason: `anomalous reading detected (${detail})` };
+  }
+  for (const alert of anomalyResult.anomalies) {
+    logger.warn(`[score] project ${projectId}: non-blocking anomaly`, {
+      metric: alert.metric,
+      type: alert.type,
+      severity: alert.severity,
+    });
+  }
+
+  return { valid: true };
+}
+
 export type ScoreUpdateResult =
-  | ScoreUpdateSuccess
-  | ScoreUpdateDeferred
-  | ScoreUpdateSkipped
-  | ScoreUpdateError;
+  ScoreUpdateSuccess | ScoreUpdateDeferred | ScoreUpdateSkipped | ScoreUpdateError;
 
 /**
  * Fetch IoT + satellite data, compute impact scores, and submit to the
@@ -95,52 +165,22 @@ export async function updateScoreForProject(projectId: number): Promise<ScoreUpd
     const solar = getSolarData(projectId);
     const satellite = await fetchSatelliteWithFallback(projectId);
 
-    // ── Freshness gate: never push a score built on stale/degraded inputs ──
-    const maxAge = maxReadingAgeMs();
-    const solarAge = readingAgeMs((solar as { timestamp?: unknown }).timestamp);
-    const satAge = readingAgeMs((satellite as { timestamp?: unknown }).timestamp);
-    if (solarAge !== null && solarAge > maxAge) {
-      logger.warn(`[score] skipping project ${projectId}: stale solar reading`, { solarAge, maxAge });
-      return { status: "skipped", projectId, reason: `stale solar reading (age ${solarAge}ms > max ${maxAge}ms)` };
-    }
-    if (satAge !== null && satAge > maxAge) {
-      logger.warn(`[score] skipping project ${projectId}: stale satellite reading`, { satAge, maxAge });
-      return { status: "skipped", projectId, reason: `stale satellite reading (age ${satAge}ms > max ${maxAge}ms)` };
-    }
-    const dataSource = (satellite as { dataSource?: string }).dataSource;
-    if (dataSource === "conservative-fallback") {
-      logger.warn(`[score] skipping project ${projectId}: satellite sources down, only conservative fallback available`);
-      return { status: "skipped", projectId, reason: "satellite sources unavailable (conservative fallback)" };
-    }
-    if (dataSource === "cache") {
-      logger.warn(`[score] skipping project ${projectId}: only cached satellite data available`);
-      return { status: "skipped", projectId, reason: "stale satellite data (served from cache)" };
-    }
-
-    // ── Anomaly gate: a dead feed / bad reading must not reach the ledger ──
-    const anomalyResult = detectAnomalies(projectId, {
-      efficiency_pct: solar.efficiency_pct,
-      power_output_kw: solar.power_output_kw,
-      forest_density_pct: satellite.forest_density_pct,
-      ndvi_score: satellite.ndvi_score,
-    });
-    const blocking = anomalyResult.anomalies.filter((a) => a.severity === "high");
-    if (blocking.length > 0) {
-      const detail = blocking.map((a) => `${a.metric}:${a.type}`).join(", ");
-      logger.warn(`[score] skipping project ${projectId}: high-severity anomaly`, { detail });
-      return { status: "skipped", projectId, reason: `anomalous reading detected (${detail})` };
-    }
-    for (const alert of anomalyResult.anomalies) {
-      logger.warn(`[score] project ${projectId}: non-blocking anomaly`, {
-        metric: alert.metric, type: alert.type, severity: alert.severity,
-      });
+    // ── Freshness & Anomaly gates (#980) ──
+    const validation = validateScoreInputs(projectId, solar, satellite);
+    if (!validation.valid) {
+      return { status: "skipped", projectId, reason: validation.reason! };
     }
 
     const scores = computeScores({ solar, satellite });
 
     let txHash: string;
     try {
-      txHash = await updateImpactScore(projectId, scores.credit_quality, scores.green_impact, idempotencyKey);
+      txHash = await updateImpactScore(
+        projectId,
+        scores.credit_quality,
+        scores.green_impact,
+        idempotencyKey,
+      );
       recordOracleScoreUpdate(projectId);
     } catch (updateErr) {
       removeIdempotencyKey(idempotencyKey);
