@@ -15,53 +15,57 @@ on:
           - minor
           - major
 
-permissions:
-  contents: write
-  issues: write
-  pull-requests: write
+# No job inherits a token grant; each one declares the minimum it needs.
+permissions: {}
 
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Release
+  # Installs, builds and tests with a read-only token. When PR #969's payload
+  # reached main, it ran here during `bun run build` while the job held a
+  # contents:write token. Project code never runs in the job that can write.
+  build-test:
+    name: Build and test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          fetch-depth: 0
+          persist-credentials: false
 
       - name: Install bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.x"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Check lockfiles are in sync
-        run: |
-          echo "Checking that package-lock.json is in sync with package.json (bun.lock is canonical)..."
-          if [ -f package-lock.json ]; then
-            cp package-lock.json package-lock.json.orig
-            npm install --package-lock-only --ignore-scripts
-            if ! diff -q package-lock.json package-lock.json.orig >/dev/null 2>&1; then
-              echo "::error::package-lock.json is out of sync with package.json. Run 'npm install' locally after any 'bun add / bun update' and commit the updated lockfile."
-              diff -u package-lock.json.orig package-lock.json | head -n 200 || true
-              mv package-lock.json.orig package-lock.json
-              exit 1
-            fi
-            echo "package-lock.json is in sync."
-            rm package-lock.json.orig
-          fi
-
       - name: Build
         run: bun run build
 
       - name: Test
         run: bun run test
+
+  # Holds the write token. It installs no project dependencies and runs no
+  # package.json scripts: the package is private, so nothing is published.
+  release:
+    name: Release
+    needs: build-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      npm_config_ignore_scripts: "true"
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
 
       - name: Configure git identity
         run: |
@@ -81,7 +85,7 @@ jobs:
         env:
           VERSION_BUMP: ${{ github.event.inputs.version_bump }}
         run: |
-          NEW_VERSION=$(npm version "$VERSION_BUMP" --no-git-tag-version)
+          NEW_VERSION=$(npm version "$VERSION_BUMP" --no-git-tag-version --ignore-scripts)
           echo "version=${NEW_VERSION#v}" >> "$GITHUB_OUTPUT"
 
       - name: Update CHANGELOG (manual)

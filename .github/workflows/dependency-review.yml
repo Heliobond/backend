@@ -1,0 +1,28 @@
+name: Dependency review
+
+# Compares the dependency graph of a PR against its base and fails when the PR
+# adds a dependency with a high-severity or malware advisory. Uses the
+# repository's dependency graph (Settings > Code security), which is enabled.
+
+on:
+  pull_request:
+
+# No job inherits a token grant; each one declares the minimum it needs.
+permissions: {}
+
+jobs:
+  dependency-review:
+    name: dependency review
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        with:
+          fail-on-severity: high
+          fail-on-scopes: runtime, development
