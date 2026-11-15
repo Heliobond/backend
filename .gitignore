@@ -1,8 +1,7 @@
 node_modules/
 dist/
-.env
 coverage/
-.env.local
 load-tests/reports/
 .mimocode/
 fix.mdlogs/
+config.bat
