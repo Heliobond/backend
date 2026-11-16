@@ -32,6 +32,20 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Scan tracked files for Wave indicators
+        env:
+          SCANNER_REF: ${{ github.event.pull_request.base.sha || github.sha }}
+        run: |
+          scanner="$RUNNER_TEMP/check-wave.py"
+          if git cat-file -e "$SCANNER_REF:scripts/check-wave.py"; then
+            git show "$SCANNER_REF:scripts/check-wave.py" > "$scanner"
+          else
+            # Bootstrap the introducing PR with the reviewed scanner bytes.
+            git show HEAD:scripts/check-wave.py > "$scanner"
+            echo "c4eae9787ff4b1ddd931e17bfd4c7d7d9a899d3dc1c9881fcc6a37692ae42a3e  $scanner" | sha256sum --check --status
+          fi
+          python3 -I "$scanner"
+
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
@@ -120,6 +134,9 @@ jobs:
 
       - name: Test
         run: bun run test
+
+      - name: Test the Wave scanner
+        run: python3 -I scripts/test_check_wave.py
 
       - name: Test the security checks
         run: node --test 'scripts/*.test.mjs'
