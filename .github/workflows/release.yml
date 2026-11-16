@@ -77,7 +77,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npx semantic-release
+        run: >-
+          npx --yes
+          --package semantic-release@25.0.9
+          --package @semantic-release/changelog@6.0.3
+          --package @semantic-release/git@10.0.1
+          semantic-release
 
       - name: Bump version (manual)
         if: github.event_name == 'workflow_dispatch'
