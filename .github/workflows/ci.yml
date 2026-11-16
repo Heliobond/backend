@@ -11,7 +11,7 @@ permissions: {}
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Runs before anything installs, builds or executes the PR's code. PR #969's
@@ -81,6 +81,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Install bun
@@ -218,3 +219,14 @@ jobs:
         uses: reviewdog/action-actionlint@cfa6a621f27735ccc88d35af9d0608692fd9b9f7 # v1.80.8
         with:
           actionlint_flags: "-color"
+
+  release:
+    needs: test
+    if: >-
+      github.event_name == 'push' && github.repository == 'Heliobond/backend' &&
+      github.ref == 'refs/heads/main' && needs.test.result == 'success'
+    uses: ./.github/workflows/release.yml
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write

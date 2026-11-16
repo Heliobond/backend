@@ -488,7 +488,8 @@ Detailed API reference with examples and error codes is available in [API.md](./
 ## Changelog
 
 Versioned release notes are published in [GitHub Releases](https://github.com/Heliobond/backend/releases).
-Automatic releases derive their versions and notes from Conventional Commits.
+After CI builds and tests a push to `main`, it calls the release workflow for that commit.
+Automatic releases derive their versions and notes from Conventional Commits. Manual releases build and test the selected commit before publishing.
 [CHANGELOG.md](./CHANGELOG.md) retains historical and unreleased notes.
 
 ## Contributing

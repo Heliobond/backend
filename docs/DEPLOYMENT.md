@@ -70,12 +70,12 @@ loop's per-cycle allocations before increasing the ceiling.
 
 ## CI/CD pipeline
 
-Three workflows, each with a distinct job:
+The backend runs these workflows:
 
 | Workflow      | Trigger                           | Does                          |
 | ------------- | --------------------------------- | ----------------------------- |
 | `ci.yml`      | push to `main`, PRs to `main`     | build, test, dependency audit |
-| `release.yml` | push to `main`, manual dispatch   | git tag, GitHub release notes |
+| `release.yml` | called by CI after validation on a `main` push, or manually dispatched | git tag, GitHub release notes |
 | `deploy.yml`  | push to `main`, release, tag `v*` | build image, push, deploy     |
 | `load-test.yml` | schedule (`0 2 * * *`) & manual dispatch | k6 load testing scenarios |
 | `security-audit.yml` | schedule (`0 6 * * 1`) & manual dispatch | dependency audit, code scan, secret detection, license compliance |

@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { parse } from "yaml";
 
 const ROOT = path.resolve(__dirname, "../../");
 const WORKFLOWS_DIR = path.join(ROOT, ".github", "workflows");
@@ -50,10 +51,10 @@ describe("deployment workflow tests (#284)", () => {
       expect(content).toMatch(/bun run build|npm run build|yarn build/);
     });
 
-    it("uses concurrency to cancel in-progress runs", () => {
-      const content = readWorkflow("ci.yml");
-      expect(content).toMatch(/concurrency:/);
-      expect(content).toMatch(/cancel-in-progress:\s*true/);
+    it("cancels superseded PR runs while allowing main releases to finish", () => {
+      expect(parse(readWorkflow("ci.yml")).concurrency["cancel-in-progress"]).toBe(
+        "${{ github.event_name == 'pull_request' }}",
+      );
     });
   });
 
@@ -62,12 +63,51 @@ describe("deployment workflow tests (#284)", () => {
       expect(workflowExists("release.yml")).toBe(true);
     });
 
-    it("triggers on push to main or on release", () => {
-      const content = readWorkflow("release.yml");
-      expect(content).toMatch(/on:/);
-      const triggersOnMain = /push:/.test(content) && /main/.test(content);
-      const triggersOnRelease = /release:/.test(content) || /workflow_dispatch/.test(content);
-      expect(triggersOnMain || triggersOnRelease).toBe(true);
+    const ci = parse(readWorkflow("ci.yml"));
+    const release = parse(readWorkflow("release.yml"));
+    const writePermissions = { contents: "write", issues: "write", "pull-requests": "write" };
+
+    it("calls release only after successful validation on a canonical main push", () => {
+      expect(ci.jobs.test.needs).toBe("security-gates");
+      expect(ci.jobs.release).toEqual({
+        needs: "test",
+        if:
+          "github.event_name == 'push' && github.repository == 'Heliobond/backend' && " +
+          "github.ref == 'refs/heads/main' && needs.test.result == 'success'",
+        uses: "./.github/workflows/release.yml",
+        permissions: writePermissions,
+      });
+      expect(Object.keys(release.on).sort()).toEqual(["workflow_call", "workflow_dispatch"]);
+    });
+
+    it("requires successful manual validation, and excludes cancelled or untrusted publication", () => {
+      expect(release.jobs["build-test"].if).toBe("github.event_name == 'workflow_dispatch'");
+      expect(release.jobs.release.needs).toBe("build-test");
+      expect(release.jobs.release.if).toBe(
+        "!cancelled() && github.repository == 'Heliobond/backend' && " +
+          "((github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.build-test.result == 'skipped') || " +
+          "(github.event_name == 'workflow_dispatch' && needs.build-test.result == 'success'))",
+      );
+      expect(release.jobs.release.permissions).toEqual(writePermissions);
+    });
+
+    it("builds and tests the exact release SHA with read-only permissions", () => {
+      for (const job of [ci.jobs.test, release.jobs["build-test"]]) {
+        expect(job.permissions).toEqual({ contents: "read" });
+        expect(job.steps[0].uses).toMatch(/^actions\/checkout@/);
+        expect(job.steps[0].with).toEqual({
+          ref: "${{ github.sha }}",
+          "persist-credentials": false,
+        });
+        expect(job.steps).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ run: "bun run build" }),
+            expect.objectContaining({ run: "bun run test" }),
+          ]),
+        );
+      }
+      expect(release.jobs.release.steps[0].uses).toMatch(/^actions\/checkout@/);
+      expect(release.jobs.release.steps[0].with.ref).toBe("${{ github.sha }}");
     });
   });
 
