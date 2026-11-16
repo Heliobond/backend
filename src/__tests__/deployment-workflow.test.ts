@@ -71,6 +71,27 @@ describe("deployment workflow tests (#284)", () => {
     });
   });
 
+  describe("protected-branch releases", () => {
+    it("uses GitHub release notes without plugins that prepare repository commits", () => {
+      const config = JSON.parse(fs.readFileSync(path.join(ROOT, ".releaserc.json"), "utf8"));
+      const plugins = config.plugins.map((plugin: string | [string, unknown]) =>
+        typeof plugin === "string" ? plugin : plugin[0],
+      );
+      expect(plugins).toContain("@semantic-release/github");
+      expect(plugins).not.toContain("@semantic-release/git");
+      expect(plugins).not.toContain("@semantic-release/changelog");
+      expect(plugins).not.toContain("@semantic-release/npm");
+    });
+
+    it("pushes only the selected manual release tag", () => {
+      const workflow = readWorkflow("release.yml");
+      expect(workflow).toContain('git push origin "refs/tags/v${VERSION}"');
+      expect(workflow).not.toMatch(/git push[^\n]*HEAD|git commit/);
+      expect(workflow).toContain('npm version "${CURRENT_VERSION#v}"');
+      expect(workflow).toContain("git tag --merged HEAD --sort=-version:refname");
+    });
+  });
+
   describe("Dockerfile", () => {
     const dockerfilePath = path.join(ROOT, "Dockerfile");
 
