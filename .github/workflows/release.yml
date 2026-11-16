@@ -1,8 +1,7 @@
 name: Release
 
 on:
-  push:
-    branches: [main]
+  workflow_call:
   workflow_dispatch:
     inputs:
       version_bump:
@@ -28,12 +27,15 @@ jobs:
   # contents:write token. Project code never runs in the job that can write.
   build-test:
     name: Build and test
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Install bun
@@ -55,7 +57,13 @@ jobs:
   release:
     name: Release
     needs: build-test
+    # The CI caller gates main pushes on its read-only test job for this SHA.
+    if: >-
+      !cancelled() && github.repository == 'Heliobond/backend' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.build-test.result == 'skipped') ||
+      (github.event_name == 'workflow_dispatch' && needs.build-test.result == 'success'))
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write
       issues: write
@@ -65,6 +73,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Configure git identity
