@@ -282,4 +282,23 @@ describe("GraphQL API Integration", () => {
     expect(res.body.errors).toBeUndefined();
     expect(res.body.data.__schema.queryType.name).toBe("Query");
   });
+
+  it("rejects negative pagination arguments", async () => {
+    for (const args of ["limit: -1", "offset: -1", "limit: -5, offset: -2"]) {
+      const query = `query { projects(${args}) { id } }`;
+      const res = await request(app).post("/graphql").set("X-API-Key", consumerKey).send({ query });
+      expect(res.status).toBe(200);
+      expect(res.body.errors).toBeDefined();
+      expect(res.body.errors[0].message).toMatch(/negative|must be/i);
+      expect(res.body.data).toBeNull();
+    }
+  });
+
+  it("clamps the upper limit and allows zero offset", async () => {
+    const query = `query { projects(limit: 500, offset: 0) { id } }`;
+    const res = await request(app).post("/graphql").set("X-API-Key", consumerKey).send({ query });
+    expect(res.status).toBe(200);
+    expect(res.body.errors).toBeUndefined();
+    expect(res.body.data.projects.length).toBe(2);
+  });
 });

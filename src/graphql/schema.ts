@@ -177,6 +177,9 @@ export const graphqlRoot = {
     if (!context.isAdmin && !context.isConsumer) {
       throw new Error("Unauthorized: Valid API Key is required");
     }
+    if (limit < 0 || offset < 0) {
+      throw new Error("limit and offset must not be negative");
+    }
     const total = await getTotalProjects();
     // Cap limit to prevent excessive memory usage (#696)
     const cappedLimit = Math.min(limit ?? 10, 100);
@@ -205,10 +208,7 @@ export const graphqlRoot = {
     const BATCH_SIZE = 1000;
     for (let offset = 0; offset < total; offset += BATCH_SIZE) {
       const batchEnd = Math.min(offset + BATCH_SIZE, total);
-      const ids = Array.from(
-        { length: batchEnd - offset },
-        (_, index) => offset + index + 1,
-      );
+      const ids = Array.from({ length: batchEnd - offset }, (_, index) => offset + index + 1);
       const batch = await Promise.all(
         ids.map(async (id) => ({
           id,
