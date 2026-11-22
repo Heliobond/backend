@@ -9,7 +9,7 @@ Heliobond is a comprehensive platform for green energy investment tracking and i
 - **Backend API (this repository)**: Node.js/TypeScript server that computes impact scores and interacts with the Stellar blockchain
 - **Frontend**: User interface for viewing projects and impact scores
 - **Blockchain Contracts**: Soroban smart contracts for project registry and investment tracking
-- **Data Processing**: Components for handling IoT data and financial calculations
+- **Data Processing**: Components for handling IoT data and financial calculations.
 
 ---
 
