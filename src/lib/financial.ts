@@ -96,7 +96,19 @@ function round(n: number, decimals = 2): number {
   return Math.round(n * factor) / factor;
 }
 
-function buildCashFlows(input: FinancialInput): DiscountedCashFlow[] {
+// Raw (unrounded) intermediate values kept alongside the display row so that
+// downstream aggregations (NPV, IRR, payback) sum exact numbers and are not
+// subject to cumulative rounding drift.
+interface RawCashFlow {
+  netCF: number;
+  dcf: number;
+  cumulativeDcf: number;
+  revenue: number;
+  maintenanceCost: number;
+  degradedOutput: number;
+}
+
+function buildCashFlows(input: FinancialInput): { rows: DiscountedCashFlow[]; raw: RawCashFlow[] } {
   const {
     installation_cost,
     annual_maintenance_cost,
@@ -110,20 +122,24 @@ function buildCashFlows(input: FinancialInput): DiscountedCashFlow[] {
     tax_incentives,
   } = input;
 
-  const cashFlows: DiscountedCashFlow[] = [];
+  const rows: DiscountedCashFlow[] = [];
+  const raw: RawCashFlow[] = [];
+  let rawCumulativeDcf = 0;
 
   for (let year = 0; year <= project_lifetime_years; year++) {
     if (year === 0) {
       const netCF = -(installation_cost - tax_incentives);
       const dcf = netCF;
-      cashFlows.push({
+      rawCumulativeDcf = dcf;
+      raw.push({ netCF, dcf, cumulativeDcf: rawCumulativeDcf, revenue: 0, maintenanceCost: 0, degradedOutput: 0 });
+      rows.push({
         year: 0,
         energy_output_kwh: 0,
         revenue: 0,
         maintenance_cost: 0,
         net_cash_flow: round(netCF),
         discounted_cash_flow: round(dcf),
-        cumulative_discounted_cash_flow: round(dcf),
+        cumulative_discounted_cash_flow: round(rawCumulativeDcf),
       });
       continue;
     }
@@ -141,20 +157,21 @@ function buildCashFlows(input: FinancialInput): DiscountedCashFlow[] {
       netCF += salvage_value;
     }
     const dcf = netCF / Math.pow(1 + discount_rate, year);
-    const prevCumulative = cashFlows[year - 1]?.cumulative_discounted_cash_flow ?? 0;
+    rawCumulativeDcf += dcf;
 
-    cashFlows.push({
+    raw.push({ netCF, dcf, cumulativeDcf: rawCumulativeDcf, revenue, maintenanceCost, degradedOutput });
+    rows.push({
       year,
       energy_output_kwh: round(degradedOutput),
       revenue: round(revenue),
       maintenance_cost: round(maintenanceCost),
       net_cash_flow: round(netCF),
       discounted_cash_flow: round(dcf),
-      cumulative_discounted_cash_flow: round(prevCumulative + dcf),
+      cumulative_discounted_cash_flow: round(rawCumulativeDcf),
     });
   }
 
-  return cashFlows;
+  return { rows, raw };
 }
 
 function calculateIRR(cashFlows: number[], guess = 0.1): number {
@@ -220,13 +237,11 @@ export function createDefaultFinancialInput(
 }
 
 export function calculateCostBenefit(input: FinancialInput): CostBenefitResult {
-  const cashFlows = buildCashFlows(input);
-  const operatingCashFlows = cashFlows.filter((cf) => cf.year > 0);
+  const { rows, raw } = buildCashFlows(input);
+  const operatingRaw = raw.slice(1); // skip year-0 installation row
 
-  const totalRevenue = round(operatingCashFlows.reduce((sum, cf) => sum + cf.revenue, 0));
-  const totalMaintenance = round(
-    operatingCashFlows.reduce((sum, cf) => sum + cf.maintenance_cost, 0),
-  );
+  const totalRevenue = round(operatingRaw.reduce((sum, r) => sum + r.revenue, 0));
+  const totalMaintenance = round(operatingRaw.reduce((sum, r) => sum + r.maintenanceCost, 0));
   const totalInstallation = input.installation_cost;
   const totalOperating = totalMaintenance;
   const totalCost = round(totalInstallation + totalOperating);
@@ -245,53 +260,43 @@ export function calculateCostBenefit(input: FinancialInput): CostBenefitResult {
     salvage_value: input.salvage_value,
     net_benefit: netBenefit,
     benefit_cost_ratio: benefitCostRatio,
-    cash_flows: cashFlows,
+    cash_flows: rows,
   };
 }
 
 export function calculatePaybackPeriod(input: FinancialInput): PaybackPeriodResult {
-  const cashFlows = buildCashFlows(input);
-  const netCashFlows = cashFlows.map((cf) => cf.net_cash_flow);
-  const discountedCashFlows = cashFlows.map((cf) => cf.discounted_cash_flow);
+  const { rows, raw } = buildCashFlows(input);
 
   const cumulative: { year: number; cumulative_net: number }[] = [];
   let cumNet = 0;
-
-  for (let i = 0; i < netCashFlows.length; i++) {
-    cumNet += netCashFlows[i];
+  for (let i = 0; i < raw.length; i++) {
+    cumNet += raw[i].netCF;
     cumulative.push({ year: i, cumulative_net: round(cumNet) });
   }
 
   let simplePaybackYears = 0;
   let cum = 0;
-  for (let i = 0; i < netCashFlows.length; i++) {
-    cum += netCashFlows[i];
+  for (let i = 0; i < raw.length; i++) {
+    cum += raw[i].netCF;
     if (cum >= 0) {
-      const prevCum = cum - netCashFlows[i];
-      if (netCashFlows[i] !== 0) {
-        simplePaybackYears = i - 1 + Math.abs(prevCum) / netCashFlows[i];
-      } else {
-        simplePaybackYears = i;
-      }
+      const prevCum = cum - raw[i].netCF;
+      simplePaybackYears = raw[i].netCF !== 0 ? i - 1 + Math.abs(prevCum) / raw[i].netCF : i;
       break;
     }
   }
 
   let discountedPaybackYears = 0;
   let discCum = 0;
-  for (let i = 0; i < discountedCashFlows.length; i++) {
-    discCum += discountedCashFlows[i];
+  for (let i = 0; i < raw.length; i++) {
+    discCum += raw[i].dcf;
     if (discCum >= 0) {
-      const prevDiscCum = discCum - discountedCashFlows[i];
-      if (discountedCashFlows[i] !== 0) {
-        discountedPaybackYears = i - 1 + Math.abs(prevDiscCum) / discountedCashFlows[i];
-      } else {
-        discountedPaybackYears = i;
-      }
+      const prevDiscCum = discCum - raw[i].dcf;
+      discountedPaybackYears = raw[i].dcf !== 0 ? i - 1 + Math.abs(prevDiscCum) / raw[i].dcf : i;
       break;
     }
   }
 
+  void rows; // rows exposed via cash_flows in cost-benefit; not needed here
   return {
     payback_years: round(simplePaybackYears),
     simple_payback_years: round(simplePaybackYears),
@@ -302,19 +307,13 @@ export function calculatePaybackPeriod(input: FinancialInput): PaybackPeriodResu
 }
 
 export function calculateNPV(input: FinancialInput): NPVResult {
-  const cashFlows = buildCashFlows(input);
-  const netCFs = cashFlows.map((cf) => cf.net_cash_flow);
-  const discountedCFs = cashFlows.map((cf) => cf.discounted_cash_flow);
+  const { rows, raw } = buildCashFlows(input);
 
-  const npv = round(discountedCFs.reduce((sum, cf) => sum + cf, 0));
+  const npv = round(raw.reduce((sum, r) => sum + r.dcf, 0));
+  const irr = calculateIRR(raw.map((r) => r.netCF));
 
-  const irr = calculateIRR(netCFs);
-
-  const totalPVBenefits = round(
-    discountedCFs.filter((_, i) => i > 0).reduce((sum, cf) => sum + cf, 0),
-  );
-  const totalPVCosts = round(Math.abs(discountedCFs[0]));
-
+  const totalPVBenefits = round(raw.slice(1).reduce((sum, r) => sum + r.dcf, 0));
+  const totalPVCosts = round(Math.abs(raw[0].dcf));
   const profitabilityIndex = totalPVCosts > 0 ? round(totalPVBenefits / totalPVCosts) : 0;
 
   return {
@@ -323,7 +322,7 @@ export function calculateNPV(input: FinancialInput): NPVResult {
     profitability_index: profitabilityIndex,
     total_present_value_benefits: totalPVBenefits,
     total_present_value_costs: totalPVCosts,
-    discounted_cash_flows: cashFlows,
+    discounted_cash_flows: rows,
   };
 }
 
