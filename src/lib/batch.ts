@@ -114,13 +114,39 @@ export function getJob(id: string): BatchJob | undefined {
   return jobs.get(id);
 }
 
+export class JobAlreadyRunningError extends Error {
+  constructor(id: string) {
+    super(`Batch job ${id} is already running`);
+    this.name = "JobAlreadyRunningError";
+  }
+}
+
+export class JobAlreadyTerminalError extends Error {
+  constructor(id: string, status: BatchStatus) {
+    super(`Batch job ${id} has already reached terminal state: ${status}`);
+    this.name = "JobAlreadyTerminalError";
+  }
+}
+
 /**
  * Run a batch job using concurrent sequential processing.
+ *
+ * Guards the queued → running transition: a job in state "running" returns
+ * the existing execution (idempotent for the caller); a job that has already
+ * reached a terminal state ("completed" / "failed") throws
+ * JobAlreadyTerminalError so callers can surface a documented error rather
+ * than silently re-running processors and appending duplicate results (#1076).
  */
 export async function runJob(
   job: BatchJob,
   processor: (projectId: number) => Promise<BatchResult>,
 ): Promise<void> {
+  if (job.status === "running") {
+    throw new JobAlreadyRunningError(job.id);
+  }
+  if (job.status === "completed" || job.status === "failed") {
+    throw new JobAlreadyTerminalError(job.id, job.status);
+  }
   await runBatchSequential(job, processor);
 }
 
