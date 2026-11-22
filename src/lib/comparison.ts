@@ -70,17 +70,28 @@ function round(n: number): number {
 }
 
 export async function loadProjectMetrics(ids: number[]): Promise<ProjectMetrics[]> {
-  const results: ProjectMetrics[] = [];
-  for (const id of ids) {
-    const exists = await projectExists(id);
-    if (!exists) {
-      throw new Error(`Project ${id} not found`);
-    }
+  // Deduplicate so each project triggers at most one registry existence check
+  // regardless of how many times the same id appears in the request (#1097).
+  const uniqueIds = [...new Set(ids)];
+
+  // Check all projects in parallel — one registry call each, all in-flight at
+  // once instead of sequentially.  Twenty projects = twenty parallel calls,
+  // not forty serial ones.
+  const existenceResults = await Promise.all(
+    uniqueIds.map(async (id) => ({ id, exists: await projectExists(id) })),
+  );
+
+  const missing = existenceResults.filter((r) => !r.exists).map((r) => r.id);
+  if (missing.length > 0) {
+    throw new Error(`Project ${missing[0]} not found`);
+  }
+
+  return uniqueIds.map((id) => {
     const solar = getSolarData(id);
     const satellite = getSatelliteData(id);
     const scores = computeScores({ solar, satellite });
     const combined = scores.credit_quality + scores.green_impact;
-    results.push({
+    return {
       id,
       credit_quality: scores.credit_quality,
       green_impact: scores.green_impact,
@@ -89,9 +100,8 @@ export async function loadProjectMetrics(ids: number[]): Promise<ProjectMetrics[
       forest_density_pct: satellite.forest_density_pct,
       ndvi_score: satellite.ndvi_score,
       combined_score: combined,
-    });
-  }
-  return results;
+    };
+  });
 }
 
 export async function compareProjects(ids: number[]): Promise<ComparisonResult> {
