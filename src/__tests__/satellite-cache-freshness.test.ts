@@ -11,12 +11,10 @@ type Mod = typeof import("../lib/satellite-sources");
  * Loads a fresh copy of the module (module-level cache/source state) with the
  * built-in sources disabled and one controllable source registered.
  */
-function load(): { mod: Mod; respond: (r: SatelliteReading | Error) => void } {
+async function load(): Promise<{ mod: Mod; respond: (r: SatelliteReading | Error) => void }> {
   let next: SatelliteReading | Error = new Error("not configured");
-  let mod!: Mod;
-  jest.isolateModules(() => {
-    mod = require("../lib/satellite-sources");
-  });
+  jest.resetModules();
+  const mod: Mod = await import("../lib/satellite-sources");
   mod.configureSource("sentinel-2", { enabled: false });
   mod.configureSource("landsat-8", { enabled: false });
   mod.registerSource({
@@ -46,7 +44,7 @@ describe("satellite cache freshness uses observation age (#1083)", () => {
   });
 
   it("does not cache an observation that is already stale when fetched", async () => {
-    const { mod, respond } = load();
+    const { mod, respond } = await load();
 
     respond(reading(T0 - TTL - 1));
     const live = await mod.fetchSatelliteWithFallback(PROJECT);
@@ -58,7 +56,7 @@ describe("satellite cache freshness uses observation age (#1083)", () => {
   });
 
   it("expires a cached reading by observation age, not by when it was cached", async () => {
-    const { mod, respond } = load();
+    const { mod, respond } = await load();
 
     // Observed one hour before it was fetched: one hour of freshness left.
     respond(reading(T0 - HOUR));
@@ -78,7 +76,7 @@ describe("satellite cache freshness uses observation age (#1083)", () => {
   });
 
   it("keeps a fresh observation available for the full documented TTL", async () => {
-    const { mod, respond } = load();
+    const { mod, respond } = await load();
 
     respond(reading(T0));
     await mod.fetchSatelliteWithFallback(PROJECT);
@@ -92,7 +90,7 @@ describe("satellite cache freshness uses observation age (#1083)", () => {
   });
 
   it("re-fetching an older observation does not replace or refresh a newer cached one", async () => {
-    const { mod, respond } = load();
+    const { mod, respond } = await load();
 
     respond(reading(T0));
     await mod.fetchSatelliteWithFallback(PROJECT);
@@ -108,7 +106,7 @@ describe("satellite cache freshness uses observation age (#1083)", () => {
   });
 
   it("ages a future-timestamped observation from its fetch time", async () => {
-    const { mod, respond } = load();
+    const { mod, respond } = await load();
 
     respond(reading(T0 + 10 * HOUR));
     await mod.fetchSatelliteWithFallback(PROJECT);
