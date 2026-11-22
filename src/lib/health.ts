@@ -5,6 +5,7 @@ import { getSourceHealth, getOutageState, getCacheStats } from "./satellite-sour
 import { getMigrationHealth } from "./migrations";
 import { listFlags } from "./feature-flags";
 import { pool as dbPool } from "./db";
+import { config } from "../config";
 
 const startedAt = Date.now();
 
@@ -111,13 +112,28 @@ export async function getReadiness(): Promise<ReadinessReport> {
   const satelliteReady = outage.consecutiveFailures < 3;
   const rpcCircuitReady = rpcBreaker.getState() !== "OPEN";
 
-  // Check PostgreSQL connectivity directly; the pool connects lazily.
+  // Check PostgreSQL connectivity with a hard deadline so a stalled probe
+  // cannot hold a connection slot or block readiness requests indefinitely
+  // (#1047). The timeout fires a rejection; the winning branch of the race
+  // determines dbReady, and the loser's timer/query is cleaned up.
   let dbReady = false;
   try {
-    await dbPool.query("SELECT 1");
-    dbReady = true;
+    const probeTimeoutMs = config.HEALTH_CHECK_TIMEOUT_MS;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      timeoutId = setTimeout(
+        () => reject(new Error(`db probe timed out after ${probeTimeoutMs}ms`)),
+        probeTimeoutMs,
+      );
+    });
+    try {
+      await Promise.race([dbPool.query("SELECT 1"), timeoutPromise]);
+      dbReady = true;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   } catch {
-    // leave false
+    // leave dbReady false; not_ready will be reported to the caller
   }
 
   return {
