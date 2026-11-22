@@ -183,7 +183,10 @@ export function createDefaultFinancialInput(
   _efficiencyPct: number,
   partial?: Partial<FinancialInput>,
 ): FinancialInput {
-  const capacityFactor = 0.2;
+  // Resolve the effective capacity factor before deriving annual energy (#1066).
+  // partial.capacity_factor takes precedence; a later partial.annual_energy_output_kwh
+  // overrides the derived value entirely (higher-priority explicit input).
+  const capacityFactor = partial?.capacity_factor ?? 0.2;
   const annualEnergy = capacityKw * 8760 * capacityFactor;
   const installationCostPerKw = 1000;
   const maintenancePerKwPerYear = 15;

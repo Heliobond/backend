@@ -206,9 +206,43 @@ export function isSignificant(change: ScoreChange): boolean {
 }
 
 // ── Templates ─────────────────────────────────────────────────────────────────
+
+/** Required placeholders for each built-in template (#1061). */
+const BUILT_IN_REQUIRED: Record<string, string[]> = {
+  "score-alert": ["project_id", "cq_delta", "gi_delta"],
+  digest: ["frequency", "count", "lines"],
+};
+
+/** Extract all {{placeholder}} names from a string. */
+function extractPlaceholders(s: string): string[] {
+  const matches = [...s.matchAll(/\{\{\s*(\w+)\s*\}\}/g)];
+  return matches.map((m) => m[1]);
+}
+
 export function upsertTemplate(tpl: EmailTemplate): EmailTemplate {
   if (!tpl.name || !tpl.subject || !tpl.body) {
     throw new Error("template requires name, subject and body");
+  }
+  // For built-in templates, validate that all required placeholders are present
+  // and no unknown placeholders are introduced (#1061). An operator typo that
+  // removes {{project_id}} would silently strip project information from every
+  // alert email.
+  const required = BUILT_IN_REQUIRED[tpl.name];
+  if (required) {
+    const all = new Set([...extractPlaceholders(tpl.subject), ...extractPlaceholders(tpl.body)]);
+    const missing = required.filter((k) => !all.has(k));
+    if (missing.length > 0) {
+      throw new Error(
+        `built-in template "${tpl.name}" is missing required placeholder(s): {{${missing.join("}}, {{")}}}`,
+      );
+    }
+    const known = new Set(required);
+    const unknown = [...all].filter((k) => !known.has(k));
+    if (unknown.length > 0) {
+      throw new Error(
+        `built-in template "${tpl.name}" contains unknown placeholder(s): {{${unknown.join("}}, {{")}}}. Supported: {{${required.join("}}, {{")}}}`,
+      );
+    }
   }
   templates.set(tpl.name, tpl);
   return tpl;

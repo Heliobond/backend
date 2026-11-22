@@ -1,11 +1,24 @@
 import type { Knex } from "knex";
 import fs from "fs";
 
+// In production the TypeScript source tree is absent; migrations live in
+// dist/db/migrations as compiled .js files. Use __dirname (which resolves to
+// the directory of this compiled file) so both paths work without forking the
+// config (#1064).
+const isCompiledRuntime = __filename.endsWith(".js");
+const migrationsDir = isCompiledRuntime
+  ? `${__dirname}/db/migrations`
+  : `${__dirname}/../src/db/migrations`;
+
 const baseConfig: Knex.Config = {
   client: "pg",
   migrations: {
-    directory: "./src/db/migrations",
-    extension: "ts",
+    directory: migrationsDir,
+    // Use the same extension as the runtime — .js in dist, .ts in src. This
+    // gives each migration a stable logical identity regardless of the path, so
+    // a database migrated through the development path sees no duplicate
+    // migrations after deployment.
+    loadExtensions: [isCompiledRuntime ? ".js" : ".ts"],
     tableName: "knex_migrations",
   },
   pool: {
