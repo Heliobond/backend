@@ -224,6 +224,10 @@ export function getValidMethods(): string[] {
 }
 
 export function isMethodValid(method: string): method is ForecastMethod {
+  // Use Object.hasOwn instead of `in` so inherited Object properties
+  // (toString, constructor, __proto__, …) are not treated as valid
+  // forecast methods (#1070).
+  return Object.hasOwn(FORECAST_METHODS, method);
   return method in FORECAST_METHODS;
 }
 
