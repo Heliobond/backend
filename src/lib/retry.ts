@@ -76,13 +76,18 @@ interface StatusCarryingError {
   response?: { status?: number };
 }
 
+function isStatusCarryingError(err: unknown): err is StatusCarryingError {
+  if (!err || typeof err !== "object") return false;
+  return "status" in err || "statusCode" in err || "response" in err;
+}
+
 /** Pulls an HTTP-style status code off an error, strictly from structured fields or numeric values. */
 export function extractHttpStatus(err: unknown): number | undefined {
   if (typeof err === "number") {
     return err;
   }
-  if (err && typeof err === "object") {
-    const { status, statusCode, response } = err as StatusCarryingError;
+  if (isStatusCarryingError(err)) {
+    const { status, statusCode, response } = err;
     const direct = status ?? statusCode ?? response?.status;
     if (typeof direct === "number") return direct;
   }
@@ -125,24 +130,29 @@ interface RetryAfterCarryingError {
   response?: { headers?: Record<string, string | string[]> | { get?: (name: string) => string | null } };
 }
 
+function isRetryAfterCarryingError(err: unknown): err is RetryAfterCarryingError {
+  if (!err || typeof err !== "object") return false;
+  return "headers" in err || "response" in err;
+}
+
 /**
  * Extracts the Retry-After delay in ms from a structured error (#1051).
  * Returns undefined if no Retry-After header is present or cannot be parsed.
  * Handles both seconds (integer) and HTTP-date formats.
  */
 export function extractRetryAfterMs(err: unknown): number | undefined {
-  if (!err || typeof err !== "object") return undefined;
-  const e = err as RetryAfterCarryingError;
-  const headers = e.headers ?? e.response?.headers;
-  if (!headers) return undefined;
+  if (!isRetryAfterCarryingError(err)) return undefined;
+  const headers = err.headers ?? err.response?.headers;
+  if (!headers || typeof headers !== "object") return undefined;
 
   let raw: string | null | undefined;
-  if (typeof (headers as { get?: (name: string) => string | null }).get === "function") {
-    raw = (headers as { get: (name: string) => string | null }).get("retry-after");
+  const getMethod: unknown = Reflect.get(headers, "get");
+  if (typeof getMethod === "function") {
+    const result: unknown = getMethod.call(headers, "retry-after");
+    raw = typeof result === "string" ? result : result === null ? null : undefined;
   } else {
-    const h = headers as Record<string, string | string[]>;
-    const val = h["retry-after"] ?? h["Retry-After"];
-    raw = Array.isArray(val) ? val[0] : val;
+    const after: unknown = Reflect.get(headers, "retry-after") ?? Reflect.get(headers, "Retry-After");
+    raw = Array.isArray(after) ? after[0] : typeof after === "string" ? after : undefined;
   }
 
   if (!raw) return undefined;
