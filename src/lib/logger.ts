@@ -1,0 +1,112 @@
+import { getCorrelationId } from "./correlation";
+import { parseContractError } from "./contractErrors";
+
+type LogLevel = "debug" | "info" | "warn" | "error";
+
+const LEVEL_RANK: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
+
+const ENV_LEVEL_MAP: Record<string, LogLevel> = {
+  development: "debug",
+  dev: "debug",
+  staging: "info",
+  test: "warn",
+  production: "warn",
+  prod: "warn",
+};
+
+let currentLevel: LogLevel | null = null;
+let envLevel: LogLevel | null = null;
+
+function resolveEnvLevel(): LogLevel {
+  if (process.env.LOG_LEVEL) {
+    const raw = process.env.LOG_LEVEL.toLowerCase() as LogLevel;
+    if (raw in LEVEL_RANK) {
+      return raw;
+    }
+  }
+  const env = (process.env.NODE_ENV || "development").toLowerCase();
+  return ENV_LEVEL_MAP[env] || "info";
+}
+
+function getConfiguredLevel(): LogLevel {
+  if (currentLevel !== null) {
+    return currentLevel;
+  }
+  if (envLevel === null) {
+    envLevel = resolveEnvLevel();
+  }
+  return envLevel;
+}
+
+function shouldEmit(level: LogLevel): boolean {
+  return LEVEL_RANK[level] >= LEVEL_RANK[getConfiguredLevel()];
+}
+
+function emit(level: LogLevel, message: string, meta?: Record<string, unknown>): void {
+  if (!shouldEmit(level)) return;
+  const entry: Record<string, unknown> = {
+    level,
+    time: new Date().toISOString(),
+    correlation_id: getCorrelationId(),
+    environment: process.env.NODE_ENV || "development",
+    message,
+    ...meta,
+  };
+  if (level === "error") {
+    console.error(JSON.stringify(entry));
+  } else {
+    console.log(JSON.stringify(entry));
+  }
+}
+
+function formatError(err: unknown): Record<string, unknown> {
+  const contractErr = parseContractError(err);
+  const contractFields = contractErr
+    ? {
+        contract_error_name: contractErr.name,
+        contract_error_code: contractErr.code,
+        contract_error_source: contractErr.source,
+      }
+    : {};
+
+  if (err && typeof err === "object") {
+    const e = err as Record<string, unknown>;
+    return {
+      error_name: String(e.name || "Error"),
+      error_message: String(e.message || e),
+      error_stack: e.stack ? String(e.stack) : undefined,
+      ...contractFields,
+    };
+  }
+  return { error: String(err), ...contractFields };
+}
+
+export const logger = {
+  debug: (message: string, meta?: Record<string, unknown>) => emit("debug", message, meta),
+  info: (message: string, meta?: Record<string, unknown>) => emit("info", message, meta),
+  warn: (message: string, meta?: Record<string, unknown>) => emit("warn", message, meta),
+  error: (message: string, meta?: Record<string, unknown>) => emit("error", message, meta),
+  formatError,
+};
+
+export function setLogLevel(level: LogLevel): void {
+  if (!(level in LEVEL_RANK)) {
+    throw new Error(
+      `Invalid log level: ${level}. Valid levels: ${Object.keys(LEVEL_RANK).join(", ")}`,
+    );
+  }
+  currentLevel = level;
+}
+
+export function clearLogLevelCache(): void {
+  currentLevel = null;
+  envLevel = null;
+}
+
+export function getLogLevel(): LogLevel {
+  return getConfiguredLevel();
+}
+
+export function getLogLevels(): Record<LogLevel, number> {
+  return { ...LEVEL_RANK };
+}

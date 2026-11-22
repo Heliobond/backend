@@ -3,3 +3,6 @@ dist/
 .env
 coverage/
 .env.local
+load-tests/reports/
+.mimocode/
+fix.mdlogs/

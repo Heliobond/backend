@@ -1,0 +1,179 @@
+import crypto from "crypto";
+import { Request, Response, NextFunction } from "express";
+import { config } from "../config";
+import { errorBody } from "./errors";
+
+const CSRF_TOKEN_LENGTH = 32;
+const CSRF_TOKEN_EXPIRY_MS = 60 * 60 * 1000;
+const SESSION_COOKIE_NAME = "CSRF-SESSION";
+
+// Machine-to-machine POSTs that carry no cookies or session, so there is
+// nothing for CSRF to protect. Browser telemetry beacons use
+// `navigator.sendBeacon`, which cannot set the custom CSRF header the
+// double-submit check requires.
+const CSRF_EXEMPT_PATHS = new Set<string>(["/v1/telemetry", "/api/telemetry"]);
+
+function isCsrfExemptPath(path: string): boolean {
+  const normalized = path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
+  return CSRF_EXEMPT_PATHS.has(normalized);
+}
+
+interface CsrfTokenEntry {
+  token: string;
+  createdAt: number;
+}
+
+const tokenStore = new Map<string, CsrfTokenEntry>();
+
+function generateToken(): string {
+  return crypto.randomBytes(CSRF_TOKEN_LENGTH).toString("hex");
+}
+
+function generateSessionId(): string {
+  return crypto.randomBytes(16).toString("hex");
+}
+
+function timingSafeCompare(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a);
+  const bBuf = Buffer.from(b);
+  if (aBuf.length !== bBuf.length) return false;
+  return crypto.timingSafeEqual(aBuf, bBuf);
+}
+
+function cleanExpiredTokens(): void {
+  const now = Date.now();
+  for (const [key, entry] of tokenStore) {
+    if (now - entry.createdAt > CSRF_TOKEN_EXPIRY_MS) {
+      tokenStore.delete(key);
+    }
+  }
+}
+
+function getCookieOptions(): {
+  secure: boolean;
+  sameSite: "strict" | "lax";
+} {
+  const isProduction = config.NODE_ENV === "production";
+  return {
+    secure: isProduction,
+    sameSite: isProduction ? "strict" : "lax",
+  };
+}
+
+function getSessionId(req: Request): string | undefined {
+  return req.cookies?.[SESSION_COOKIE_NAME] as string | undefined;
+}
+
+export function generateCsrfToken(req: Request, res: Response): string {
+  cleanExpiredTokens();
+
+  let sessionId = getSessionId(req);
+  if (!sessionId) {
+    sessionId = generateSessionId();
+    const opts = getCookieOptions();
+    res.cookie(SESSION_COOKIE_NAME, sessionId, {
+      ...opts,
+      httpOnly: true,
+      path: "/",
+    });
+  }
+
+  const existing = tokenStore.get(sessionId);
+  if (existing && Date.now() - existing.createdAt < CSRF_TOKEN_EXPIRY_MS) {
+    return existing.token;
+  }
+
+  const token = generateToken();
+  tokenStore.set(sessionId, { token, createdAt: Date.now() });
+  return token;
+}
+
+export function setCsrfCookie(req: Request, res: Response): void {
+  const token = generateCsrfToken(req, res);
+  const opts = getCookieOptions();
+  res.cookie("XSRF-TOKEN", token, {
+    ...opts,
+    httpOnly: false,
+    path: "/",
+  });
+}
+
+export function csrfProtection(req: Request, res: Response, next: NextFunction): void {
+  if (isCsrfExemptPath(req.path)) {
+    next();
+    return;
+  }
+
+  const method = req.method.toUpperCase();
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") {
+    setCsrfCookie(req, res);
+    return next();
+  }
+
+  const headerToken =
+    (req.headers["x-csrf-token"] as string | undefined) ||
+    (req.headers["x-xsrf-token"] as string | undefined);
+  const cookieToken = req.cookies?.["XSRF-TOKEN"] as string | undefined;
+  const bodyToken = (req.body as Record<string, unknown>)?._csrf as string | undefined;
+
+  const token = headerToken || bodyToken;
+  if (!token) {
+    res
+      .status(403)
+      .json(errorBody("csrf_token_missing", "CSRF Token is required for this request"));
+    return;
+  }
+
+  if (!cookieToken || !timingSafeCompare(token, cookieToken)) {
+    res
+      .status(403)
+      .json(errorBody("csrf_token_invalid", "CSRF token does not match the cookie token"));
+    return;
+  }
+
+  const sessionId = getSessionId(req);
+  if (!sessionId) {
+    res.status(403).json(errorBody("csrf_token_invalid", "CSRF session is missing"));
+    return;
+  }
+
+  const stored = tokenStore.get(sessionId);
+  if (!stored || !timingSafeCompare(stored.token, token)) {
+    res.status(403).json(errorBody("csrf_token_invalid", "CSRF token is invalid or expired"));
+    return;
+  }
+
+  if (Date.now() - stored.createdAt > CSRF_TOKEN_EXPIRY_MS) {
+    tokenStore.delete(sessionId);
+    res.status(403).json(errorBody("csrf_token_expired", "CSRF token has expired"));
+    return;
+  }
+
+  const origin = req.headers.origin || req.headers.referer;
+  const allowedOrigins = (config.CORS_ORIGINS || config.FRONTEND_URL || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (origin && allowedOrigins.length > 0) {
+    const originUrl = new URL(origin);
+    const isAllowed = allowedOrigins.some((allowed) => {
+      try {
+        const allowedUrl = new URL(allowed);
+        return originUrl.hostname === allowedUrl.hostname;
+      } catch {
+        return origin === allowed;
+      }
+    });
+    if (!isAllowed) {
+      res.status(403).json(errorBody("csrf_origin_invalid", "Request origin is not allowed"));
+      return;
+    }
+  }
+
+  next();
+}
+
+export function resetCsrfStore(): void {
+  tokenStore.clear();
+}

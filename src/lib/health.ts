@@ -1,37 +1,148 @@
-/**
- * Lightweight process/health state. Tracks server start time and the most
- * recent cron execution so `/health` can report basic operational visibility.
- */
+import { rpcPool, rpcBreaker, getRpcStatus } from "./stellar";
+import type { PoolMetrics } from "./db-pool";
+import type { BreakerMetrics } from "./circuit-breaker";
+import { getSourceHealth, getOutageState, getCacheStats } from "./satellite-sources";
+import { getMigrationHealth } from "./migrations";
+import { listFlags } from "./feature-flags";
+import { pool as dbPool } from "./db";
+import { config } from "../config";
 
 const startedAt = Date.now();
 
-export type CronStatus = "success" | "error";
+export type CronStatus = "success" | "error" | "skipped";
 
 export interface CronRun {
   name: string;
   status: CronStatus;
   at: string; // ISO 8601
+  /** Present when status is "skipped"; e.g. "paused" (#765). */
+  reason?: string;
 }
 
+const lastCronRuns = new Map<string, CronRun>();
 let lastCronRun: CronRun | null = null;
 
-/** Record the outcome of a cron tick. Called by the schedulers in index.ts. */
-export function recordCronRun(name: string, status: CronStatus): void {
-  lastCronRun = { name, status, at: new Date().toISOString() };
+export function recordCronRun(name: string, status: CronStatus, reason?: string): void {
+  const run: CronRun = {
+    name,
+    status,
+    at: new Date().toISOString(),
+    ...(reason ? { reason } : {}),
+  };
+  lastCronRuns.set(name, run);
+  lastCronRun = run;
+}
+
+export interface SatelliteHealthReport {
+  sources: ReturnType<typeof getSourceHealth>;
+  cache: ReturnType<typeof getCacheStats>;
+  outage: ReturnType<typeof getOutageState>;
 }
 
 export interface HealthReport {
-  status: "ok";
+  status: "ok" | "degraded";
   uptime_seconds: number;
   started_at: string;
   last_cron_run: CronRun | null;
+  last_cron_runs: Record<string, CronRun>;
+  rpc_pool: PoolMetrics;
+  circuit_breaker: BreakerMetrics;
+  rpc_status: ReturnType<typeof getRpcStatus>;
+  satellite_data: SatelliteHealthReport;
+  migrations: Awaited<ReturnType<typeof getMigrationHealth>>;
+  feature_flags: { loaded_count: number };
+  database: { connected: boolean };
 }
 
-export function getHealth(): HealthReport {
+export async function getHealth(): Promise<HealthReport> {
+  // Check PostgreSQL connectivity (#699)
+  let dbConnected = false;
+  try {
+    await dbPool.query("SELECT 1");
+    dbConnected = true;
+  } catch {
+    // health check should report status, not fail
+  }
+
+  const rpcMetrics = rpcPool.getMetrics();
+  const circuitBreaker = rpcBreaker.getMetrics();
+  const outage = getOutageState();
+  const rpcCircuitReady = rpcBreaker.getState() !== "OPEN";
+
   return {
-    status: "ok",
+    status:
+      dbConnected &&
+      rpcMetrics.healthy > 0 &&
+      outage.consecutiveFailures < 3 &&
+      rpcCircuitReady
+        ? "ok"
+        : "degraded",
     uptime_seconds: Math.floor((Date.now() - startedAt) / 1000),
     started_at: new Date(startedAt).toISOString(),
     last_cron_run: lastCronRun,
+    last_cron_runs: Object.fromEntries(lastCronRuns),
+    rpc_pool: rpcMetrics,
+    circuit_breaker: circuitBreaker,
+    rpc_status: getRpcStatus(),
+    satellite_data: {
+      sources: getSourceHealth(),
+      cache: getCacheStats(),
+      outage,
+    },
+    migrations: await getMigrationHealth(),
+    feature_flags: { loaded_count: Object.keys(listFlags()).length },
+    database: { connected: dbConnected },
+  };
+}
+
+export interface ReadinessReport {
+  status: "ready" | "not_ready";
+  checks: Record<string, boolean>;
+}
+
+export async function getReadiness(): Promise<ReadinessReport> {
+  const rpcMetrics = rpcPool.getMetrics();
+  // The pool is ready only if it currently holds at least one connection that
+  // passed its last health check. `active`/`idle`/`total` are all non-negative
+  // counts that stay populated even when every connection is failing, so they
+  // cannot express an unhealthy pool; `healthy` drops to 0 when the RPC
+  // endpoint is unreachable and the periodic health check marks connections bad.
+  const rpcReady = rpcMetrics.healthy > 0;
+  const outage = getOutageState();
+  const satelliteReady = outage.consecutiveFailures < 3;
+  const rpcCircuitReady = rpcBreaker.getState() !== "OPEN";
+
+  // Check PostgreSQL connectivity with a hard deadline so a stalled probe
+  // cannot hold a connection slot or block readiness requests indefinitely
+  // (#1047). The timeout fires a rejection; the winning branch of the race
+  // determines dbReady, and the loser's timer/query is cleaned up.
+  let dbReady = false;
+  try {
+    const probeTimeoutMs = config.HEALTH_CHECK_TIMEOUT_MS;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      timeoutId = setTimeout(
+        () => reject(new Error(`db probe timed out after ${probeTimeoutMs}ms`)),
+        probeTimeoutMs,
+      );
+    });
+    try {
+      await Promise.race([dbPool.query("SELECT 1"), timeoutPromise]);
+      dbReady = true;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  } catch {
+    // leave dbReady false; not_ready will be reported to the caller
+  }
+
+  return {
+    status: dbReady && rpcReady && satelliteReady && rpcCircuitReady ? "ready" : "not_ready",
+    checks: {
+      database: dbReady,
+      rpc_pool: rpcReady,
+      satellite: satelliteReady,
+      rpc_circuit: rpcCircuitReady,
+    },
   };
 }

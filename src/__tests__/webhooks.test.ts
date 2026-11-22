@@ -47,6 +47,48 @@ describe("webhooks routes", () => {
       .expect(400);
   });
 
+  it("POST /api/webhooks — rejects non-http(s) protocols", async () => {
+    await request(app)
+      .post("/api/webhooks")
+      .send({ url: "ftp://example.com/hook", secret: "my-super-secret-key" })
+      .expect(400);
+  });
+
+  it("POST /api/webhooks — rejects strings merely starting with 'http'", async () => {
+    await request(app)
+      .post("/api/webhooks")
+      .send({ url: "httpanything", secret: "my-super-secret-key" })
+      .expect(400);
+  });
+
+  it("POST /api/webhooks — rejects loopback URLs", async () => {
+    await request(app)
+      .post("/api/webhooks")
+      .send({ url: "http://127.0.0.1/hook", secret: "my-super-secret-key" })
+      .expect(400);
+  });
+
+  it("POST /api/webhooks — rejects private IP URLs", async () => {
+    await request(app)
+      .post("/api/webhooks")
+      .send({ url: "http://10.0.0.1/hook", secret: "my-super-secret-key" })
+      .expect(400);
+  });
+
+  it("POST /api/webhooks — rejects link-local / metadata URLs", async () => {
+    await request(app)
+      .post("/api/webhooks")
+      .send({ url: "http://169.254.169.254/latest/meta-data", secret: "my-super-secret-key" })
+      .expect(400);
+  });
+
+  it("POST /api/webhooks — rejects IPv6 loopback URLs", async () => {
+    await request(app)
+      .post("/api/webhooks")
+      .send({ url: "http://[::1]/hook", secret: "my-super-secret-key" })
+      .expect(400);
+  });
+
   it("GET /api/webhooks — lists registered webhooks without secrets", async () => {
     await request(app)
       .post("/api/webhooks")
@@ -54,9 +96,7 @@ describe("webhooks routes", () => {
 
     const res = await request(app).get("/api/webhooks").expect(200);
     expect(res.body.webhooks).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ url: "https://example.com/list-test" }),
-      ]),
+      expect.arrayContaining([expect.objectContaining({ url: "https://example.com/list-test" })]),
     );
     res.body.webhooks.forEach((wh: Record<string, unknown>) => {
       expect(wh).not.toHaveProperty("secret");
@@ -83,9 +123,7 @@ describe("webhooks routes", () => {
       .post("/api/webhooks")
       .send({ url: "https://example.com/single", secret: "my-super-secret-key" });
 
-    const res = await request(app)
-      .get(`/api/webhooks/${create.body.id}`)
-      .expect(200);
+    const res = await request(app).get(`/api/webhooks/${create.body.id}`).expect(200);
     expect(res.body.url).toBe("https://example.com/single");
     expect(res.body).not.toHaveProperty("secret");
   });

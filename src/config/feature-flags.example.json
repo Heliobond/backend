@@ -1,0 +1,58 @@
+{
+  "new-dashboard": {
+    "enabled": true,
+    "rollout_percentage": 50,
+    "env_overrides": {
+      "development": { "enabled": true, "rollout_percentage": 100 },
+      "test": { "enabled": true, "rollout_percentage": 100 },
+      "staging": { "enabled": true, "rollout_percentage": 100 }
+    },
+    "metadata": {
+      "team": "frontend",
+      "issue": "#142"
+    }
+  },
+  "dark-mode": {
+    "enabled": true,
+    "rollout_percentage": 25,
+    "user_overrides": {
+      "wallet_alice": true,
+      "wallet_bob": true
+    },
+    "metadata": {
+      "team": "frontend"
+    }
+  },
+  "v2-scoring-api": {
+    "enabled": false,
+    "rollout_percentage": 0,
+    "depends_on": ["new-dashboard"],
+    "metadata": {
+      "team": "backend",
+      "issue": "#201"
+    }
+  },
+  "ab-test-pricing": {
+    "enabled": true,
+    "rollout_percentage": 100,
+    "variants": {
+      "control": "price_v1",
+      "variant_a": "price_v2",
+      "variant_b": "price_v3"
+    },
+    "metadata": {
+      "team": "product",
+      "experiment": "pricing-q3-2026"
+    }
+  },
+  "maintenance-mode": {
+    "enabled": false,
+    "rollout_percentage": 0,
+    "env_overrides": {
+      "staging": { "enabled": true, "rollout_percentage": 100 }
+    },
+    "metadata": {
+      "team": "ops"
+    }
+  }
+}

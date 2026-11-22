@@ -1,0 +1,124 @@
+import request from "supertest";
+import express, { Express } from "express";
+import iotRouter from "../routes/iot";
+import adminRouter from "../routes/admin";
+import { getHealth } from "../lib/health";
+import { resetIdempotencyState } from "../lib/scoreService";
+import { errorHandler, notFoundHandler } from "../middleware/errors";
+import * as registry from "../lib/registry";
+import { pool as dbPool } from "../lib/db";
+
+// Factory mock avoids loading the real registry module, which throws at import
+// time when PROJECT_REGISTRY_CONTRACT_ID is unset (e.g. in CI).
+jest.mock("../lib/registry", () => ({
+  updateImpactScore: jest.fn(),
+  getTotalProjects: jest.fn(),
+}));
+// config snapshots env vars at import time, so setting process.env later has no
+// effect on the middleware; keep the real config (iot needs MAX_POWER_KW etc.)
+// and only override the admin key.
+jest.mock("../config", () => {
+  const actual = jest.requireActual("../config");
+  return { config: { ...actual.config, ADMIN_API_KEY: "test-key" } };
+});
+
+const ADMIN_API_KEY = "test-key";
+const authHeader = { Authorization: `Bearer ${ADMIN_API_KEY}`,  "x-request-timestamp": Date.now().toString()};
+
+function buildApp(): Express {
+  const app = express();
+  app.use(express.json());
+  app.get("/health", async (_req, res) => res.json(await getHealth()));
+  app.use("/api/iot", iotRouter);
+  app.use("/api/admin", adminRouter);
+  app.use(notFoundHandler);
+  app.use(errorHandler);
+  return app;
+}
+
+describe("HTTP integration", () => {
+  let app: Express;
+
+  beforeEach(() => {
+    process.env.ADMIN_API_KEY = ADMIN_API_KEY;
+    app = buildApp();
+    jest.clearAllMocks();
+    resetIdempotencyState();
+    (registry.updateImpactScore as jest.Mock).mockResolvedValue("tx-hash");
+    (registry.getTotalProjects as jest.Mock).mockResolvedValue(2);
+  });
+
+  describe("GET /health", () => {
+    it("returns status ok", async () => {
+      // getHealth pings PostgreSQL; stub it so the check reflects a healthy DB.
+      const query = jest.spyOn(dbPool, "query").mockResolvedValue({ rows: [] } as never);
+      const res = await request(app).get("/health").expect(200);
+      expect(res.body.status).toBe("ok");
+      query.mockRestore();
+    });
+  });
+
+  describe("GET /api/iot/solar/:id", () => {
+    it("returns the expected shape for a valid id", async () => {
+      const res = await request(app).get("/api/iot/solar/1").expect(200);
+      expect(typeof res.body.power_output_kw).toBe("number");
+      expect(typeof res.body.efficiency_pct).toBe("number");
+      expect(typeof res.body.max_power_kw).toBe("number");
+      expect(typeof res.body.timestamp).toBe("number");
+    });
+
+    it("returns 400 for a non-numeric id", async () => {
+      const res = await request(app).get("/api/iot/solar/abc").expect(400);
+      expect(res.body.error.code).toBe("bad_request");
+    });
+
+    it("returns 400 for id 0", async () => {
+      const res = await request(app).get("/api/iot/solar/0").expect(400);
+      expect(res.body.error.code).toBe("bad_request");
+    });
+  });
+
+  describe("GET /api/iot/satellite/:id", () => {
+    it("returns the expected shape for a valid id", async () => {
+      const res = await request(app).get("/api/iot/satellite/1").expect(200);
+      expect(typeof res.body.forest_density_pct).toBe("number");
+      expect(typeof res.body.ndvi_score).toBe("number");
+      expect(typeof res.body.timestamp).toBe("number");
+    });
+
+    it("returns 400 for a non-numeric id", async () => {
+      const res = await request(app).get("/api/iot/satellite/abc").expect(400);
+      expect(res.body.error.code).toBe("bad_request");
+    });
+  });
+
+  describe("POST /api/admin/update-scores", () => {
+    it("returns updated scores when authorized", async () => {
+      const res = await request(app)
+        .post("/api/admin/update-scores")
+        .set(authHeader)
+        .send({ project_ids: [1] })
+        .expect(200);
+
+      expect(res.body.updated).toBe(1);
+      expect(res.body.results[0]).toMatchObject({ project_id: 1, tx_hash: "tx-hash" });
+    });
+
+    it("returns 401 without a bearer token", async () => {
+      const res = await request(app).post("/api/admin/update-scores").send({}).expect(401);
+      expect(res.body.error.code).toBe("unauthorized");
+    });
+
+    it("returns 500 when ADMIN_API_KEY is not configured", async () => {
+      const configModule = jest.requireMock("../config") as { config: { ADMIN_API_KEY: string } };
+      const original = configModule.config.ADMIN_API_KEY;
+      configModule.config.ADMIN_API_KEY = "";
+      try {
+        const res = await request(app).post("/api/admin/update-scores").send({}).expect(500);
+        expect(res.body.error.code).toBe("server_misconfigured");
+      } finally {
+        configModule.config.ADMIN_API_KEY = original;
+      }
+    });
+  });
+});

@@ -1,6 +1,14 @@
 import request from "supertest";
 import express, { Request, Response } from "express";
-import { versionHeaders, acceptVersion, deprecationHeaders } from "../middleware/versioning";
+import {
+  versionHeaders,
+  acceptVersion,
+  deprecationHeaders,
+  legacyApiUsage,
+  legacyPathLabel,
+  LEGACY_SUNSET_DATE,
+} from "../middleware/versioning";
+import { register } from "../lib/prometheus";
 
 function buildApp() {
   const app = express();
@@ -14,6 +22,7 @@ function buildApp() {
 
   app.use("/api", deprecationHeaders, versionHeaders);
   app.get("/api/ping", (_req: Request, res: Response) => res.json({ ok: true }));
+  app.get("/api/v1/ping", (_req: Request, res: Response) => res.json({ ok: true }));
 
   return app;
 }
@@ -35,13 +44,23 @@ describe("API versioning middleware", () => {
   it("rejects an unsupported Accept-Version header", async () => {
     const res = await request(app).get("/v1/ping").set("Accept-Version", "99");
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/unsupported api version/i);
+    expect(res.body.error.code).toBe("unsupported_version");
+    expect(res.body.error.message).toMatch(/unsupported api version/i);
   });
 
-  it("adds Deprecation header on legacy /api routes", async () => {
+  it("serves the v1 route at /api/v1 and sets the version headers", async () => {
+    const res = await request(app).get("/api/v1/ping");
+    expect(res.status).toBe(200);
+    expect(res.headers["api-version"]).toBe("1");
+    expect(res.body).toEqual({ ok: true });
+  });
+
+  it("keeps legacy /api routes working and adds deprecation headers", async () => {
     const res = await request(app).get("/api/ping");
+    expect(res.status).toBe(200);
     expect(res.headers["deprecation"]).toBe("true");
     expect(res.headers["sunset"]).toBeDefined();
+    expect(res.headers["link"]).toContain("/v1");
   });
 });
 
@@ -67,7 +86,40 @@ describe("requestLogger correlation ID", () => {
 
     const res = await request(app).get("/test");
     expect(res.headers["x-correlation-id"]).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
     );
+  });
+});
+
+describe("legacy /api usage (#660)", () => {
+  function appAt(now: number) {
+    const app = express();
+    app.use(
+      "/api",
+      legacyApiUsage(() => now),
+    );
+    app.get("/api/projects/:id", (_req: unknown, res: { json: (b: unknown) => void }) =>
+      res.json({ ok: true }),
+    );
+    return app;
+  }
+
+  it("labels paths with low cardinality", () => {
+    expect(legacyPathLabel("/api/projects/42/history?x=1")).toBe("/api/projects");
+    expect(legacyPathLabel("/api/42")).toBe("/api/:id");
+  });
+
+  it("counts legacy requests and passes through before the sunset", async () => {
+    const res = await request(appAt(LEGACY_SUNSET_DATE.getTime() - 1)).get("/api/projects/1");
+    expect(res.status).toBe(200);
+    const metrics = await register.getSingleMetricAsString("legacy_api_requests_total");
+    expect(metrics).toContain('path="/api/projects"');
+  });
+
+  it("returns 410 Gone pointing at /v1 after the sunset", async () => {
+    const res = await request(appAt(LEGACY_SUNSET_DATE.getTime())).get("/api/projects/1?a=b");
+    expect(res.status).toBe(410);
+    expect(res.body.error.successor).toBe("/v1/projects/1?a=b");
+    expect(res.headers.link).toContain("/v1/projects/1");
   });
 });

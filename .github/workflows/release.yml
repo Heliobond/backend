@@ -1,0 +1,175 @@
+name: Release
+
+on:
+  workflow_call:
+  workflow_dispatch:
+    inputs:
+      version_bump:
+        description: "Version bump type"
+        required: true
+        default: "patch"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+# No job inherits a token grant; each one declares the minimum it needs.
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  # Installs, builds and tests with a read-only token. When PR #969's payload
+  # reached main, it ran here during `bun run build` while the job held a
+  # contents:write token. Project code never runs in the job that can write.
+  build-test:
+    name: Build and test
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.x"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      - name: Test
+        run: bun run test
+
+  # Holds the write token. It installs no project dependencies and runs no
+  # package.json scripts: the package is private, so nothing is published.
+  release:
+    name: Release
+    needs: build-test
+    # The CI caller gates main pushes on its read-only test job for this SHA.
+    if: >-
+      !cancelled() && github.repository == 'Heliobond/backend' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.build-test.result == 'skipped') ||
+      (github.event_name == 'workflow_dispatch' && needs.build-test.result == 'success'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      npm_config_ignore_scripts: "true"
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Release (semantic-release)
+        if: github.event_name == 'push'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          npx --yes
+          --package semantic-release@25.0.9
+          semantic-release
+
+      - name: Bump version (manual)
+        if: github.event_name == 'workflow_dispatch'
+        id: bump
+        env:
+          VERSION_BUMP: ${{ github.event.inputs.version_bump }}
+        run: |
+          CURRENT_VERSION=$(git tag --merged HEAD --sort=-version:refname | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ && !found {print; found=1}')
+          test -n "$CURRENT_VERSION" || { echo "No reachable stable release tag found"; exit 1; }
+          npm version "${CURRENT_VERSION#v}" --no-git-tag-version --ignore-scripts --allow-same-version
+          NEW_VERSION=$(npm version "$VERSION_BUMP" --no-git-tag-version --ignore-scripts)
+          echo "version=${NEW_VERSION#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Update CHANGELOG (manual)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const version = process.env.VERSION;
+            const date = new Date().toISOString().slice(0, 10);
+            const path = "CHANGELOG.md";
+            let content = fs.existsSync(path)
+              ? fs.readFileSync(path, "utf8")
+              : "# Changelog\n\n## [Unreleased]\n";
+            const heading = "## [Unreleased]";
+            const entry = "## [" + version + "] - " + date +
+              "\n\n### Changed\n- See commit history for details.\n";
+            content = content.includes(heading)
+              ? content.replace(heading, heading + "\n\n" + entry)
+              : content + "\n" + entry;
+            fs.writeFileSync(path, content);
+          '
+
+      - name: Extract release notes from CHANGELOG
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const version = process.env.VERSION;
+            const content = fs.readFileSync("CHANGELOG.md", "utf8");
+            const heading = "## [" + version + "]";
+            const start = content.indexOf(heading);
+            const rest = content.slice(start);
+            const nextHeadingIdx = rest.indexOf("\n## [", heading.length);
+            const section = nextHeadingIdx === -1 ? rest : rest.slice(0, nextHeadingIdx);
+            fs.writeFileSync("RELEASE_NOTES.md", section.trim() + "\n");
+          '
+
+      - name: Create git tag
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: git tag -a "v${VERSION}" -m "Release v${VERSION}"
+
+      - name: Push release tag
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: git push origin "refs/tags/v${VERSION}"
+
+      - name: Create GitHub release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --notes-file RELEASE_NOTES.md
+
+      - name: Trigger deployment
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          gh api repos/${{ github.repository }}/dispatches \
+            -f event_type=deploy \
+            -f "client_payload[version]=v${VERSION}" \
+            -f "client_payload[ref]=${{ github.sha }}"

@@ -2,33 +2,125 @@
 
 Base URL (local): `http://localhost:3001`
 
-All responses are JSON. Errors use a consistent shape:
+> **Frontend integration:** set `NEXT_PUBLIC_API_URL` to the versioned base and
+> **include `/v1`**, e.g. `http://localhost:3001/v1`. The frontend calls
+> `${NEXT_PUBLIC_API_URL}/projects`; a base without `/v1` resolves to the
+> deprecated `/api` paths (or `404`).
+
+All REST responses default to JSON unless an export format (e.g. `format=csv`) is explicitly requested.
+
+Errors follow a consistent structure:
 
 ```json
-{ "error": "bad_request", "message": "project id must be a positive integer" }
+{
+  "error": {
+    "code": "bad_request",
+    "message": "project id must be a positive integer"
+  }
+}
 ```
 
-| Status | `error` code         | When |
-|--------|----------------------|------|
-| `400`  | `bad_request`        | Invalid params, body, or malformed JSON |
-| `401`  | `unauthorized`       | Missing/invalid admin bearer token |
-| `404`  | `not_found`          | Unknown route |
-| `429`  | `too_many_requests`  | Rate limit exceeded (see `Retry-After`) |
-| `500`  | `internal_error`     | Unexpected server error |
+`code` is a stable, machine-readable identifier for programmatic handling; `message` provides human-readable detail.
 
-## Rate limiting
-
-All `/api/*` endpoints are rate limited per client IP. Responses include the
-standard `RateLimit-*` headers; a `429` additionally sets `Retry-After`.
-Limits are configurable via environment variables (see
-[`.env.example`](./.env.example)): `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`
-(public) and `RATE_LIMIT_ADMIN_WINDOW_MS`, `RATE_LIMIT_ADMIN_MAX` (admin).
+| Status | `error.code`           | When                                                         |
+| ------ | ---------------------- | ------------------------------------------------------------ |
+| `400`  | `bad_request`          | Invalid parameters, body validation error, or malformed JSON |
+| `400`  | `invalid_telemetry`    | Telemetry payload matches neither accepted schema           |
+| `401`  | `unauthorized`         | Missing or invalid authentication credentials / bearer token |
+| `403`  | `forbidden`            | Client IP not whitelisted or role insufficient               |
+| `404`  | `not_found`            | Resource or unknown route does not exist                     |
+| `413`  | `payload_too_large`    | Request body exceeds the configured size limit               |
+| `429`  | `too_many_requests`    | Rate limit exceeded (check `Retry-After` header)             |
+| `500`  | `server_misconfigured` | Admin endpoint called without `ADMIN_API_KEY` configured     |
+| `500`  | `internal_error`       | Unexpected server error                                      |
 
 ---
 
-## `GET /health`
+## Authentication & Security
 
-Liveness and basic operational visibility. Not rate limited.
+The platform supports multiple authentication schemes depending on the endpoint category:
+
+1. **Admin Bearer Token**: Required for administrative operations under `/v1/admin/*`. Pass via header `Authorization: Bearer <ADMIN_API_KEY>`.
+2. **Role-Based Access Control (RBAC)**: Required for `/v1/roles/*` endpoints. Pass user identifier via `X-User-Id: <user_id>`. Valid roles: `admin`, `operator`, `viewer`.
+3. **Consumer API Keys**: External consumers authenticate with keys generated via `/v1/admin/api-keys`. Pass via `Authorization: Bearer <key>` or `X-API-Key: <key>`.
+4. **IP Whitelisting**: Certain sensitive management endpoints (`/v1/admin/*`, `/v1/roles`, `/v1/webhooks`, `/v1/panels`, `/v1/metadata`, `/v1/email`, `/v1/scoring/formulas`, `/v1/chains`, `/v1/satellite-sources`) restrict access according to configured IP whitelist ranges when enabled.
+
+---
+
+## Rate Limiting
+
+Endpoints enforce rate limiting per client IP or authenticated API key. Standard rate limit headers are included in responses:
+
+- `RateLimit-Limit`: Maximum requests permitted per window
+- `RateLimit-Remaining`: Remaining requests in current window
+- `RateLimit-Reset`: Seconds until quota resets
+- `Retry-After`: Included on `429 Too Many Requests` responses
+
+Configurable environment variables (see [`.env.example`](./.env.example)):
+
+- Public tier: `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`
+- Admin tier: `RATE_LIMIT_ADMIN_WINDOW_MS`, `RATE_LIMIT_ADMIN_MAX`
+- Telemetry tier (`POST /v1/telemetry`): `TELEMETRY_RATE_LIMIT_WINDOW_MS`,
+  `TELEMETRY_RATE_LIMIT_MAX`
+
+---
+
+## API Versioning
+
+All current routes are mounted under the `/v1` prefix.
+Legacy unversioned `/api/*` routes are deprecated and maintained for backward compatibility until 2027-01-01. Responses on `/api/*` include `Deprecation: true` and sunset warning headers.
+
+### Migration: `/api/*` → `/v1/*`
+
+Replace the `/api` prefix with `/v1` (e.g. `/api/projects` → `/v1/projects`). Notes:
+
+- Auth is the same on both mounts: `/api/portfolio` and `/v1/portfolio` both require an API key (`401` without one); admin routes on `/v1` additionally require request signing. Follow the `/v1` requirements.
+- Legacy traffic is counted in the Prometheus metric `legacy_api_requests_total{path}`; check it to find remaining callers.
+- On and after **2027-01-01T00:00:00Z** every `/api/*` request returns `410 Gone` with a `Link: </v1/...>; rel="successor-version"` header and a JSON body pointing at the `/v1` equivalent. The mounts are then deleted; see [docs/LEGACY_API_REMOVAL.md](docs/LEGACY_API_REMOVAL.md).
+
+---
+
+## Route Groups Index
+
+| Route Group            | Base Path                                | Auth Requirement            | Rate Limit Tier | Description                                                                                 |
+| :--------------------- | :--------------------------------------- | :-------------------------- | :-------------- | :------------------------------------------------------------------------------------------ |
+| **System & Health**    | `/health`, `/ready`, `/metrics`, `/docs` | Public                      | None / Default  | Liveness, readiness, Prometheus metrics, and OpenAPI/Swagger documentation                  |
+| **Telemetry (IoT)**    | `/v1/iot`                                | Public / Consumer Key       | Public          | Simulated solar panel readings and satellite NDVI vegetation telemetry                      |
+| **Telemetry (Client)** | `/v1/telemetry`                          | Public                      | Telemetry       | Frontend error-report and Web Vitals beacon ingest with PII scrubbing                        |
+| **Projects**           | `/v1/projects`                           | Public / Consumer Key       | Public          | Paginated, filterable, and sortable project registry and detail                             |
+| **Score History**      | `/v1/projects/:id/history`               | Public / Consumer Key       | Public          | Historical score logs and score direction trend evaluation                                  |
+| **Aggregation**        | `/v1/projects/aggregate`                 | Public / Consumer Key       | Public          | Portfolio-level aggregate score calculations by category and region                         |
+| **Portfolio**          | `/v1/portfolio`                          | Public / Consumer Key       | Public          | Investor deposit/withdrawal history, token shares, and valuation                            |
+| **Metadata**           | `/v1/metadata`                           | IP Whitelist                | Admin           | Descriptive project metadata, geolocation, coordinates, and tags                            |
+| **Panels Hardware**    | `/v1/panels`                             | IP Whitelist                | Admin           | Solar panel technical specifications and effective capacity calculation                     |
+| **Dashboard**          | `/v1/dashboard`                          | Public / Consumer Key       | Public          | Portfolio summaries, top/bottom performers, score distributions, and CSV export             |
+| **Comparison**         | `/v1/comparison`                         | Public / Consumer Key       | Public          | Side-by-side multi-project metric comparisons and ranked lists                              |
+| **Benchmarking**       | `/v1/benchmarking`                       | Public / Consumer Key       | Public          | Standard/custom industry benchmark definitions, percentiles, and alerts                     |
+| **Financial Modeling** | `/v1/financial`                          | Public / Consumer Key       | Public          | NPV, discounted payback, cost-benefit analysis, and parameter sensitivity                   |
+| **Forecasting**        | `/v1/forecast`                           | Public / Consumer Key       | Public          | Time-series forecasting (ARIMA, smoothing, regression), weather adjustments, accuracy       |
+| **Maintenance**        | `/v1/maintenance`                        | Public / Consumer Key       | Public          | Predictive failure modeling, work order tasks, scheduling calendar, maintenance logs        |
+| **Anomaly Detection**  | `/v1/anomaly`                            | Public / Consumer Key       | Public          | Z-score anomaly detection on live IoT telemetry with configurable thresholds                |
+| **Investor Reports**   | `/v1/investor`                           | Public / Consumer Key       | Public          | High-level executive summaries, ESG compliance reports, and custom PDF/JSON reports         |
+| **Webhooks**           | `/v1/webhooks`                           | IP Whitelist                | Admin           | Webhook registration, HMAC secret configuration, and retry management                       |
+| **Email Digests**      | `/v1/email`                              | IP Whitelist                | Admin           | Digest subscriptions, unsubscribe tokens, alert thresholds, and email templates             |
+| **Multi-Chain**        | `/v1/chains`                             | IP Whitelist                | Admin           | Multi-blockchain network management and cross-chain score broadcasting                      |
+| **Satellite Sources**  | `/v1/satellite-sources`                  | IP Whitelist                | Admin           | Satellite imagery provider priorities, adapter health checks, and fallback routing          |
+| **Scoring Formulas**   | `/v1/scoring/formulas`                   | IP Whitelist                | Admin           | Custom impact scoring formulas, metric weighting, and A/B score preview                     |
+| **Oracle & Admin**     | `/v1/admin`                              | Bearer Token / IP Whitelist | Admin           | Soroban smart contract oracle score updates and immutable audit logging                     |
+| **Batch Operations**   | `/v1/admin/batch`                        | IP Whitelist                | Admin           | Asynchronous multi-project score update batch jobs with concurrency controls                |
+| **Consumer API Keys**  | `/v1/admin/api-keys`                     | Bearer Token / IP Whitelist | Admin           | Generation, usage monitoring, scheduled rotation, and revocation of client API keys         |
+| **RBAC Roles**         | `/v1/roles`                              | RBAC (`X-User-Id`)          | Admin           | User role assignment (`admin`, `operator`, `viewer`) and authorization policies             |
+| **System Operations**  | `/v1/admin/*`, `/v1/traces`              | IP Whitelist / Admin        | Admin           | DB migrations, secret rotation, dynamic log levels, compression stats, OpenTelemetry traces |
+| **GraphQL API**        | `/graphql`                               | Bearer / API Key            | Public / Admin  | Flexible GraphQL query and mutation endpoint with GraphiQL playground                       |
+| **gRPC Service**       | `localhost:50051`                        | Metadata Auth               | RPC             | High-performance unary and streaming gRPC interface                                         |
+
+---
+
+## 1. System & Observability Endpoints
+
+### `GET /health`
+
+Liveness check and cron job execution status. Not rate limited.
 
 **Response `200`**
 
@@ -45,18 +137,160 @@ Liveness and basic operational visibility. Not rate limited.
 }
 ```
 
-`last_cron_run` is `null` until the first scheduled job runs.
+### `GET /ready`
+
+Readiness probe for load balancers and container orchestrators.
+
+**Response `200` / `503`**
+
+```json
+{
+  "status": "ready",
+  "checks": {
+    "database": "connected",
+    "stellar_rpc": "available"
+  }
+}
+```
+
+### `GET /metrics`
+
+Standard Prometheus format metrics endpoint for scraping.
+
+### `GET /docs` & `GET /docs.json`
+
+Interactive Swagger UI explorer (`/docs`) and raw OpenAPI 3.0.3 specification (`/docs.json`).
+
+### `GET /v1/metrics`
+
+Aggregated operational metrics dashboard (request counts, latency percentiles, error rates).
+
+**Response `200`**
+
+```json
+{
+  "requests_total": 14205,
+  "error_rate_pct": 0.04,
+  "avg_latency_ms": 18.2,
+  "uptime_seconds": 3712
+}
+```
+
+### `GET /v1/traces`
+
+Exports distributed trace spans collected via OpenTelemetry.
+
+| Param            | In    | Type   | Description                                      |
+| :--------------- | :---- | :----- | :----------------------------------------------- |
+| `correlation_id` | query | string | Optional correlation ID filter                   |
+| `limit`          | query | int    | Max spans to return (default: `100`, max: `500`) |
+| `since`          | query | int    | Unix ms timestamp filter                         |
+
+**Response `200`**
+
+```json
+{
+  "summary": {
+    "total_spans": 240,
+    "active_traces": 4
+  },
+  "spans": [
+    {
+      "trace_id": "9a12b48fe3...",
+      "span_id": "7c88d12...",
+      "name": "calculateNPV",
+      "duration_ms": 1.4,
+      "timestamp": 1718150400000
+    }
+  ]
+}
+```
+
+### `POST /v1/telemetry`
+
+Ingest frontend error reports and Web Vitals measurements (#770). The browser
+sends the payload with `navigator.sendBeacon` as a `text/plain` Blob containing
+a JSON string; `application/json` is also accepted. No authentication, API key,
+or CSRF token is required — the route carries no cookies/session and browser
+beacons cannot set custom headers. The route is rate limited per client IP.
+
+Body size is bounded by `TELEMETRY_BODY_SIZE_LIMIT` (default `64kb`) for
+`text/plain`; `application/json` also remains bounded by `BODY_SIZE_LIMIT`.
+
+**ErrorReport**
+
+| Field               | Type             | Required | Notes                                                        |
+| :------------------ | :--------------- | :------- | :----------------------------------------------------------- |
+| `kind`              | string           | Yes      | Metric label; `[A-Za-z0-9_.:-]{1,64}`                        |
+| `message`           | string           | Yes      | 1–8192 chars; PII-scrubbed before use                        |
+| `stack`             | string           | No       | Up to 16384 chars                                            |
+| `url`               | string           | No       | Up to 2048 chars                                             |
+| `userAgent`         | string           | No       | Up to 1024 chars                                             |
+| `contractErrorCode` | number \| string | No       | Soroban error code (e.g. `22`)                               |
+| `contractErrorName` | string           | No       | Metric label; `[A-Za-z0-9_.:-]{1,64}`; defaults to `none`     |
+| `timestamp`         | number           | No       | Client epoch-ms                                              |
+
+**WebVitalReport**
+
+| Field            | Type   | Required | Notes                                                            |
+| :--------------- | :----- | :------- | :--------------------------------------------------------------- |
+| `name`           | string | Yes      | One of `CLS`, `FCP`, `INP`, `LCP`, `TTFB`, `FID`                 |
+| `value`          | number | Yes      | Finite, `>= 0`                                                    |
+| `rating`         | string | Yes      | One of `good`, `needs-improvement`, `poor`                        |
+| `id`             | string | No       | Measurement id                                                    |
+| `delta`          | number | No       | Delta since previous report                                       |
+| `navigationType` | string | No       | Navigation type                                                   |
+| `timestamp`      | number | No       | Client epoch-ms                                                   |
+
+**Security / PII**
+
+A second scrub pass rejects/strips anything resembling a Stellar address
+(`G...`), secret seed (`S...`), contract id (`C...`), XDR/base64 blob, or e-mail
+address. Reports are never persisted; only validated label fields reach the
+Prometheus registry. A redacted value used as a metric label fails validation
+and returns `400`.
+
+**Metrics**
+
+- `frontend_errors_total{kind, contract_error_name}` — counter
+- `frontend_web_vital{name, rating}` — histogram (exposed as
+  `frontend_web_vital_bucket`/`_sum`/`_count`)
+
+**Responses**
+
+| Status | Body / meaning                                                        |
+| :----- | :-------------------------------------------------------------------- |
+| `204`  | Accepted; empty body                                                  |
+| `400`  | `invalid_telemetry` — malformed JSON or neither schema matches         |
+| `413`  | `payload_too_large` — body over `TELEMETRY_BODY_SIZE_LIMIT`            |
+| `429`  | `too_many_requests` — per-IP telemetry rate limit exceeded            |
+
+```bash
+curl -X POST http://localhost:3001/v1/telemetry \
+  -H 'Content-Type: text/plain' \
+  --data '{"kind":"runtime","message":"boom","contractErrorName":"InvalidScore"}'
+# -> 204 No Content
+```
+
+> The unversioned alias `POST /api/telemetry` is deprecated like the rest of
+> `/api/*`.
+
+> **Frontend follow-up:** the frontend lives in a separate repository. Set
+> `NEXT_PUBLIC_ERROR_REPORT_URL` to `<api-base>/v1/telemetry` in the frontend's
+> `.env.example`. Optionally set `TELEMETRY_OTLP_ENABLED=true` on the backend to
+> forward accepted reports to the OTLP exporter.
 
 ---
 
-## `GET /api/iot/solar/:id`
+## 2. IoT Telemetry Endpoints
 
-Simulated solar-panel reading for project `id`. Readings are deterministic per
-`(project_id, clock hour)`.
+### `GET /v1/iot/solar/:id`
 
-| Param | In   | Type | Rules |
-|-------|------|------|-------|
-| `id`  | path | int  | Positive integer (`>= 1`) |
+Simulated solar panel telemetry for project `id`. Deterministic per `(project_id, clock_hour)`.
+
+| Param | In   | Type | Rules                                          |
+| :---- | :--- | :--- | :--------------------------------------------- |
+| `id`  | path | int  | Positive integer (`>= 1`, `<= MAX_PROJECT_ID`) |
 
 **Response `200`**
 
@@ -69,17 +303,9 @@ Simulated solar-panel reading for project `id`. Readings are deterministic per
 }
 ```
 
-**Errors:** `400` if `id` is not a positive integer.
+### `GET /v1/iot/satellite/:id`
 
----
-
-## `GET /api/iot/satellite/:id`
-
-Simulated satellite / vegetation reading for project `id`.
-
-| Param | In   | Type | Rules |
-|-------|------|------|-------|
-| `id`  | path | int  | Positive integer (`>= 1`) |
+Simulated satellite / vegetation index reading for project `id`.
 
 **Response `200`**
 
@@ -91,20 +317,28 @@ Simulated satellite / vegetation reading for project `id`.
 }
 ```
 
-**Errors:** `400` if `id` is not a positive integer.
-
 ---
 
-## `GET /api/projects`
+## 3. Projects, History, & Aggregation
 
-Paginated list of projects with their computed scores and latest readings.
+### `GET /v1/projects`
 
-| Param    | In    | Type | Rules | Default |
-|----------|-------|------|-------|---------|
-| `limit`  | query | int  | Non-negative integer; capped at `100` | `10` |
-| `cursor` | query | int  | Non-negative integer (offset) | `0` |
+Paginated, filterable list of projects with latest scores and telemetry.
 
-**Response `200`**
+| Param        | In    | Type   | Rules                                                                                                                                | Default |
+| :----------- | :---- | :----- | :----------------------------------------------------------------------------------------------------------------------------------- | :------ |
+| `page`       | query | int    | 1-based page number (`>= 1`)                                                                                                         | `1`     |
+| `pageSize`   | query | int    | Integer `1..100`                                                                                                                     | `10`    |
+| `limit`      | query | int    | Alias for `pageSize` (kept for existing clients)                                                                                     | `10`    |
+| `cursor`     | query | int    | Legacy offset alias. When present it is applied as the offset and takes precedence over `page`                                       | —       |
+| `min_score`  | query | number | Minimum credit quality score filter                                                                                                  | —       |
+| `max_score`  | query | number | Maximum credit quality score filter                                                                                                  | —       |
+| `min_date`   | query | number | Minimum timestamp (ms)                                                                                                               | —       |
+| `max_date`   | query | number | Maximum timestamp (ms)                                                                                                               | —       |
+| `sort_by`    | query | string | One of: `id`, `credit_quality`, `green_impact`, `power_output_kw`, `efficiency_pct`, `forest_density_pct`, `ndvi_score`, `timestamp` | `id`    |
+| `sort_order` | query | string | `asc` or `desc`                                                                                                                      | `asc`   |
+
+**Response `200`** (`PaginatedProjectsResponse`)
 
 ```json
 {
@@ -120,58 +354,186 @@ Paginated list of projects with their computed scores and latest readings.
       "timestamp": 1718150400000
     }
   ],
-  "total": 1,
+  "total": 50,
+  "filtered_total": 50,
+  "page": 1,
+  "pageSize": 10,
+  "hasMore": true,
   "cursor": 10
 }
 ```
 
-`cursor` is present only when more results remain; pass it back as `?cursor=`.
+`cursor` is returned only when another page follows; it carries the next
+offset, so cursor clients (`?cursor=10&limit=10`) keep working unchanged.
 
-**Errors:** `400` if `limit` or `cursor` is not a non-negative integer.
+### `GET /v1/projects/:id`
 
----
+Detailed metrics and funding data for a specific project, nested as the
+frontend's `ProjectWithDetail` shape: `{project, detail, verifiedMetadata}`.
 
-## `GET /api/projects/:id`
+- `project`: identity and impact scores (`id`, `credit_quality`, `green_impact`).
+- `detail`: telemetry and funding (`power_output_kw`, `efficiency_pct`,
+  `forest_density_pct`, `ndvi_score`, `timestamp`, `funding`).
+- `verifiedMetadata`: whether the backend holds metadata for the project.
 
-Detail for a single project.
-
-| Param | In   | Type | Rules |
-|-------|------|------|-------|
-| `id`  | path | int  | Positive integer (`>= 1`) |
+Returns `404 not_found` for ids that do not exist on the registry, including
+ids that were never issued and projects that were deleted or compacted
+(existence is read from the contract's `get_project(id)` getter).
 
 **Response `200`**
 
 ```json
 {
-  "id": 1,
-  "credit_quality": 74,
-  "green_impact": 69,
-  "power_output_kw": 742.15,
-  "efficiency_pct": 74.21,
-  "forest_density_pct": 68.44,
-  "ndvi_score": 0.684,
-  "timestamp": 1718150400000,
-  "funding": 482910.55
+  "project": {
+    "id": 1,
+    "credit_quality": 74,
+    "green_impact": 69
+  },
+  "detail": {
+    "power_output_kw": 742.15,
+    "efficiency_pct": 74.21,
+    "forest_density_pct": 68.44,
+    "ndvi_score": 0.684,
+    "timestamp": 1718150400000,
+    "funding": 482910.55
+  },
+  "verifiedMetadata": false
 }
 ```
 
-**Errors:** `400` if `id` is not a positive integer.
+### `GET /v1/projects/:id/history`
 
----
+Historical score logs for project `id`. Supports CSV export.
 
-## `GET /api/portfolio/:address`
+| Param    | In    | Type   | Description                |
+| :------- | :---- | :----- | :------------------------- |
+| `from`   | query | int    | Starting Unix ms timestamp |
+| `to`     | query | int    | Ending Unix ms timestamp   |
+| `format` | query | string | `json` (default) or `csv`  |
 
-Indexed deposit/withdraw history and current position for an address.
+**Response `200` (JSON)**
 
-| Param     | In   | Type   | Rules |
-|-----------|------|--------|-------|
-| `address` | path | string | Non-empty string |
+```json
+{
+  "project_id": 1,
+  "count": 2,
+  "entries": [
+    {
+      "project_id": 1,
+      "credit_quality": 74,
+      "green_impact": 69,
+      "recorded_at": 1718150400000
+    }
+  ]
+}
+```
+
+### `GET /v1/projects/:id/history/trend`
+
+Evaluates score direction (`improving`, `declining`, `stable`) over time.
 
 **Response `200`**
 
 ```json
 {
-  "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "project_id": 1,
+  "trend": "improving",
+  "net_delta": 4.5,
+  "data_points": 12
+}
+```
+
+### `GET /v1/projects/:id/price-history` (#769)
+
+Powers the frontend's price/yield chart (`PricePoint[] = {date, price, yield?}`).
+Values are derived from real on-chain state:
+
+- `date`: ISO date string (`YYYY-MM-DD`). Daily buckets by default; weekly
+  buckets are aligned to the Monday of the containing ISO week (UTC).
+- `yield`: percentage yield, computed as `rate_bps / 100`. `rate_bps` comes
+  from the registry's `get_interest_rate(project_id)`.
+- `price`: one-period present value of a par-100 bond at that yield:
+  `price = 100 / (1 + yield / 100)`. Rounded to two decimal places.
+
+Timestamps for the series come from `get_score_history(project_id)` (a 50-entry
+ring buffer on the contract). Historical rate is not yet indexed from the
+`RateUpdated` / `ScoreChanged` events (paired backend work), so every point
+currently carries the CURRENT yield and price. When the event indexer lands
+the response shape stays the same and only the per-entry rate lookup changes.
+
+| Param      | In    | Type    | Rules                                                     |
+| :--------- | :---- | :------ | :-------------------------------------------------------- |
+| `id`       | path  | int     | Project id (`>= 1`)                                       |
+| `from`     | query | int     | Start timestamp (unix ms). Optional.                      |
+| `to`       | query | int     | End timestamp (unix ms). Must be `>= from`.               |
+| `interval` | query | string  | `day` (default) or `week`                                 |
+
+Responses:
+
+- `200`: `{project_id, interval, count, points}` with `points` in ascending
+  date order. Sets `Cache-Control: public, max-age=60`.
+- `400`: `bad_request` when `from > to` or `interval` is not `day` / `week`.
+- `404`: `not_found` when the project is unknown or archived on the registry.
+
+**Response `200`**
+
+```json
+{
+  "project_id": 27,
+  "interval": "day",
+  "count": 3,
+  "points": [
+    { "date": "2026-09-28", "price": 96.15, "yield": 4 },
+    { "date": "2026-09-29", "price": 96.15, "yield": 4 },
+    { "date": "2026-09-30", "price": 96.15, "yield": 4 }
+  ]
+}
+```
+
+### `GET /v1/projects/aggregate`
+
+Portfolio-level aggregated impact and credit quality metrics across projects.
+
+| Param      | In    | Type   | Rules                                                     |
+| :--------- | :---- | :----- | :-------------------------------------------------------- |
+| `limit`    | query | int    | Number of projects to aggregate (`1..100`, default: `20`) |
+| `cursor`   | query | int    | Offset (default: `0`)                                     |
+| `category` | query | string | Optional filter: `solar`, `forest`, `wind`                |
+| `region`   | query | string | Optional filter: `north`, `south`, `east`, `west`         |
+
+**Response `200`**
+
+```json
+{
+  "project_count": 20,
+  "avg_credit_quality": 78.4,
+  "avg_green_impact": 72.1,
+  "total_power_output_kw": 14200.5,
+  "cursor": 20,
+  "limit": 20
+}
+```
+
+---
+
+## 4. Portfolio & Position
+
+### `GET /v1/portfolio/:address`
+
+Indexed deposit/withdrawal transaction history, share count, and position value for a Stellar account address. The
+simulated share price is seeded from the address, so `current_value` is
+deterministic per `(address, clock hour)` — the same address returns the same
+value within a clock hour, and `current_value` stays between `1.5x` and `2.0x`
+of `current_shares`.
+
+**Auth:** An API key is required on both the `/v1` and legacy `/api` mounts
+(`401 unauthorized` without one).
+
+**Response `200`**
+
+```json
+{
+  "address": "GBBD...24KL",
   "current_shares": 42,
   "current_value": 71.25,
   "events": [
@@ -187,30 +549,809 @@ Indexed deposit/withdraw history and current position for an address.
 }
 ```
 
-**Errors:** `400` if `address` is empty/missing.
+---
+
+## 5. Project Metadata & Panel Configurations
+
+### `GET /v1/metadata` & `GET /v1/metadata/:id`
+
+Retrieves project descriptive metadata (name, description, location, geographic coordinates, tags, and attached panel specs).
+
+**Response `200`**
+
+```json
+{
+  "project_id": 1,
+  "name": "Sahara Sol I",
+  "description": "High-efficiency utility-scale solar farm",
+  "location": "North Africa",
+  "coordinates": { "latitude": 27.12, "longitude": 13.18 },
+  "tags": ["utility", "clean-energy"],
+  "panel_config": {
+    "project_id": 1,
+    "model": "SunPower Maxeon 6",
+    "manufacturer": "SunPower",
+    "panel_count": 2500,
+    "wattage_per_panel": 400,
+    "effective_capacity_kw": 1000
+  }
+}
+```
+
+### `PUT /v1/metadata/:id` & `PATCH /v1/metadata/:id`
+
+Creates, replaces, or updates project metadata.
+
+**Request Body**
+
+```json
+{
+  "name": "Sahara Sol I",
+  "description": "Expanded 1.2MW capacity solar array",
+  "location": "North Africa",
+  "coordinates": { "latitude": 27.12, "longitude": 13.18 },
+  "tags": ["solar", "expansion"]
+}
+```
+
+### `GET /v1/panels` & `GET /v1/panels/:id`
+
+Retrieves solar panel hardware specs and calculates effective capacity (`panel_count * wattage_per_panel / 1000`).
+
+### `PUT /v1/panels/:id` & `PATCH /v1/panels/:id`
+
+Configures solar panel specifications for project `id`.
+
+**Request Body**
+
+```json
+{
+  "model": "SunPower Maxeon 6",
+  "manufacturer": "SunPower",
+  "panel_count": 2500,
+  "wattage_per_panel": 400,
+  "tilt_angle": 25,
+  "azimuth": 180,
+  "panel_type": "monocrystalline",
+  "installation_date": "2024-01-15"
+}
+```
 
 ---
 
-## `POST /api/admin/update-scores`
+## 6. Analytics Dashboard
 
-Compute and submit `update_impact_score` transactions to the Soroban contract.
-Stricter rate limit than public endpoints.
+### `GET /v1/dashboard/summary`
+
+High-level overview of total projects, average credit scores, average green impact, and total power generation.
+
+**Response `200`**
+
+```json
+{
+  "total_projects": 50,
+  "avg_credit_quality": 76.5,
+  "avg_green_impact": 71.2,
+  "total_power_output_kw": 36500.8
+}
+```
+
+### `GET /v1/dashboard/performers`
+
+Ranks top and bottom performing projects across the portfolio.
+
+| Param   | In    | Type | Rules           | Default |
+| :------ | :---- | :--- | :-------------- | :------ |
+| `limit` | query | int  | Integer `1..50` | `5`     |
+
+**Response `200`**
+
+```json
+{
+  "top": [{ "id": 12, "credit_quality": 98, "green_impact": 95 }],
+  "bottom": [{ "id": 4, "credit_quality": 38, "green_impact": 42 }]
+}
+```
+
+### `GET /v1/dashboard/distribution`
+
+Generates score distribution histogram data for charts.
+
+| Param    | In    | Type   | Rules                                 | Default          |
+| :------- | :---- | :----- | :------------------------------------ | :--------------- |
+| `field`  | query | string | `credit_quality` or `green_impact`    | `credit_quality` |
+| `bucket` | query | int    | Number of histogram buckets (`1..50`) | `10`             |
+
+### `GET /v1/dashboard/timeseries/:id`
+
+Retrieves historical score data points for a specific project. Supports `?from=` and `?to=` query filters.
+
+### `GET /v1/dashboard/export`
+
+Exports the entire portfolio score database in CSV format (`Content-Type: text/csv`).
+
+---
+
+## 7. Project Comparison & Ranking
+
+### `GET /v1/comparison`
+
+Compares up to 20 projects side by side across environmental and financial metrics.
+
+| Param | In    | Type   | Rules                                                         |
+| :---- | :---- | :----- | :------------------------------------------------------------ |
+| `ids` | query | string | Comma-separated list of positive integer project IDs (max 20) |
+
+**Response `200`**
+
+```json
+{
+  "projects": [
+    {
+      "id": 1,
+      "credit_quality": 74,
+      "green_impact": 69,
+      "power_output_kw": 742.15,
+      "efficiency_pct": 74.21,
+      "forest_density_pct": 68.44,
+      "ndvi_score": 0.684
+    },
+    {
+      "id": 2,
+      "credit_quality": 88,
+      "green_impact": 82,
+      "power_output_kw": 890.0,
+      "efficiency_pct": 89.0,
+      "forest_density_pct": 74.1,
+      "ndvi_score": 0.741
+    }
+  ]
+}
+```
+
+### `GET /v1/comparison/metrics`
+
+Lists all supported comparison metric keys (`credit_quality`, `green_impact`, `power_output_kw`, `efficiency_pct`, `forest_density_pct`, `ndvi_score`, `combined_score`).
+
+### `GET /v1/comparison/ranking`
+
+Ranks a set of projects according to chosen criteria.
+
+| Param      | In    | Type   | Rules                       | Default          |
+| :--------- | :---- | :----- | :-------------------------- | :--------------- |
+| `ids`      | query | string | Comma-separated project IDs | Required         |
+| `criteria` | query | string | Any valid comparison metric | `combined_score` |
+
+### `GET /v1/comparison/export` & `GET /v1/comparison/ranking/export`
+
+Exports project comparison or ranked analysis to CSV format.
+
+---
+
+## 8. Industry Benchmarking
+
+### `GET /v1/benchmarking/benchmarks` & `GET /v1/benchmarking/benchmarks/:id`
+
+Lists standard and custom benchmark definitions with evaluation thresholds (`poor`, `fair`, `good`, `excellent`).
+
+**Response `200`**
+
+```json
+{
+  "benchmarks": [
+    {
+      "id": "credit_quality",
+      "name": "Industry Credit Quality",
+      "description": "Standardized financial creditworthiness",
+      "metric": "credit_quality",
+      "thresholds": { "poor": 40, "fair": 60, "good": 80, "excellent": 90 },
+      "source": "Standard & Poor's ESG"
+    }
+  ]
+}
+```
+
+### `POST /v1/benchmarking/benchmarks`
+
+Registers a new custom benchmark definition.
+
+**Request Body**
+
+```json
+{
+  "id": "custom_efficiency",
+  "name": "High-Efficiency Solar Benchmark",
+  "description": "Benchmark for bifacial tier-1 solar assets",
+  "metric": "efficiency_pct",
+  "thresholds": { "poor": 50, "fair": 70, "good": 85, "excellent": 95 },
+  "source": "NREL 2026 Guidelines"
+}
+```
+
+### `GET /v1/benchmarking/:id`
+
+Evaluates project `id` against all registered industry benchmarks.
+
+### `GET /v1/benchmarking/:id/percentiles`
+
+Calculates project percentile ranking against all projects in the registry.
+
+| Param    | In    | Type   | Rules              | Default          |
+| :------- | :---- | :----- | :----------------- | :--------------- |
+| `metric` | query | string | Metric key to rank | `combined_score` |
+
+### `GET /v1/benchmarking/:id/alerts`
+
+Returns active alerts for project metrics falling below benchmark thresholds.
+
+### `GET /v1/benchmarking/:id/trend`
+
+Evaluates project performance trajectory relative to a benchmark over time.
+
+---
+
+## 9. Financial Analysis & Modeling
+
+### `GET /v1/financial/cost-benefit/:id`
+
+Detailed cost-benefit analysis breakdown over the project lifetime.
+
+| Param                       | In    | Type   | Description                                     |
+| :-------------------------- | :---- | :----- | :---------------------------------------------- |
+| `installation_cost`         | query | number | Optional override for total capital expenditure |
+| `annual_maintenance_cost`   | query | number | Optional override for annual O&M                |
+| `electricity_price_per_kwh` | query | number | Price per kWh generated                         |
+| `discount_rate`             | query | number | Annual discount rate (e.g. `0.06` for 6%)       |
+| `project_lifetime_years`    | query | number | Project lifespan (default: `25`)                |
+
+**Response `200`**
+
+```json
+{
+  "project_id": 1,
+  "installation_cost": 250000,
+  "total_revenue": 680000,
+  "total_maintenance_cost": 75000,
+  "net_benefit": 355000,
+  "roi_pct": 142.0,
+  "annual_cash_flows": [
+    { "year": 1, "revenue": 27200, "maintenance_cost": 3000, "net_cash_flow": 24200 }
+  ]
+}
+```
+
+### `GET /v1/financial/payback/:id`
+
+Computes simple and discounted payback periods in years.
+
+**Response `200`**
+
+```json
+{
+  "project_id": 1,
+  "payback_years": 7.4,
+  "discounted_payback_years": 9.2,
+  "reaches_payback": true
+}
+```
+
+### `GET /v1/financial/npv/:id`
+
+Calculates Net Present Value (NPV) based on discounted future cash flows.
+
+**Response `200`**
+
+```json
+{
+  "project_id": 1,
+  "npv": 118450.25,
+  "discount_rate": 0.06,
+  "discounted_cash_flows": [{ "year": 1, "discounted_cash_flow": 22830.19 }]
+}
+```
+
+### `GET /v1/financial/sensitivity/:id`
+
+Performs sensitivity analysis evaluating how NPV and ROI respond to changes in discount rates, electricity prices, and degradation rates.
+
+### `GET /v1/financial/roi-comparison`
+
+Compares ROI, NPV, and payback across multiple projects (`?ids=1,2,3`).
+
+---
+
+## 10. Forecasting & Predictive Modeling
+
+### `GET /v1/forecast/:id`
+
+Generates time-series forecasts for future power generation or efficiency.
+
+| Param           | In    | Type   | Rules                                                                              | Default                 |
+| :-------------- | :---- | :----- | :--------------------------------------------------------------------------------- | :---------------------- |
+| `horizon`       | query | int    | Hours ahead to forecast (`1..8760`)                                                | `24`                    |
+| `field`         | query | string | `power_output_kw` or `efficiency_pct`                                              | `power_output_kw`       |
+| `method`        | query | string | `exponential_smoothing`, `linear_regression`, `moving_average`, `arima_simplified` | `exponential_smoothing` |
+| `history_hours` | query | int    | Historical sample window (`4..8760`)                                               | `168`                   |
+| `format`        | query | string | `json` or `csv`                                                                    | `json`                  |
+
+**Response `200`**
+
+```json
+{
+  "project_id": 1,
+  "field": "power_output_kw",
+  "method": "exponential_smoothing",
+  "predictions": [
+    {
+      "hour_offset": 1,
+      "predicted_value": 745.2,
+      "confidence_lower": 710.0,
+      "confidence_upper": 780.4
+    }
+  ]
+}
+```
+
+### `GET /v1/forecast/weather-adjusted/:id`
+
+Forecasts power generation factoring in diurnal solar irradiance and simulated cloud cover patterns.
+
+### `GET /v1/forecast/seasonal/:id`
+
+Decomposes performance into seasonal, diurnal, and periodic cycles.
+
+### `GET /v1/forecast/accuracy/:id`
+
+Backtests forecasting models against historical project telemetry and reports accuracy metrics (`mae`, `rmse`, `mape`).
+
+### `GET /v1/forecast/methods/available`
+
+Returns list of available forecasting model identifiers.
+
+---
+
+## 11. Predictive Maintenance & Work Orders
+
+### `GET /v1/maintenance/:id/trend`
+
+Analyzes efficiency degradation trend and rate of loss over time.
+
+### `GET /v1/maintenance/:id/failure-prediction`
+
+Predictive modeling identifying hardware failure risks, estimated hours/days to critical threshold, severity, and confidence score. Supports CSV export.
+
+**Response `200`**
+
+```json
+{
+  "project_id": 1,
+  "current_efficiency": 74.21,
+  "critical_threshold": 50.0,
+  "estimated_hours_to_threshold": 1420,
+  "estimated_days_to_threshold": 59.1,
+  "severity": "medium",
+  "confidence": 0.88,
+  "panel_type": "monocrystalline"
+}
+```
+
+### `GET /v1/maintenance/:id/recommendation`
+
+Actionable maintenance recommendations (e.g. panel cleaning, inverter diagnostics, string inspection) based on telemetry patterns.
+
+### `GET /v1/maintenance/:id/schedule`
+
+Optimal scheduled maintenance calendar with recommended target dates and estimated costs.
+
+### `GET /v1/maintenance/:id/full-report`
+
+Consolidated health check including efficiency trends, failure predictions, recommendations, and maintenance schedules.
+
+### `POST /v1/maintenance/tasks`
+
+Creates a maintenance task / work order.
+
+**Request Body**
+
+```json
+{
+  "project_id": 1,
+  "title": "Quarterly Inverter Inspection",
+  "description": "Thermal scan of inverter modules and terminal connections",
+  "action_type": "inspection",
+  "priority": "high",
+  "scheduled_date": "2026-09-15",
+  "assigned_to": "technician_1",
+  "estimated_cost": 450
+}
+```
+
+### `GET /v1/maintenance/tasks`
+
+Lists work orders with query filters: `project_id`, `status` (`pending`, `in_progress`, `completed`, `cancelled`), `priority`, `from_date`, `to_date`, `format` (`json` or `csv`).
+
+### `POST /v1/maintenance/tasks/generate/:id`
+
+Auto-generates recommended work orders for project `id` from predictive schedule analysis.
+
+### `GET /v1/maintenance/tasks/:taskId` & `PATCH /v1/maintenance/tasks/:taskId`
+
+Retrieves or partially modifies a specific maintenance task.
+
+### `POST /v1/maintenance/tasks/:taskId/complete`
+
+Marks a task completed and records actual costs and before/after efficiency delta.
+
+**Request Body**
+
+```json
+{
+  "actual_cost": 420.0,
+  "notes": "Replaced faulty connector on string 4",
+  "efficiency_before": 72.1,
+  "efficiency_after": 78.4
+}
+```
+
+### `DELETE /v1/maintenance/tasks/:taskId`
+
+Deletes a maintenance task.
+
+### `GET /v1/maintenance/calendar` & `GET /v1/maintenance/calendar/range`
+
+Calendar views (`daily`, `weekly`, `monthly`) or custom date ranges (`?from=YYYY-MM-DD&to=YYYY-MM-DD`) of scheduled maintenance.
+
+### `GET /v1/maintenance/history/:id` & `POST /v1/maintenance/history/:id`
+
+Retrieves or manually logs a past maintenance intervention.
+
+### `GET /v1/maintenance/stats`
+
+Maintenance KPIs: completed task count, total maintenance spend, average resolution time, and efficiency gains.
+
+---
+
+## 12. Anomaly Detection
+
+### `GET /v1/anomaly/:id`
+
+Runs statistical z-score and moving average anomaly detection on project telemetry.
+
+| Param         | In    | Type   | Rules                               |
+| :------------ | :---- | :----- | :---------------------------------- |
+| `sensitivity` | query | number | Optional z-score threshold override |
+| `window`      | query | number | Moving baseline window size         |
+
+**Response `200`**
+
+```json
+{
+  "project_id": 1,
+  "is_anomaly": true,
+  "anomaly_score": 3.42,
+  "flagged_metrics": ["efficiency_pct"],
+  "details": {
+    "efficiency_pct": { "value": 41.2, "expected": 74.0, "z_score": -3.42 }
+  }
+}
+```
+
+### `GET /v1/anomaly` & `PUT /v1/anomaly/config`
+
+Retrieves or updates anomaly detection configuration (`sensitivityZScore`, `trendWindowSize`, `trendDeviationPct`, `minBaseline`).
+
+### `DELETE /v1/anomaly/history/:id?`
+
+Clears baseline history cache for a specific project or all projects.
+
+---
+
+## 13. Investor Reporting
+
+### `GET /v1/investor/dashboard`
+
+Portfolio-wide aggregated dashboard summary and recent audit activities for investor portals.
+
+**Response `200`**
+
+```json
+{
+  "portfolio_summary": {
+    "total_projects": 2,
+    "total_power_output_kw": 1150,
+    "avg_credit_quality": 85,
+    "avg_green_impact": 75,
+    "total_portfolio_value": 950000,
+    "total_carbon_offsets_tonnes": 4312.5
+  },
+  "recent_activities": [
+    {
+      "id": 1,
+      "project_id": 1,
+      "credit_quality": 85,
+      "green_impact": 75,
+      "tx_hash": "tx123",
+      "triggered_by": "api",
+      "timestamp": 1718150400000
+    }
+  ]
+}
+```
+
+### `GET /v1/investor/performance-report`
+
+Provides actual vs expected performance ratios and operational status (`Optimal`, `Underperforming`, `Critical`) for all portfolio assets.
+
+### `GET /v1/investor/financial-summary`
+
+Aggregates financial KPIs (total installation cost, total NPV, average payback period, average ROI).
+
+### `GET /v1/investor/compliance-report`
+
+ESG compliance scoring, verified carbon credits issued, and immutable audit logs.
+
+### `POST /v1/investor/custom-report`
+
+Generates customized reports tailored by project ID list and report sections.
+
+**Request Body**
+
+```json
+{
+  "project_ids": [1, 2],
+  "sections": ["performance", "scores", "financials", "compliance"]
+}
+```
+
+---
+
+## 14. Webhooks & Event Subscriptions
+
+### `POST /v1/webhooks`
+
+Registers an external HTTP endpoint to receive real-time event notifications (e.g. score updates, threshold alerts).
+
+**Request Body**
+
+```json
+{
+  "url": "https://api.external.com/webhooks/heliobond",
+  "secret": "super_secret_signing_key_at_least_16_chars",
+  "max_retries": 3,
+  "retry_delay_ms": 2000
+}
+```
+
+**Response `201`**
+
+```json
+{
+  "id": "wh_9f2a48b1",
+  "url": "https://api.external.com/webhooks/heliobond",
+  "max_retries": 3,
+  "retry_delay_ms": 2000,
+  "created_at": 1718150400000
+}
+```
+
+### `GET /v1/webhooks` & `GET /v1/webhooks/:id`
+
+Lists registered webhooks or retrieves details for a single webhook (secrets are omitted).
+
+### `DELETE /v1/webhooks/:id`
+
+Unregisters and deletes a webhook subscription.
+
+---
+
+## 15. Email Digests & Notifications
+
+### `POST /v1/email/subscribe`
+
+Subscribes an email address to recurring summary digests.
+
+**Request Body**
+
+```json
+{
+  "email": "investor@example.com",
+  "frequency": "weekly"
+}
+```
+
+### `GET /v1/email/unsubscribe`
+
+**Public**, no admin API key, IP allowlist, or request signature required
+(#763). Recipients can click the footer link from any mail client. Rate
+limited by the shared `publicLimiter`.
+
+Query: `token=<unsubscribe_token>` (URL-encoded).
+
+Responses:
+- `200 {"unsubscribed": true}` on success.
+- `400` when the token is missing.
+- `404` when the token is unknown or already used.
+
+### `POST /v1/email/unsubscribe`
+
+**Public**. RFC 8058 `List-Unsubscribe=One-Click` target. Mail clients
+POST here automatically when the recipient uses the built-in Unsubscribe
+button surfaced from the `List-Unsubscribe` header.
+
+Body: `{ "token": "<unsubscribe_token>" }` (or `?token=` in the query
+string; either is accepted).
+
+Alert and digest emails carry:
+
+- Absolute footer:
+  `Unsubscribe: ${PUBLIC_API_URL}/v1/email/unsubscribe?token=...`.
+- Headers: `List-Unsubscribe: <${PUBLIC_API_URL}/v1/email/unsubscribe?token=...>`
+  and `List-Unsubscribe-Post: List-Unsubscribe=One-Click`.
+
+Tokens are HMAC-SHA256 derived from the subscriber's email plus
+`EMAIL_UNSUBSCRIBE_SECRET`. They are deterministic per subscriber and are
+not stored as raw UUIDs; rotating the secret invalidates every
+outstanding link.
+
+### `GET /v1/email/subscribers`
+
+Lists current subscribers with optional `?frequency=daily|weekly` filter.
+
+### `GET /v1/email/thresholds` & `PUT /v1/email/thresholds`
+
+Retrieves or updates alerting thresholds for automatic email notifications.
+
+### `GET /v1/email/templates` & `PUT /v1/email/templates`
+
+Manages markdown/HTML templates for digest emails (`name`, `subject`, `body`).
+
+### `POST /v1/email/digest`
+
+Triggers an on-demand digest dispatch to subscribers.
+
+---
+
+## 16. Multi-Chain Integrations
+
+### `GET /v1/chains` & `GET /v1/chains/:id`
+
+Lists configured blockchains (Stellar, Polygon, Ethereum, etc.) and active RPC
+status. **Public read**: no authentication required. The chain registry does
+not expose secret material and is also surfaced via `/v1/status/oracle`.
+
+### `PATCH /v1/chains/:id`
+
+Updates configuration for a specific chain network (`enabled`, `rpcUrl`,
+`contractAddress`, `name`). **Admin only**: requires IP whitelist, admin
+bearer token, and HMAC request signing (`ipWhitelist` + `requireAdminBearer` +
+`requestSigning`), matching sibling admin routers like `/v1/satellite-sources`
+and `/v1/admin/api-keys`.
+
+Payload is validated before any config is applied: `rpcUrl` must be an
+http(s) URL that does not resolve to private, loopback, link-local, or
+metadata address ranges (defense-in-depth SSRF check via
+`lib/ssrf.validatePublicUrl`). `contractAddress` must be a valid Stellar
+contract strkey. `enabled` must be a boolean. `name` must be a non-empty
+string of at most 200 characters.
+
+Only the fields present in the body are changed; omitted fields keep their
+current values, so `{ "name": "Stellar Testnet" }` leaves `enabled`, `rpcUrl`
+and `contractAddress` untouched. To clear a configured contract address, send
+`"contractAddress": null`.
+
+### `POST /v1/chains/broadcast/:projectId`
+
+Broadcasts computed project impact scores to Stellar. **Admin only**: same
+auth stack as `PATCH /v1/chains/:id` — this endpoint signs and submits a
+Soroban transaction with `ADMIN_SECRET_KEY`, so unauthenticated access would
+let any caller spend the oracle signer's XLM.
+
+EVM chains (Ethereum, Polygon) do not have a submission implementation yet:
+requesting one returns `501 Not Implemented` rather than a synthetic
+transaction hash.
+
+On success the response contains per-chain results with a `status` of
+`submitted`, `failed`, or `not_implemented`. `txHash` is only populated for
+real `submitted` results.
+
+**Request Body**
+
+```json
+{
+  "chains": ["stellar"]
+}
+```
+
+---
+
+## 17. Satellite Data Sources
+
+### `GET /v1/satellite-sources`
+
+Lists configured satellite data providers (e.g. Sentinel-2, Landsat-9, MODIS, Planet) with priority and health status.
+
+### `GET /v1/satellite-sources/health`
+
+Health check status and consecutive failure counts per data source provider.
+
+### `PATCH /v1/satellite-sources/:name`
+
+Enables/disables a source or alters its priority in the failover cascade (`{ "enabled": true, "priority": 1 }`).
+
+### `POST /v1/satellite-sources`
+
+Registers a custom external satellite data adapter endpoint (`name`, `priority`, `fetchUrl`).
+
+### `GET /v1/satellite-sources/fetch/:projectId`
+
+Fetches satellite NDVI data from the highest-priority available source with automatic fallback failover.
+
+---
+
+## 18. Custom Scoring Formulas & A/B Testing
+
+### `GET /v1/scoring/formulas`
+
+Lists all scoring formula definitions and identifies the currently active formula ID.
+
+### `POST /v1/scoring/formulas`
+
+Creates a custom formula assigning weights to telemetry metrics.
+
+**Request Body**
+
+```json
+{
+  "id": "solar_heavy_v2",
+  "name": "Solar Focused Impact Formula",
+  "description": "Increases weighting of solar efficiency over vegetation",
+  "weights": {
+    "efficiency_pct": 0.6,
+    "power_output_kw": 0.2,
+    "ndvi_score": 0.2
+  }
+}
+```
+
+### `GET /v1/scoring/formulas/:id` & `DELETE /v1/scoring/formulas/:id`
+
+Retrieves or deletes a custom scoring formula definition.
+
+### `POST /v1/scoring/formulas/:id/activate`
+
+Activates a custom formula platform-wide for subsequent score computations.
+
+### `POST /v1/scoring/formulas/validate`
+
+Validates weight distribution and sum normalization without saving.
+
+### `GET /v1/scoring/formulas/:id/preview/:projectId`
+
+Simulates and previews score changes for a project using the custom formula vs the default formula (A/B testing).
+
+---
+
+## 19. Administration & System Management
+
+### `POST /v1/admin/update-scores`
+
+Computes and submits `update_impact_score` transactions to the Soroban smart contract oracle.
 
 **Headers**
 
-| Header          | Required | Value |
-|-----------------|----------|-------|
-| `Authorization` | When `ADMIN_API_KEY` is set | `Bearer <ADMIN_API_KEY>` |
+| Header          | Required | Value                    |
+| :-------------- | :------- | :----------------------- |
+| `Authorization` | Yes      | `Bearer <ADMIN_API_KEY>` |
 
-**Body (optional)**
+If `ADMIN_API_KEY` is unset the endpoint fails closed with `500 server_misconfigured`.
+
+**Request Body (optional)**
 
 ```json
-{ "project_ids": [1, 2, 3] }
+{
+  "project_ids": [1, 2, 3]
+}
 ```
-
-| Field         | Type     | Rules |
-|---------------|----------|-------|
-| `project_ids` | int[]    | Optional. Array of positive integers. Omit or send `[]` to update **every** registered project. |
 
 **Response `200`**
 
@@ -220,14 +1361,456 @@ Stricter rate limit than public endpoints.
   "results": [
     { "project_id": 1, "tx_hash": "abc123...", "credit_quality": 74, "green_impact": 69 }
   ],
-  "errors": []
+  "errors": [],
+  "skipped": []
 }
 ```
 
-Per-project failures are collected in `errors` (the request still returns `200`);
-Soroban does not support multi-call batching, so transactions are submitted
-sequentially.
+### `GET /v1/admin/audit`
 
-**Errors:**
-- `400` if `project_ids` is present but not an array of positive integers, or the JSON body is malformed.
-- `401` if `ADMIN_API_KEY` is set and the bearer token is missing/incorrect.
+Immutable audit log of all on-chain score updates with query filters (`?project_id=`, `?from=`, `?to=`, `?format=json|csv`).
+
+### `POST /v1/admin/batch/score-update`
+
+Starts an asynchronous background batch score update job with concurrency controls.
+
+**Request Body**
+
+```json
+{
+  "project_ids": [1, 2, 3, 4, 5],
+  "concurrency": 3
+}
+```
+
+**Response `202 Accepted`**
+
+```json
+{
+  "batch_id": "job_9a8f21c4",
+  "status": "running",
+  "total": 5,
+  "concurrency": 3
+}
+```
+
+### `GET /v1/admin/batch/:batchId/status`
+
+Polls progress, completion status, results, and errors for a batch job.
+
+### `POST /v1/admin/api-keys`
+
+Generates a new consumer API key with rate limits and rotation intervals.
+
+**Request Body**
+
+```json
+{
+  "consumer_name": "Acme Partner Service",
+  "rate_limit": 100,
+  "rotation_interval_days": 90
+}
+```
+
+### `GET /v1/admin/api-keys`, `POST /v1/admin/api-keys/:id/rotate`, `DELETE /v1/admin/api-keys/:id`, `GET /v1/admin/api-keys/:id/usage`
+
+Full lifecycle management for consumer API credentials.
+
+### `GET /v1/roles`, `POST /v1/roles`, `DELETE /v1/roles/:userId`
+
+Role-Based Access Control (RBAC) user assignment (`admin`, `operator`, `viewer`).
+
+### `GET /v1/admin/secrets/status`
+
+Checks encryption secret rotation status and schedule.
+
+### `GET /v1/admin/migrations`, `POST /v1/admin/migrations/up`, `POST /v1/admin/migrations/rollback`
+
+Database migration status and execution controls.
+
+### `GET /v1/admin/logging/level` & `PUT /v1/admin/logging/level`
+
+Inspects or dynamically updates the runtime logger level (`debug`, `info`, `warn`, `error`).
+
+### `GET /v1/admin/compression`
+
+Reports response compression efficiency and byte savings.
+
+### `GET /v1/admin/flags`, `GET /v1/admin/flags/:name`, `POST /v1/admin/flags/load`, `POST /v1/admin/flags/merge`, `GET /v1/admin/flags/analytics`
+
+Feature flag management and evaluation context analytics.
+
+---
+
+## 20. WebSocket Real-Time Updates
+
+Two WebSocket feeds are exposed, targeting different consumers:
+
+| Path         | Auth   | Frames         | Intended consumer                                   |
+| ------------ | ------ | -------------- | --------------------------------------------------- |
+| `/ws`        | Bearer | Binary (score) | Internal / server-to-server admin subscribers.       |
+| `/ws/events` | None   | JSON (vault)   | Browser tabs (the `VaultEventStream` in the app UI). |
+
+Both share the same HTTP server; the upgrade handler routes by URL pathname.
+
+### `/ws/events`: browser vault event stream (#767)
+
+Browsers cannot set headers on a `WebSocket`, so this feed accepts a bare
+`new WebSocket(url)` with **no** headers and **no** subscribe frame. The
+frontend's `VaultEventStream` is the canonical consumer.
+
+- **Endpoint**: `ws://localhost:3001/ws/events` (dev) or
+  `wss://your-domain.com/ws/events` (production).
+- **Auth**: none, this endpoint serves public chain data. Follow-up
+  work (#655) may layer an optional `Sec-WebSocket-Protocol` token.
+- **Optional filter**: `?contract=<contractId>`, only events whose
+  `contractId` field matches are delivered to that client. Omit to
+  receive every broadcast.
+- **Frame shape**: the fixture at
+  `src/__tests__/fixtures/vault-event.json` is the shared contract with
+  the frontend:
+
+  ```json
+  {
+    "type": "ScoreChanged",
+    "contractId": "CDLZ...CYSC",
+    "ledger": 1234567,
+    "topic": ["AAAA...", "AAAA..."],
+    "value": { "project_id": 27, "credit_quality": 82, "green_impact": 74 },
+    "id": "1234567-0"
+  }
+  ```
+
+- **Connection limits**: `WS_EVENTS_MAX_PER_IP` (default 8) concurrent
+  sockets per source IP. The 9th connection is closed with code
+  `1013 too many connections from this IP`.
+- **Heartbeat**: the server sends a WebSocket `ping` every 30s; sockets
+  that fail to `pong` within 60s are terminated. Browser `WebSocket`
+  answers pings automatically.
+- **Producers**: any backend module can push an event via
+  `broadcastVaultEvent(evt)` from `src/lib/vaultEvents.ts`. The full
+  end-to-end wiring from a Soroban indexer is tracked in the paired
+  issue referenced from #767.
+
+### `/ws`: authenticated binary score-update feed
+
+Unchanged from before #767. Provides real-time binary score updates with
+low latency and minimal bandwidth usage.
+
+- **Endpoint**: `ws://localhost:3001/ws` (dev) or `wss://your-domain.com/ws` (production)
+- **Protocol**: Binary frames for score updates, JSON for control messages
+
+### Authentication
+
+Authentication is **required in production** and optional in dev/test environments. Send the bearer token via the `Authorization` header during the WebSocket upgrade:
+
+```javascript
+const ws = new WebSocket('ws://localhost:3001/ws', {
+  headers: {
+    'Authorization': 'Bearer YOUR_WS_AUTH_TOKEN'
+  }
+});
+```
+
+**Important**: Query string authentication (`?token=...`) is **not supported** for security reasons (tokens in URLs leak into logs). `WS_AUTH_TOKEN` does **not** fall back to `ADMIN_API_KEY`.
+
+**Close codes**:
+- `1008 Unauthorized`: Missing or invalid bearer token (production only)
+
+### Control Frames (JSON)
+
+Clients send JSON control messages to manage subscriptions:
+
+#### Subscribe to Specific Projects
+
+```json
+{
+  "action": "subscribe",
+  "project_ids": [1, 42, 100]
+}
+```
+
+#### Subscribe to All Projects
+
+```json
+{
+  "action": "subscribe",
+  "all": true
+}
+```
+
+Or alternatively:
+
+```json
+{
+  "action": "subscribe",
+  "project_ids": "all"
+}
+```
+
+#### Unsubscribe from Specific Projects
+
+```json
+{
+  "action": "unsubscribe",
+  "project_ids": [1, 42]
+}
+```
+
+#### Unsubscribe from All
+
+```json
+{
+  "action": "unsubscribe",
+  "all": true
+}
+```
+
+#### Subscription Acknowledgement
+
+After each subscription change, the server confirms with:
+
+```json
+{
+  "type": "subscribed",
+  "all": false,
+  "project_ids": [1, 42, 100]
+}
+```
+
+#### Error Responses
+
+```json
+{
+  "type": "error",
+  "message": "invalid JSON control frame"
+}
+```
+
+Or:
+
+```json
+{
+  "type": "error",
+  "message": "unknown action: invalid_action"
+}
+```
+
+### Binary Score Update Frames
+
+Score updates are sent as compact **15-byte binary frames** for efficiency:
+
+| Offset | Length | Type    | Field            | Description                          |
+|--------|--------|---------|------------------|--------------------------------------|
+| 0      | 1      | uint8   | message_type     | Always `0x01` (score update)         |
+| 1      | 4      | uint32  | project_id       | Big-endian project identifier        |
+| 5      | 1      | uint8   | credit_quality   | 0–100 (clamped)                      |
+| 6      | 1      | uint8   | green_impact     | 0–100 (clamped)                      |
+| 7      | 8      | float64 | timestamp        | Big-endian Unix timestamp (ms)       |
+
+#### Decoding Example (JavaScript/Node.js)
+
+```javascript
+ws.on('message', (data) => {
+  if (data instanceof Buffer && data.length === 15) {
+    const messageType = data.readUInt8(0);
+    
+    if (messageType === 0x01) {
+      const projectId = data.readUInt32BE(1);
+      const creditQuality = data.readUInt8(5);
+      const greenImpact = data.readUInt8(6);
+      const timestamp = data.readDoubleBE(7);
+      
+      console.log({
+        project_id: projectId,
+        credit_quality: creditQuality,
+        green_impact: greenImpact,
+        timestamp: new Date(timestamp).toISOString()
+      });
+    }
+  } else {
+    // JSON control frame (acknowledgement or error)
+    const message = JSON.parse(data.toString());
+    console.log('Control message:', message);
+  }
+});
+```
+
+#### Decoding Example (Python)
+
+```python
+import struct
+import json
+from datetime import datetime
+
+def decode_score_update(data: bytes):
+    if len(data) == 15:
+        msg_type, project_id, cq, gi, timestamp = struct.unpack('>BIBBD', data)
+        if msg_type == 0x01:
+            return {
+                'project_id': project_id,
+                'credit_quality': cq,
+                'green_impact': gi,
+                'timestamp': datetime.fromtimestamp(timestamp / 1000)
+            }
+    else:
+        return json.loads(data.decode('utf-8'))
+```
+
+### Heartbeat
+
+WebSocket connections remain open indefinitely. Clients should implement reconnection logic for network interruptions. The server does not send ping/pong heartbeats; rely on TCP keep-alive or application-level health checks.
+
+### Complete Client Example
+
+```javascript
+const WebSocket = require('ws');
+
+const ws = new WebSocket('ws://localhost:3001/ws', {
+  headers: {
+    'Authorization': 'Bearer YOUR_WS_AUTH_TOKEN'
+  }
+});
+
+ws.on('open', () => {
+  console.log('Connected');
+  
+  // Subscribe to specific projects
+  ws.send(JSON.stringify({
+    action: 'subscribe',
+    project_ids: [1, 2, 3]
+  }));
+});
+
+ws.on('message', (data) => {
+  if (data instanceof Buffer && data.length === 15) {
+    const messageType = data.readUInt8(0);
+    
+    if (messageType === 0x01) {
+      const projectId = data.readUInt32BE(1);
+      const creditQuality = data.readUInt8(5);
+      const greenImpact = data.readUInt8(6);
+      const timestamp = data.readDoubleBE(7);
+      
+      console.log('Score update:', {
+        project_id: projectId,
+        credit_quality: creditQuality,
+        green_impact: greenImpact,
+        timestamp: new Date(timestamp).toISOString()
+      });
+    }
+  } else {
+    const message = JSON.parse(data.toString());
+    console.log('Control message:', message);
+  }
+});
+
+ws.on('error', (error) => {
+  console.error('WebSocket error:', error);
+});
+
+ws.on('close', (code, reason) => {
+  console.log(`Connection closed: ${code} ${reason}`);
+  // Implement reconnection logic here
+});
+```
+
+---
+
+## 21. GraphQL API
+
+- **HTTP Endpoint**: `/graphql` (POST requests)
+- **GraphiQL Playground**: `/graphql-playground` (GET request in browser)
+
+### Query safety limits
+
+GraphQL documents are validated before execution. A request that exceeds a
+limit is rejected with a `GRAPHQL_*` error code and no resolvers (DataLoader,
+database, or RPC work) run.
+
+| Limit                                                | Default | Environment variable       |
+| ---------------------------------------------------- | ------- | -------------------------- |
+| Maximum field-selection depth per operation          | 12      | `GRAPHQL_MAX_DEPTH`        |
+| Maximum field selections per operation (complexity)  | 1000    | `GRAPHQL_MAX_COMPLEXITY`   |
+| Maximum root fields/aliases per operation            | 20      | `GRAPHQL_MAX_ROOT_FIELDS`  |
+
+Fragments and inline fragments are expanded when calculating these limits, so
+wrapping selections in fragments does not bypass them. Repeated aliases of the
+same field each count towards complexity and the root-field cap.
+
+**Introspection policy:** `__schema` and `__type` introspection is disabled
+when `NODE_ENV=production` and enabled in other environments. Set
+`GRAPHQL_ALLOW_INTROSPECTION=true` to allow introspection in production (for
+example, for a trusted internal schema registry) or `false` to disable it
+everywhere. `__typename` is always allowed.
+
+### Example Query
+
+```graphql
+query GetProjectsWithSolar {
+  projects(limit: 5) {
+    id
+    credit_quality
+    green_impact
+    solar {
+      power_output_kw
+      efficiency_pct
+      max_power_kw
+    }
+    financials {
+      npv
+      roi_pct
+      payback_period_years
+    }
+  }
+}
+```
+
+### Example Mutation (Requires Admin Auth)
+
+```graphql
+mutation UpdateProjectScore {
+  updateProjectScores(id: "1", creditQuality: 90, greenImpact: 85) {
+    id
+    credit_quality
+    green_impact
+  }
+}
+```
+
+---
+
+## 22. gRPC Service
+
+High-performance gRPC service listening on port `50051`. Authenticates callers via gRPC metadata headers (`authorization` or `x-api-key`).
+
+### Service Definition
+
+```protobuf
+syntax = "proto3";
+
+package heliobond;
+
+service HeliobondService {
+  rpc GetProjectScore(ProjectRequest) returns (ProjectResponse);
+  rpc StreamProjectScores(StreamRequest) returns (stream ProjectResponse);
+  rpc ChatProjectScores(stream ProjectRequest) returns (stream ProjectResponse);
+}
+
+message ProjectRequest {
+  int32 project_id = 1;
+}
+
+message StreamRequest {
+  repeated int32 project_ids = 1;
+}
+
+message ProjectResponse {
+  int32 project_id = 1;
+  double credit_quality = 2;
+  double green_impact = 3;
+  double power_output_kw = 4;
+  double efficiency_pct = 5;
+  int64 timestamp = 6;
+}
+```

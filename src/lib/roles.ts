@@ -25,3 +25,9 @@ export function hasPermission(userId: string, required: Role): boolean {
   if (!role) return false;
   return ROLE_RANK[role] >= ROLE_RANK[required];
 }
+
+// Bootstrap initial admin from env if provided.
+const initialAdminUserId = process.env.INITIAL_ADMIN_USER_ID?.trim();
+if (initialAdminUserId) {
+  assignRole(initialAdminUserId, "admin");
+}

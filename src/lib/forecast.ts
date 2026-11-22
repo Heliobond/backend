@@ -228,6 +228,7 @@ export function isMethodValid(method: string): method is ForecastMethod {
   // (toString, constructor, __proto__, …) are not treated as valid
   // forecast methods (#1070).
   return Object.hasOwn(FORECAST_METHODS, method);
+  return method in FORECAST_METHODS;
 }
 
 // ── Main forecast function ───────────────────────────────────────────────────

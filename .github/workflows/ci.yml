@@ -6,24 +6,227 @@ on:
   pull_request:
     branches: [main]
 
+# No job inherits a token grant; each one declares the minimum it needs.
+permissions: {}
+
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  test:
+  # Runs before anything installs, builds or executes the PR's code. PR #969's
+  # payload ran on a runner the moment CI called `bun run build`; these checks
+  # would have failed first. On a PR the checkers are read from the base
+  # branch, so a PR cannot weaken the checks that run on it.
+  security-gates:
+    name: pre-install security gates
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Scan tracked files for Wave indicators
+        env:
+          SCANNER_REF: ${{ github.event.pull_request.base.sha || github.sha }}
+        run: |
+          scanner="$RUNNER_TEMP/check-wave.py"
+          if git cat-file -e "$SCANNER_REF:scripts/check-wave.py"; then
+            git show "$SCANNER_REF:scripts/check-wave.py" > "$scanner"
+          else
+            # Bootstrap the introducing PR with the reviewed scanner bytes.
+            git show HEAD:scripts/check-wave.py > "$scanner"
+            echo "c4eae9787ff4b1ddd931e17bfd4c7d7d9a899d3dc1c9881fcc6a37692ae42a3e  $scanner" | sha256sum --check --status
+          fi
+          python3 -I "$scanner"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Load the checkers from the base branch
+        run: |
+          mkdir -p "$RUNNER_TEMP/checks"
+          for f in check-hidden-content.mjs lockfile-lint.mjs; do
+            if [ -n "$BASE_SHA" ] && git show "$BASE_SHA:scripts/$f" > "$RUNNER_TEMP/checks/$f" 2>/dev/null; then
+              echo "using base-branch scripts/$f"
+            else
+              # Only the PR that introduces a checker, or a push to main, gets here.
+              echo "::warning::scripts/$f is not on the base branch; using this commit's copy"
+              cp "scripts/$f" "$RUNNER_TEMP/checks/$f"
+            fi
+          done
+
+      # Tab padding, Trojan Source characters, obfuscated code, new root scripts.
+      - name: Hidden-content check
+        run: node "$RUNNER_TEMP/checks/check-hidden-content.mjs"
+
+      # Every dependency from the npm registry with an integrity hash; bun.lock only.
+      - name: Lockfile lint
+        run: node "$RUNNER_TEMP/checks/lockfile-lint.mjs"
+
+  test:
+    needs: security-gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Install bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.x"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Check for insecure TLS configuration
+        run: |
+          if [ ! -f src/knexfile.ts ]; then
+            echo "::error::src/knexfile.ts not found."
+            exit 1
+          fi
+          if grep -q "rejectUnauthorized: false" src/knexfile.ts; then
+            echo "::error::Found insecure TLS configuration (rejectUnauthorized: false) in src/knexfile.ts. Use a proper CA certificate instead."
+            exit 1
+          fi
+          echo "TLS configuration is secure."
+
       - name: Build
         run: bun run build
 
+      - name: Lint
+        run: bun run lint
+
+      - name: Audit dependencies
+        run: |
+          bun audit --json > bun-audit-report.json || true
+          node -e '
+            const fs=require("fs");
+            if (!fs.existsSync("bun-audit-report.json")) process.exit(0);
+            const report=JSON.parse(fs.readFileSync("bun-audit-report.json","utf8"));
+            let critical=0, high=0;
+            if (report.metadata?.vulnerabilities) {
+              critical=report.metadata.vulnerabilities.critical||0;
+              high=report.metadata.vulnerabilities.high||0;
+            } else for (const advisories of Object.values(report)) if (Array.isArray(advisories)) for (const adv of advisories) {
+              const severity=(adv.severity||"").toLowerCase();
+              if (severity === "critical") critical++;
+              if (severity === "high") high++;
+            }
+            if (high) console.warn(`::warning::Found ${high} high vulnerabilities`);
+            if (critical) {
+              console.error(`Found ${critical} critical vulnerabilities`);
+              process.exit(1);
+            }
+            console.log("No critical vulnerabilities found; lower severities are warnings.");
+          '
+
       - name: Test
         run: bun run test
+
+      - name: Test the Wave scanner
+        run: python3 -I scripts/test_check_wave.py
+
+      - name: Test the security checks
+        run: node --test 'scripts/*.test.mjs'
+
+  openapi-client:
+    needs: security-gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.x"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check OpenAPI spec is up to date
+        run: bun run openapi:check
+
+      - name: Regenerate spec and client
+        run: |
+          bun run openapi:export
+          bun run api-client:generate
+
+      - name: Fail if generated files are stale
+        run: git diff --exit-code -- openapi.json packages/api-client
+
+      - name: Build client
+        run: bun run api-client:build
+
+      - name: Smoke-test client import
+        run: |
+          node --input-type=module -e "import { createApiClient } from './packages/api-client/dist/index.js'; createApiClient({ baseUrl: 'http://localhost' })"
+
+  codeql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@4bfa242aa49c5f7c6770b98670d354a7dfac05f8 # v3.39.1
+        with:
+          languages: javascript
+          queries: security-extended
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@4bfa242aa49c5f7c6770b98670d354a7dfac05f8 # v3.39.1
+        with:
+          fail-on: high
+
+  lint-workflows:
+    name: Lint Workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Run actionlint
+        uses: reviewdog/action-actionlint@cfa6a621f27735ccc88d35af9d0608692fd9b9f7 # v1.80.8
+        with:
+          actionlint_flags: "-color"
+
+  release:
+    needs: test
+    if: >-
+      github.event_name == 'push' && github.repository == 'Heliobond/backend' &&
+      github.ref == 'refs/heads/main' && needs.test.result == 'success'
+    uses: ./.github/workflows/release.yml
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write

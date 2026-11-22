@@ -1,0 +1,209 @@
+name: Deploy
+
+# Deployment pipeline (#226).
+#
+#   push to main      → build + push image, deploy to staging
+#   release published → build + push image, deploy to production
+#   tag v*            → same as a published release
+#   repository_dispatch(deploy) → production, triggered by release.yml
+#
+# Every deployment goes through the GitHub Deployments API so status shows up
+# on the commit and, for a merged PR, in that PR's checks.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  release:
+    types: [published]
+  repository_dispatch:
+    types: [deploy]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+permissions:
+  contents: read
+  packages: write
+  deployments: write
+
+jobs:
+  # ── Decide where this run is going ─────────────────────────────────────────
+  target:
+    name: Resolve target environment
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.resolve.outputs.environment }}
+    steps:
+      - name: Resolve environment
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_ENVIRONMENT: ${{ github.event.inputs.environment }}
+          REF: ${{ github.ref }}
+        run: |
+          case "$EVENT_NAME" in
+            release|repository_dispatch) target=production ;;
+            workflow_dispatch)           target="$INPUT_ENVIRONMENT" ;;
+            push)
+              if [[ "$REF" == refs/tags/v* ]]; then
+                target=production
+              else
+                target=staging
+              fi
+              ;;
+            *) target=staging ;;
+          esac
+          echo "environment=$target" >> "$GITHUB_OUTPUT"
+          echo "Deploying to $target"
+
+  # ── Build the image and push it to GHCR ────────────────────────────────────
+  build-and-push:
+    name: Build and push image
+    needs: target
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.tags }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ${{ env.REGISTRY }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=long
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: production
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summarise
+        run: |
+          {
+            echo "## Image published"
+            echo ""
+            echo "| Field | Value |"
+            echo "|-------|-------|"
+            echo "| Environment | ${{ needs.target.outputs.environment }} |"
+            echo "| Digest | \`${{ steps.build.outputs.digest }}\` |"
+            echo "| Tags | \`${{ steps.meta.outputs.tags }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Roll the new image out ─────────────────────────────────────────────────
+  deploy:
+    name: Deploy to ${{ needs.target.outputs.environment }}
+    needs: [target, build-and-push]
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ needs.target.outputs.environment }}
+      url: ${{ steps.release.outputs.url }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Open GitHub deployment
+        id: start
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: context.sha,
+              environment: '${{ needs.target.outputs.environment }}',
+              auto_merge: false,
+              required_contexts: [],
+              description: 'Automated deploy from ${{ github.workflow }}',
+            });
+            core.setOutput('id', deployment.data.id);
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: deployment.data.id,
+              state: 'in_progress',
+              log_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            });
+
+      - name: Release image to ${{ needs.target.outputs.environment }}
+        id: release
+        env:
+          ENVIRONMENT: ${{ needs.target.outputs.environment }}
+          IMAGE_DIGEST: ${{ needs.build-and-push.outputs.digest }}
+          DEPLOY_HOOK_URL: ${{ secrets.DEPLOY_HOOK_URL }}
+        run: |
+          set -euo pipefail
+          IMAGE="${REGISTRY}/${IMAGE_NAME}@${IMAGE_DIGEST}"
+          echo "Releasing ${IMAGE} to ${ENVIRONMENT}"
+
+          if [ -z "${DEPLOY_HOOK_URL:-}" ]; then
+            echo "::warning::DEPLOY_HOOK_URL is not configured for ${ENVIRONMENT};"\
+                 "the image is published but no host was told to pull it."
+            echo "url=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The hook is whatever the hosting platform exposes (Render, Fly,
+          # Railway, a self-hosted webhook). It receives the exact digest so the
+          # environment runs the image this workflow just built.
+          curl --fail --silent --show-error --location \
+            --max-time 120 \
+            --request POST "${DEPLOY_HOOK_URL}" \
+            --header "Content-Type: application/json" \
+            --data "{\"image\":\"${IMAGE}\",\"environment\":\"${ENVIRONMENT}\"}"
+
+          echo "url=${DEPLOY_HOOK_URL%%\?*}" >> "$GITHUB_OUTPUT"
+
+      - name: Report deployment status
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const success = '${{ job.status }}' === 'success';
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: ${{ steps.start.outputs.id }},
+              state: success ? 'success' : 'failure',
+              environment_url: '${{ steps.release.outputs.url }}' || undefined,
+              log_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              description: success ? 'Deployment succeeded' : 'Deployment failed',
+            });

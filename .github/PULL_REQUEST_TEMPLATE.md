@@ -1,24 +1,16 @@
-<!-- Keep PRs focused — one issue each. -->
-
-## Summary
-
-<!-- What does this change and why? -->
-
-## Linked issue
-
-Closes #<!-- issue number -->
+## Description
 
 ## Type of change
-
 - [ ] Bug fix
-- [ ] Feature
-- [ ] Tests
-- [ ] Docs / chore
+- [ ] New feature
+- [ ] Breaking change
+- [ ] Documentation update
 
-## Checklist
-
-- [ ] Tied to an accepted issue (`Closes #…`)
+## Testing checklist
 - [ ] Tests pass locally
-- [ ] New behaviour is covered by tests
-- [ ] No secrets committed
-- [ ] Docs updated where relevant
+- [ ] Added new tests (if applicable)
+- [ ] Code follows project conventions
+
+## Related issues
+
+## Screenshots (if applicable)
