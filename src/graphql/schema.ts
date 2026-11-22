@@ -177,6 +177,14 @@ export const graphqlRoot = {
     if (!context.isAdmin && !context.isConsumer) {
       throw new Error("Unauthorized: Valid API Key is required");
     }
+    // #1042: reject negative pagination arguments — a negative offset yields
+    // fabricated negative project IDs; a negative limit is semantically invalid.
+    if ((offset ?? 0) < 0) {
+      throw new Error("offset must be a non-negative integer");
+    }
+    if ((limit ?? 10) < 0) {
+      throw new Error("limit must be a non-negative integer");
+    }
     const total = await getTotalProjects();
     // Cap limit to prevent excessive memory usage (#696)
     const cappedLimit = Math.min(limit ?? 10, 100);
