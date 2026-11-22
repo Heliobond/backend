@@ -1,0 +1,154 @@
+import { Request, Response, NextFunction } from "express";
+import { logger } from "../lib/logger";
+
+/**
+ * Standard error response shape returned by `errorHandler` and any route that
+ * reports an error directly: `{ error: { code, message } }`. `code` is a
+ * stable, machine-readable identifier; `message` is human-readable.
+ */
+export interface ErrorBody {
+  error: { code: string; message: string };
+}
+
+export function errorBody(code: string, message: string): ErrorBody {
+  return { error: { code, message } };
+}
+
+/**
+ * Structured API error. Thrown from anywhere in a route handler (sync or async)
+ * and rendered as `{ error: { code, message } }` JSON by `errorHandler`.
+ *
+ * `code` is a stable, machine-readable identifier; `message` is human-readable.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+export function badRequest(message: string): ApiError {
+  return new ApiError(400, "bad_request", message);
+}
+
+/** Hard upper bound on project ids, used when MAX_PROJECT_ID is unset or invalid. */
+export const MAX_PROJECT_ID = 100_000;
+export const DEFAULT_MAX_PROJECT_ID = MAX_PROJECT_ID;
+
+/**
+ * Largest id the registry contract can represent for a project (`u32`).
+ *
+ * Routes that delegate existence to the registry (#768) validate against this
+ * instead of the deployment's synthetic `MAX_PROJECT_ID`, so an unknown id in
+ * that former range resolves to a real `404` rather than a `400`.
+ */
+export const MAX_U32_PROJECT_ID = 0xffffffff;
+
+/**
+ * Upper bound on project ids. `MAX_PROJECT_ID` can be raised/lowered per
+ * deployment; anything unset, non-integer or below 1 falls back to the default.
+ */
+export function maxProjectId(): number {
+  const raw = process.env.MAX_PROJECT_ID;
+  if (raw === undefined || raw === "") return DEFAULT_MAX_PROJECT_ID;
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : DEFAULT_MAX_PROJECT_ID;
+}
+
+export interface ParseProjectIdOptions {
+  /**
+   * Override the deployment's `MAX_PROJECT_ID` upper bound. Pass `null` to
+   * disable it entirely (callers then delegate existence to the registry).
+   */
+  max?: number | null;
+}
+
+/**
+ * Parse and validate a `:id` style path/route param as a positive integer.
+ * Throws `ApiError` (400) on anything that isn't a whole number >= 1 and within allowed range.
+ */
+export function parseProjectId(
+  raw: string | string[] | undefined,
+  field = "id",
+  options: ParseProjectIdOptions = {},
+): number {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (value === undefined || value === "" || !/^\d+$/.test(value)) {
+    throw badRequest(`${field} must be a positive integer`);
+  }
+  const id = Number(value);
+  if (!Number.isSafeInteger(id) || id < 1) {
+    throw badRequest(`${field} must be a positive integer`);
+  }
+  const limit = options.max === undefined ? maxProjectId() : options.max;
+  if (limit !== null && id > limit) {
+    throw badRequest(`${field} must be a positive integer not exceeding ${limit}`);
+  }
+  return id;
+}
+
+/**
+ * Parse an optional non-negative integer query param, falling back to `fallback`.
+ * Throws `ApiError` (400) when the param is present but not a valid integer.
+ */
+export function parseOptionalInt(
+  raw: string | string[] | undefined,
+  field: string,
+  fallback: number,
+): number {
+  if (raw === undefined) return fallback;
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (value === undefined) return fallback;
+  if (!/^\d+$/.test(value)) {
+    throw badRequest(`${field} must be a non-negative integer`);
+  }
+  return Number(value);
+}
+
+/** JSON 404 for unmatched routes — keeps clients off Express' HTML default. */
+export function notFoundHandler(req: Request, res: Response): void {
+  res.status(404).json(errorBody("not_found", `Cannot ${req.method} ${req.originalUrl}`));
+}
+
+/**
+ * Terminal error-handling middleware. Must be registered last and keep all four
+ * args so Express recognises it as an error handler.
+ */
+export function errorHandler(
+  err: unknown,
+  _req: Request,
+  res: Response,
+  _next: NextFunction,
+): void {
+  if (res.headersSent) return;
+
+  if (err instanceof ApiError) {
+    res.status(err.status).json(errorBody(err.code, err.message));
+    return;
+  }
+
+  if (err instanceof Error && err.name === "AnomalyValidationError") {
+    res.status(400).json(errorBody("bad_request", err.message));
+    return;
+  }
+
+  // Body parser raises a SyntaxError (with a `body` field) on malformed JSON.
+  if (err instanceof SyntaxError && "body" in err) {
+    res.status(400).json(errorBody("bad_request", "Request body is not valid JSON"));
+    return;
+  }
+
+  // Body parser raises PayloadTooLargeError when the request body exceeds the configured limit.
+  if (err instanceof Error && "statusCode" in err && err.statusCode === 413) {
+    res.status(413).json(errorBody("payload_too_large", "Request body is too large"));
+    return;
+  }
+
+  logger.error("[error] unhandled error", logger.formatError(err));
+  res.status(500).json(errorBody("internal_error", "An unexpected error occurred"));
+}

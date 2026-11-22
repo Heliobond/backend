@@ -1,0 +1,319 @@
+export interface AnomalyConfig {
+  sensitivityZScore: number; // z-score threshold (default 2.5)
+  trendWindowSize: number; // readings to use for baseline (default 20)
+  trendDeviationPct: number; // % deviation to flag as trend anomaly (default 20)
+  minBaseline: number; // min readings before detection activates (default 5)
+}
+
+export interface AnomalyAlert {
+  type: "outlier" | "step_change" | "trend";
+  metric: string;
+  value: number;
+  baseline: number;
+  deviation: number;
+  severity: "low" | "medium" | "high";
+  timestamp: number;
+  message: string;
+}
+
+export interface AnomalyResult {
+  projectId: number;
+  timestamp: number;
+  anomalies: AnomalyAlert[];
+  metrics: {
+    efficiency_pct: { value: number; mean: number; stdDev: number; zScore: number };
+    power_output_kw: { value: number; mean: number; stdDev: number; zScore: number };
+    forest_density_pct: { value: number; mean: number; stdDev: number; zScore: number };
+    ndvi_score: { value: number; mean: number; stdDev: number; zScore: number };
+  };
+}
+
+type MetricKey = "efficiency_pct" | "power_output_kw" | "forest_density_pct" | "ndvi_score";
+
+const DEFAULT_CONFIG: AnomalyConfig = {
+  sensitivityZScore: 2.5,
+  trendWindowSize: 20,
+  trendDeviationPct: 20,
+  minBaseline: 5,
+};
+
+export const MAX_TREND_WINDOW_SIZE = 1000;
+
+export class AnomalyValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AnomalyValidationError";
+  }
+}
+
+/**
+ * Validate a partial anomaly detection config, returning only the fields that
+ * were present and valid. Throws `AnomalyValidationError` on the first problem.
+ */
+export function validateAnomalyConfig(
+  config: Partial<Record<keyof AnomalyConfig, unknown>>,
+): Partial<AnomalyConfig> {
+  const validated: Partial<AnomalyConfig> = {};
+
+  if (config.sensitivityZScore !== undefined) {
+    if (
+      typeof config.sensitivityZScore !== "number" ||
+      !Number.isFinite(config.sensitivityZScore) ||
+      config.sensitivityZScore <= 0
+    ) {
+      throw new AnomalyValidationError("sensitivityZScore must be a finite positive number");
+    }
+    validated.sensitivityZScore = config.sensitivityZScore;
+  }
+
+  if (config.trendWindowSize !== undefined) {
+    if (
+      typeof config.trendWindowSize !== "number" ||
+      !Number.isFinite(config.trendWindowSize) ||
+      config.trendWindowSize <= 0 ||
+      config.trendWindowSize > MAX_TREND_WINDOW_SIZE
+    ) {
+      throw new AnomalyValidationError(
+        `trendWindowSize must be a finite positive number not exceeding ${MAX_TREND_WINDOW_SIZE}`,
+      );
+    }
+    validated.trendWindowSize = config.trendWindowSize;
+  }
+
+  if (config.trendDeviationPct !== undefined) {
+    if (
+      typeof config.trendDeviationPct !== "number" ||
+      !Number.isFinite(config.trendDeviationPct) ||
+      config.trendDeviationPct <= 0
+    ) {
+      throw new AnomalyValidationError("trendDeviationPct must be a finite positive number");
+    }
+    validated.trendDeviationPct = config.trendDeviationPct;
+  }
+
+  if (config.minBaseline !== undefined) {
+    if (
+      typeof config.minBaseline !== "number" ||
+      !Number.isFinite(config.minBaseline) ||
+      config.minBaseline <= 0
+    ) {
+      throw new AnomalyValidationError("minBaseline must be a finite positive number");
+    }
+    validated.minBaseline = config.minBaseline;
+  }
+
+  return validated;
+}
+
+// Per-project rolling history for baseline
+const historyStore = new Map<number, Map<MetricKey, number[]>>();
+let globalConfig: AnomalyConfig = { ...DEFAULT_CONFIG };
+
+export function configureAnomalyDetection(
+  config: Partial<Record<keyof AnomalyConfig, unknown>>,
+): void {
+  const validated = validateAnomalyConfig(config);
+  globalConfig = { ...globalConfig, ...validated };
+}
+
+export function getAnomalyConfig(): AnomalyConfig {
+  return { ...globalConfig };
+}
+
+function getHistory(projectId: number, metric: MetricKey): number[] {
+  let projectHistory = historyStore.get(projectId);
+  if (!projectHistory) {
+    projectHistory = new Map();
+    historyStore.set(projectId, projectHistory);
+  }
+  let vals = projectHistory.get(metric);
+  if (!vals) {
+    vals = [];
+    projectHistory.set(metric, vals);
+  }
+  return vals;
+}
+
+// Consecutive outlier rejections per project/metric
+const rejectionStreaks = new Map<number, Map<MetricKey, number>>();
+
+function setStreak(projectId: number, metric: MetricKey, count: number): void {
+  let m = rejectionStreaks.get(projectId);
+  if (!m) {
+    m = new Map();
+    rejectionStreaks.set(projectId, m);
+  }
+  m.set(metric, count);
+}
+
+function pushHistory(projectId: number, metric: MetricKey, value: number): void {
+  const vals = getHistory(projectId, metric);
+  vals.push(value);
+  if (vals.length > globalConfig.trendWindowSize) {
+    vals.shift();
+  }
+}
+
+function mean(vals: number[]): number {
+  return vals.reduce((a, b) => a + b, 0) / vals.length;
+}
+
+function stdDev(vals: number[], avg: number): number {
+  const variance = vals.reduce((sum, v) => sum + (v - avg) ** 2, 0) / vals.length;
+  return Math.sqrt(variance);
+}
+
+function severity(zScore: number, threshold: number): "low" | "medium" | "high" {
+  const ratio = Math.abs(zScore) / threshold;
+  if (ratio >= 2) return "high";
+  if (ratio >= 1.5) return "medium";
+  return "low";
+}
+
+function detectOutlier(
+  projectId: number,
+  metric: MetricKey,
+  value: number,
+  config: AnomalyConfig,
+): { mean: number; stdDev: number; zScore: number; alert: AnomalyAlert | null } {
+  const history = getHistory(projectId, metric);
+
+  if (history.length < config.minBaseline) {
+    return { mean: value, stdDev: 0, zScore: 0, alert: null };
+  }
+
+  const avg = mean(history);
+  const sd = stdDev(history, avg);
+  const zScore = sd > 0 ? (value - avg) / sd : 0;
+
+  let alert: AnomalyAlert | null = null;
+  if (sd === 0) {
+    // Flat baseline (e.g. stuck sensor): z-score is undefined, so any deviation is a step change
+    if (value !== avg) {
+      const deviationPct =
+        avg !== 0 ? ((value - avg) / Math.abs(avg)) * 100 : Math.sign(value) * 100;
+      alert = {
+        type: "step_change",
+        metric,
+        value,
+        baseline: avg,
+        deviation: deviationPct,
+        severity: "high",
+        timestamp: Date.now(),
+        message: `${metric} value ${value.toFixed(2)} departs from flat baseline ${avg.toFixed(2)}`,
+      };
+    }
+  } else if (Math.abs(zScore) > config.sensitivityZScore) {
+    alert = {
+      type: "outlier",
+      metric,
+      value,
+      baseline: avg,
+      deviation: zScore,
+      severity: severity(zScore, config.sensitivityZScore),
+      timestamp: Date.now(),
+      message: `${metric} value ${value.toFixed(2)} is ${Math.abs(zScore).toFixed(2)} std devs from baseline ${avg.toFixed(2)}`,
+    };
+  }
+
+  return { mean: avg, stdDev: sd, zScore, alert };
+}
+
+function detectTrend(
+  projectId: number,
+  metric: MetricKey,
+  value: number,
+  config: AnomalyConfig,
+): AnomalyAlert | null {
+  const history = getHistory(projectId, metric);
+  if (history.length < config.minBaseline) return null;
+
+  const baseline = mean(history.slice(0, Math.ceil(history.length / 2)));
+  if (baseline === 0) return null;
+
+  const deviationPct = ((value - baseline) / baseline) * 100;
+  if (Math.abs(deviationPct) > config.trendDeviationPct) {
+    return {
+      type: "trend",
+      metric,
+      value,
+      baseline,
+      deviation: deviationPct,
+      severity: severity(deviationPct, config.trendDeviationPct),
+      timestamp: Date.now(),
+      message: `${metric} shows ${deviationPct > 0 ? "upward" : "downward"} trend of ${Math.abs(deviationPct).toFixed(1)}% from historical baseline`,
+    };
+  }
+  return null;
+}
+
+export function detectAnomalies(
+  projectId: number,
+  readings: {
+    efficiency_pct: number;
+    power_output_kw: number;
+    forest_density_pct: number;
+    ndvi_score: number;
+  },
+  config?: Partial<AnomalyConfig>,
+): AnomalyResult {
+  const cfg = config ? { ...globalConfig, ...config } : globalConfig;
+  const metrics: MetricKey[] = [
+    "efficiency_pct",
+    "power_output_kw",
+    "forest_density_pct",
+    "ndvi_score",
+  ];
+  const anomalies: AnomalyAlert[] = [];
+  const metricResults: AnomalyResult["metrics"] = {
+    efficiency_pct: { value: 0, mean: 0, stdDev: 0, zScore: 0 },
+    power_output_kw: { value: 0, mean: 0, stdDev: 0, zScore: 0 },
+    forest_density_pct: { value: 0, mean: 0, stdDev: 0, zScore: 0 },
+    ndvi_score: { value: 0, mean: 0, stdDev: 0, zScore: 0 },
+  };
+
+  for (const metric of metrics) {
+    const value = readings[metric];
+    const {
+      mean: avg,
+      stdDev: sd,
+      zScore,
+      alert: outlierAlert,
+    } = detectOutlier(projectId, metric, value, cfg);
+    const trendAlert = detectTrend(projectId, metric, value, cfg);
+
+    if (outlierAlert) anomalies.push(outlierAlert);
+    if (trendAlert) anomalies.push(trendAlert);
+
+    metricResults[metric] = { value, mean: avg, stdDev: sd, zScore };
+
+    // Record into history after detection so current value doesn't skew its own check.
+    // Flagged outliers are kept out so sustained bad readings can't drag the baseline toward
+    // acceptance; after minBaseline consecutive rejections the new level is treated as real.
+    if (outlierAlert) {
+      const rejected = (rejectionStreaks.get(projectId)?.get(metric) ?? 0) + 1;
+      if (rejected >= cfg.minBaseline) {
+        getHistory(projectId, metric).length = 0;
+        setStreak(projectId, metric, 0);
+        pushHistory(projectId, metric, value);
+      } else {
+        setStreak(projectId, metric, rejected);
+      }
+    } else {
+      setStreak(projectId, metric, 0);
+      pushHistory(projectId, metric, value);
+    }
+  }
+
+  return { projectId, timestamp: Date.now(), anomalies, metrics: metricResults };
+}
+
+export function clearHistory(projectId?: number): void {
+  if (projectId !== undefined) {
+    historyStore.delete(projectId);
+    rejectionStreaks.delete(projectId);
+  } else {
+    historyStore.clear();
+    rejectionStreaks.clear();
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "registry": {
+    "1": {
+      "name": "NotWhitelisted",
+      "retryable": false,
+      "action": "permanent",
+      "description": "Caller or project is not whitelisted"
+    },
+    "2": {
+      "name": "UpdateTooFrequent",
+      "retryable": true,
+      "action": "retry",
+      "description": "Update called before the minimum interval has elapsed; retry after the interval"
+    },
+    "3": {
+      "name": "ProjectArchived",
+      "retryable": false,
+      "action": "permanent",
+      "description": "Project has been archived and cannot be updated"
+    },
+    "4": {
+      "name": "Paused",
+      "retryable": true,
+      "action": "defer",
+      "description": "Registry contract is paused; defer update until unpaused"
+    },
+    "7": {
+      "name": "ProjectNotFound",
+      "retryable": false,
+      "action": "permanent",
+      "description": "Project ID was not found in the registry"
+    },
+    "8": {
+      "name": "ScoresOutOfRange",
+      "retryable": false,
+      "action": "permanent",
+      "description": "Computed scores are out of the allowed range (0-100)"
+    }
+  },
+  "vault": {
+    "1": {
+      "name": "VaultPaused",
+      "retryable": true,
+      "action": "defer",
+      "description": "Vault contract is paused; defer until unpaused"
+    },
+    "2": {
+      "name": "Unauthorized",
+      "retryable": false,
+      "action": "permanent",
+      "description": "Caller is not authorized for this vault action"
+    },
+    "3": {
+      "name": "InsufficientBalance",
+      "retryable": false,
+      "action": "permanent",
+      "description": "Insufficient balance or shares for requested vault operation"
+    }
+  }
+}

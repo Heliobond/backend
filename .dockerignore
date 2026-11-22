@@ -1,40 +1,22 @@
-# Dependency directories
-node_modules/
-
-# Build outputs
-dist/
-coverage/
-
-# Environment files and credentials
+node_modules
+dist
 .env
 .env.*
-*.local
-*.pem
-
-# Git files
-.git/
-.github/
-
-# Log files
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-
-# Docker files
-Dockerfile
-docker-compose.yml
-.dockerignore
-
-# OS metadata
-.DS_Store
-Thumbs.db
-
-# Documentation and lint/format configs not needed in production container.
-# nest-cli.json, tsconfig.json, and tsconfig.build.json are NOT listed here —
-# the builder stage's `COPY . .` needs them in the build context for
-# `npm run build` (nest build) to succeed; excluding them broke the image build.
-README.md
-eslint.config.mjs
+!.env.example
+*.log
+coverage
+load-tests
+.git
+.gitignore
+.github
+.husky
+*.md
+!README.md
 .prettierrc
-test/
+.prettierignore
+.releaserc.json
+eslint.config.mjs
+jest.config.ts
+tsconfig.test.json
+tmp-*
+docs

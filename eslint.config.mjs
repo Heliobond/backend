@@ -1,51 +1,17 @@
-// @ts-check
-import eslint from '@eslint/js';
-import eslintPluginPrettierRecommended from 'eslint-plugin-prettier/recommended';
-import globals from 'globals';
-import tseslint from 'typescript-eslint';
+import js from "@eslint/js";
+import tsEslint from "typescript-eslint";
 
-export default tseslint.config(
+export default tsEslint.config(
+  js.configs.recommended,
+  ...tsEslint.configs.recommended,
   {
-    ignores: ['eslint.config.mjs'],
-  },
-  eslint.configs.recommended,
-  ...tseslint.configs.recommendedTypeChecked,
-  eslintPluginPrettierRecommended,
-  {
-    languageOptions: {
-      globals: {
-        ...globals.node,
-        ...globals.jest,
-      },
-      sourceType: 'commonjs',
-      parserOptions: {
-        projectService: true,
-        tsconfigRootDir: import.meta.dirname,
-      },
-    },
+    ignores: ["dist/**", "coverage/**", "node_modules/**"],
   },
   {
     rules: {
-      '@typescript-eslint/no-explicit-any': 'off',
-      '@typescript-eslint/no-floating-promises': 'error',
-      '@typescript-eslint/no-unsafe-argument': 'error',
-      "prettier/prettier": ["error", { endOfLine: "auto" }],
-    },
-  },
-  {
-    // Jest mocks (mocked repositories, `jest.fn()` return values, supertest's
-    // `app.getHttpServer()`) are deliberately loosely typed scaffolding, not
-    // production logic — the no-unsafe-* / require-await rules exist to catch
-    // real bugs in application code and produce mostly noise against mocks.
-    files: ['**/*.spec.ts', 'test/**/*.ts'],
-    rules: {
-      '@typescript-eslint/no-unsafe-argument': 'off',
-      '@typescript-eslint/no-unsafe-assignment': 'off',
-      '@typescript-eslint/no-unsafe-call': 'off',
-      '@typescript-eslint/no-unsafe-member-access': 'off',
-      '@typescript-eslint/no-unsafe-return': 'off',
-      '@typescript-eslint/no-unsafe-function-type': 'off',
-      '@typescript-eslint/require-await': 'off',
+      "@typescript-eslint/no-explicit-any": "warn",
+      "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_" }],
+      "@typescript-eslint/no-namespace": "off",
     },
   },
 );

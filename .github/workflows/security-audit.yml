@@ -1,0 +1,243 @@
+name: Security Audit
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  dependency-audit:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.x"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check lockfiles are in sync
+        run: |
+          echo "Checking that package-lock.json is in sync with package.json..."
+          echo "bun.lock is the canonical install source (bun install --frozen-lockfile)."
+          echo "package-lock.json is used by 'npm audit' / Docker 'npm ci' and must not drift."
+          if [ -f package-lock.json ]; then
+            cp package-lock.json package-lock.json.orig
+            npm install --package-lock-only --ignore-scripts
+            if ! diff -q package-lock.json package-lock.json.orig >/dev/null 2>&1; then
+              echo "::error::package-lock.json is out of sync with package.json. Run 'npm install' locally after any 'bun add / bun update' and commit the updated lockfile, or remove package-lock.json if bun.lock is intended as the sole canonical lockfile."
+              echo "Diff (first 200 lines):"
+              diff -u package-lock.json.orig package-lock.json | head -n 200 || true
+              # Restore original so the working tree is not left dirty, but fail the job
+              mv package-lock.json.orig package-lock.json
+              exit 1
+            fi
+            echo "package-lock.json is in sync."
+            rm package-lock.json.orig
+          else
+            echo "No package-lock.json found — skipping sync check (bun.lock is canonical)."
+          fi
+
+      - name: Run bun audit
+        # bun audit audits bun.lock directly, so it matches what 'bun install' actually installed.
+        # npm audit resolves from package-lock.json, which can silently diverge if updated via bun.
+        run: bun audit --json > bun-audit-report.json || true
+
+      - name: Parse audit results
+        run: |
+          echo "## Dependency Audit Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Date:** $(date -u +'%Y-%m-%d')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -s bun-audit-report.json ]; then
+            node -e '
+              const fs = require("fs");
+              const report = JSON.parse(fs.readFileSync("bun-audit-report.json", "utf8"));
+              // Support both npm audit format (metadata.vulnerabilities) and bun audit format ({pkg:[advisories]})
+              let counts = { critical:0, high:0, moderate:0, low:0, info:0 };
+              if (report.metadata?.vulnerabilities) {
+                counts = { ...counts, ...report.metadata.vulnerabilities };
+              } else {
+                for (const [pkg, advisories] of Object.entries(report)) {
+                  if (Array.isArray(advisories)) {
+                    for (const adv of advisories) {
+                      const sev = (adv.severity || "").toLowerCase();
+                      if (counts[sev] !== undefined) counts[sev]++;
+                    }
+                  }
+                }
+              }
+              console.log("| Severity | Count |");
+            ' | tee -a $GITHUB_STEP_SUMMARY
+            echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+            node -e '
+              const fs = require("fs");
+              const report = JSON.parse(fs.readFileSync("bun-audit-report.json", "utf8"));
+              let counts = { critical:0, high:0, moderate:0, low:0, info:0 };
+              if (report.metadata?.vulnerabilities) {
+                counts = { ...counts, ...report.metadata.vulnerabilities };
+              } else {
+                for (const [pkg, advisories] of Object.entries(report)) {
+                  if (Array.isArray(advisories)) {
+                    for (const adv of advisories) {
+                      const sev = (adv.severity || "").toLowerCase();
+                      if (counts[sev] !== undefined) counts[sev]++;
+                    }
+                  }
+                }
+              }
+              ["critical","high","moderate","low","info"].forEach(sev => {
+                console.log(`| ${sev.charAt(0).toUpperCase()+sev.slice(1)} | ${counts[sev] || 0} |`);
+              });
+            ' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            read -r CRITICAL HIGH <<<"$(node -e '
+              const fs=require("fs");
+              const report=JSON.parse(fs.readFileSync("bun-audit-report.json","utf8"));
+              let c=0, h=0;
+              if(report.metadata?.vulnerabilities) {
+                c=report.metadata.vulnerabilities.critical||0;
+                h=report.metadata.vulnerabilities.high||0;
+              }
+              else {
+                for(const advisories of Object.values(report)){
+                  if(Array.isArray(advisories)) for(const adv of advisories) {
+                    const severity=(adv.severity||"").toLowerCase();
+                    if(severity==="critical") c++;
+                    if(severity==="high") h++;
+                  }
+                }
+              }
+              console.log(`${c} ${h}`);
+            ')"
+            if [ "$HIGH" -gt 0 ]; then
+              echo "::warning::Found $HIGH high vulnerabilities in dependencies (via bun audit)"
+            fi
+            if [ "$CRITICAL" -gt 0 ]; then
+              echo "::error::Found $CRITICAL critical vulnerabilities in dependencies (via bun audit)"
+              exit 1
+            fi
+          else
+            echo "No dependencies scanned or no vulnerabilities found." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-audit-report
+          path: bun-audit-report.json
+          retention-days: 90
+
+  code-vulnerability-scan:
+    name: Code Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Run Trivy vulnerability scanner (filesystem)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          format: table
+          exit-code: 1
+
+  secret-detection:
+    name: Secret Detection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  license-compliance:
+    name: License Compliance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.x"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check license compliance
+        run: |
+          echo "## License Compliance Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Date:** $(date -u +'%Y-%m-%d')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Allowed licenses: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, CC0-1.0, Unlicense, WTFPL, CC-BY-4.0, CC-BY-3.0" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          # Enforce allowlist — fails with non-zero exit if a disallowed (e.g. GPL/AGPL) license is found
+          npx license-checker --onlyAllow 'MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;BSD*;ISC;CC0-1.0;Unlicense;WTFPL;CC-BY-4.0;CC-BY-3.0;Python-2.0' --json --out licenses.json
+          LICENSE_EXIT=$?
+          if [ -s licenses.json ]; then
+            echo "| Package | License |" >> $GITHUB_STEP_SUMMARY
+            echo "|---------|---------|" >> $GITHUB_STEP_SUMMARY
+            node -e '
+              const fs = require("fs");
+              const licenses = JSON.parse(fs.readFileSync("licenses.json", "utf8"));
+              const entries = Object.entries(licenses).slice(0, 50);
+              entries.forEach(([pkg, info]) => {
+                console.log(`| ${pkg} | ${info.licenses || "UNKNOWN"} |`);
+              });
+              if (Object.keys(licenses).length > 50) {
+                console.log(`| ... | ... (${Object.keys(licenses).length - 50} more) |`);
+              }
+            ' >> $GITHUB_STEP_SUMMARY
+            if [ $LICENSE_EXIT -ne 0 ]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "::error::License compliance check failed — disallowed license detected. See report above."
+              exit 1
+            fi
+          else
+            echo "No license data available." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+      - name: Upload license report
+        uses: actions/upload-artifact@v4
+        with:
+          name: license-report
+          path: licenses.json
+          retention-days: 90
+
+  security-headers-check:
+    name: Security Headers Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Verify security headers configuration
+        run: |
+          echo "## Security Headers Audit" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Checking middleware/securityHeaders.ts..." >> $GITHUB_STEP_SUMMARY
+          if grep -q "helmet" src/middleware/securityHeaders.ts 2>/dev/null; then
+            echo "- [x] Helmet security headers configured" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- [ ] Helmet security headers NOT configured" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Verifying CSP, HSTS, X-Frame-Options, X-Content-Type-Options..." >> $GITHUB_STEP_SUMMARY
+          grep -E "contentSecurityPolicy|hsts|frameguard|noSniff" src/middleware/securityHeaders.ts | while read -r line; do
+            echo "- \`$line\`" >> $GITHUB_STEP_SUMMARY
+          done

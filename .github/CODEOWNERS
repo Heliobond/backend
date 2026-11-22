@@ -1,0 +1,32 @@
+# Code owners — these paths require a code owner's review before merge once
+# "Require review from Code Owners" is on in branch protection.
+# See: https://docs.github.com/articles/about-code-owners
+
+# Default owner for everything in the repo.
+*                         @dadadave80
+
+# Supply-chain surface: files that run code on every contributor machine
+# (husky hooks, lint-staged, package.json scripts) and in every CI, Release
+# and Docker build. PR #969 hid its payload in package.json and
+# eslint.config.mjs. Keep this list in step with WATCHED_PATTERNS in
+# scripts/check-supply-chain-changes.mjs.
+/.github/                 @dadadave80
+/package.json             @dadadave80
+/bun.lock                 @dadadave80
+/bunfig.toml              @dadadave80
+/.npmrc                   @dadadave80
+/.husky/                  @dadadave80
+/scripts/                 @dadadave80
+/eslint.config.mjs        @dadadave80
+/jest.config.ts           @dadadave80
+/tsconfig*.json           @dadadave80
+/.releaserc.json          @dadadave80
+/Dockerfile               @dadadave80
+/.dockerignore            @dadadave80
+/docker-compose*.yml      @dadadave80
+/packages/*/package.json  @dadadave80
+
+# Auth and on-chain signing paths.
+/src/middleware/          @dadadave80
+/src/lib/stellar/         @dadadave80
+/src/lib/stellar.ts       @dadadave80

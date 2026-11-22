@@ -1,0 +1,387 @@
+import { Router, Request, Response, NextFunction } from "express";
+import { badRequest, errorBody, parseOptionalInt, maxProjectId } from "../middleware/errors";
+import { recordAudit, getAuditLog, auditToCsv } from "../lib/audit";
+import { writeAuditLog } from "../lib/audit-logger";
+import { getCorrelationId } from "../lib/correlation";
+import { broadcastScoreUpdate } from "../lib/websocket";
+import { tryBeginUpdate, markCompleted, markFailed } from "../lib/duplicate-detection";
+import { withProjectLock } from "../lib/request-queue";
+import { updateScoreForProject } from "../lib/scoreService";
+import { getTotalProjects } from "../lib/registry";
+import { enqueue } from "../lib/tx-queue";
+import { logger } from "../lib/logger";
+import { config } from "../config";
+import { requireApiKeyRole, extractApiKeyRole } from "../middleware/requireApiKeyRole";
+import { timingSafeCompare } from "../lib/timing-safe";
+import { parseContractError } from "../lib/contractErrors";
+
+const router = Router();
+
+const ADMIN_REQUEST_TIMEOUT_MS = Number(process.env.ADMIN_REQUEST_TIMEOUT_MS ?? 60000);
+const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS ?? 30000);
+
+export function requestTimeoutMiddleware(timeoutMs: number = REQUEST_TIMEOUT_MS) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    let timedOut = false;
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      if (!res.headersSent) {
+        res.status(408).json({
+          error: { code: "request_timeout", message: "Request timed out" },
+        });
+      } else {
+        req.destroy();
+      }
+    }, timeoutMs);
+
+    res.on("finish", () => {
+      clearTimeout(timer);
+      if (timedOut) {
+        req.destroy();
+      }
+    });
+    res.on("close", () => clearTimeout(timer));
+    next();
+  };
+}
+
+router.use(requestTimeoutMiddleware(ADMIN_REQUEST_TIMEOUT_MS));
+
+// Bearer token auth — enforced when ADMIN_API_KEY env var is set
+router.use((req: Request, res: Response, next: NextFunction) => {
+  const apiKey = config.ADMIN_API_KEY;
+  if (!apiKey) {
+    return res
+      .status(500)
+      .json(errorBody("server_misconfigured", "Admin API key is not configured"));
+  }
+  // Constant-time compare so response timing can't be used to guess the key.
+  const authorization = req.headers.authorization ?? "";
+  if (timingSafeCompare(authorization, `Bearer ${apiKey}`)) {
+    req.apiKeyRole = "admin:write";
+    return next();
+  }
+  // Other keys (e.g. read-only ones from ADMIN_API_KEYS) authenticate via the role registry.
+  extractApiKeyRole(req, res, () => {
+    if (!req.apiKeyRole) {
+      return res.status(401).json(errorBody("unauthorized", "Missing or invalid bearer token"));
+    }
+    next();
+  });
+});
+
+// Timestamp expiration validation (Issue #545)
+router.use((req: Request, res: Response, next: NextFunction) => {
+  const timestampHeader = req.header("x-request-timestamp");
+  if (!timestampHeader) {
+    logger.warn("[admin] Missing X-Request-Timestamp header");
+    return res.status(401).json(errorBody("unauthorized", "Missing X-Request-Timestamp header"));
+  }
+
+  const clientTime = parseInt(timestampHeader, 10);
+  if (isNaN(clientTime)) {
+    logger.warn("[admin] Invalid X-Request-Timestamp header format");
+    return res.status(401).json(errorBody("unauthorized", "Invalid timestamp format"));
+  }
+
+  const ageMs = Math.abs(Date.now() - clientTime);
+  if (ageMs > config.ADMIN_REQUEST_MAX_AGE_MS) {
+    logger.warn(
+      `[admin] Request expired. Age: ${ageMs}ms, Max allowed: ${config.ADMIN_REQUEST_MAX_AGE_MS}ms`,
+    );
+    return res.status(401).json(errorBody("unauthorized", "Request expired"));
+  }
+
+  next();
+});
+
+/** A per-project score update that made it onto the ledger (or was deferred). */
+type ScoreUpdateResult = {
+  project_id: number;
+  tx_hash: string;
+  credit_quality: number;
+  green_impact: number;
+};
+
+/**
+ * Discriminated result of one locked project update. The `skipped` flag lets
+ * the caller narrow the two shapes apart without a type assertion.
+ */
+type ProjectUpdateOutcome =
+  { skipped: true; reason: string } | ({ skipped: false } & ScoreUpdateResult);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1;
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function queryValue(value: unknown): string | string[] | undefined {
+  if (typeof value === "string") return value;
+  if (isStringArray(value)) return value;
+  return undefined;
+}
+
+function parseProjectIds(body: unknown): number[] | null {
+  if (!isRecord(body)) return null;
+
+  const raw = body.project_ids;
+  if (raw === undefined || raw === null) return null;
+  if (!Array.isArray(raw)) {
+    throw badRequest("project_ids must be an array of positive integers");
+  }
+  if (raw.length === 0) return null;
+
+  const projectIds: number[] = [];
+  const max = maxProjectId();
+  for (const entry of raw) {
+    if (!isPositiveInteger(entry)) {
+      throw badRequest("project_ids must contain only positive integers");
+    }
+    if (entry > max) {
+      throw badRequest(`project_ids must not exceed maximum project id ${max}`);
+    }
+    projectIds.push(entry);
+  }
+  return projectIds;
+}
+
+// POST /api/admin/update-scores
+// Body: { project_ids?: number[] }  — defaults to all projects
+// Returns: { updated: number, results: [...], errors: [...], skipped: [...] }
+//
+// All errors — including validation (400) and unexpected failures (500) — are
+// forwarded to the central errorHandler via next() so status codes stay consistent
+// across all endpoints. The nested per-project catch is intentional: it collects
+// partial failures without aborting the entire batch.
+function auditUpdateScores(
+  req: Request,
+  projectIds: number[],
+  outcome: {
+    success: boolean;
+    results?: unknown;
+    error?: string;
+    contract_error_name?: string;
+    contract_error_code?: number;
+  },
+): void {
+  writeAuditLog({
+    action: "admin.update-scores",
+    correlation_id: getCorrelationId(),
+    ip: req.ip ?? null,
+    user_agent: req.get("user-agent") ?? null,
+    project_ids: projectIds,
+    ...outcome,
+  });
+}
+
+router.post(
+  "/update-scores",
+  requireApiKeyRole("admin:write"),
+  async (req: Request, res: Response, next: NextFunction) => {
+    let auditedIds: number[] = [];
+    try {
+      const requested = parseProjectIds(req.body);
+      let projectIds: number[];
+
+      if (requested) {
+        projectIds = requested;
+      } else {
+        const total = await getTotalProjects();
+        projectIds = Array.from({ length: total }, (_, i) => i + 1);
+      }
+      auditedIds = projectIds;
+
+      const results: ScoreUpdateResult[] = [];
+      const errors: Array<{
+        project_id: number;
+        error: {
+          code: string;
+          message: string;
+          contract_error_name?: string;
+          contract_error_code?: number;
+        };
+      }> = [];
+      const skipped: Array<{ project_id: number; reason: string }> = [];
+
+      for (const projectId of projectIds) {
+        try {
+          const result = await withProjectLock<ProjectUpdateOutcome>(projectId, async () => {
+            const { allowed, reason } = tryBeginUpdate(projectId);
+            if (!allowed) {
+              return { skipped: true, reason };
+            }
+            try {
+              const scoreResult = await updateScoreForProject(projectId);
+
+              if (scoreResult.status === "deferred") {
+                logger.warn(`[oracle] project ${projectId}: RPC degraded, score queued for later`);
+                // The log line previously claimed the score was queued without
+                // actually calling enqueue — operator-triggered updates during
+                // an RPC blip were silently dropped. Mirror the cron path:
+                // put the scores on the shared tx-queue so runTxQueueRetry
+                // picks them up (#833).
+                enqueue(
+                  projectId,
+                  scoreResult.creditQuality,
+                  scoreResult.greenImpact,
+                  "RPC degraded",
+                );
+                markCompleted(projectId);
+                return {
+                  skipped: false,
+                  project_id: projectId,
+                  tx_hash: "deferred",
+                  credit_quality: scoreResult.creditQuality,
+                  green_impact: scoreResult.greenImpact,
+                };
+              }
+
+              if (scoreResult.status === "skipped") {
+                markCompleted(projectId);
+                return { skipped: true, reason: scoreResult.reason };
+              }
+
+              if (scoreResult.status === "error") {
+                if (scoreResult.error.includes("duplicate submission rejected")) {
+                  markCompleted(projectId);
+                  return { skipped: true, reason: scoreResult.error };
+                }
+                throw new Error(scoreResult.error);
+              }
+
+              markCompleted(projectId);
+              recordAudit({
+                project_id: projectId,
+                credit_quality: scoreResult.creditQuality,
+                green_impact: scoreResult.greenImpact,
+                tx_hash: scoreResult.txHash,
+                triggered_by: "api",
+              });
+              broadcastScoreUpdate({
+                project_id: projectId,
+                credit_quality: scoreResult.creditQuality,
+                green_impact: scoreResult.greenImpact,
+                timestamp: Date.now(),
+              });
+              logger.info(
+                `[oracle] project ${projectId}: cq=${scoreResult.creditQuality} gi=${scoreResult.greenImpact} tx=${scoreResult.txHash}`,
+              );
+              return {
+                skipped: false,
+                project_id: projectId,
+                tx_hash: scoreResult.txHash,
+                credit_quality: scoreResult.creditQuality,
+                green_impact: scoreResult.greenImpact,
+              };
+            } catch (err) {
+              markFailed(projectId);
+              throw err;
+            }
+          });
+
+          if (result.skipped) {
+            skipped.push({ project_id: projectId, reason: result.reason });
+            logger.info(`[oracle] skipping project ${projectId}: ${result.reason}`);
+          } else {
+            results.push({
+              project_id: result.project_id,
+              tx_hash: result.tx_hash,
+              credit_quality: result.credit_quality,
+              green_impact: result.green_impact,
+            });
+          }
+        } catch (err) {
+          logger.error(`[oracle] project ${projectId} failed`, logger.formatError(err));
+          const decoded = parseContractError(err);
+          errors.push({
+            project_id: projectId,
+            error: {
+              code: "update_failed",
+              message: err instanceof Error ? err.message : String(err),
+              ...(decoded
+                ? { contract_error_name: decoded.name, contract_error_code: decoded.code }
+                : {}),
+            },
+          });
+        }
+      }
+
+      auditUpdateScores(req, projectIds, {
+        success: errors.length === 0,
+        results: {
+          updated: results.map((r) => r.project_id),
+          failed: errors.map((e) => e.project_id),
+          skipped: skipped.map((k) => k.project_id),
+        },
+      });
+      res.json({ updated: results.length, results, errors, skipped });
+    } catch (error) {
+      const decoded = parseContractError(error);
+      auditUpdateScores(req, auditedIds, {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+        ...(decoded
+          ? { contract_error_name: decoded.name, contract_error_code: decoded.code }
+          : {}),
+      });
+      next(error);
+    }
+  },
+);
+
+/**
+ * GET /admin/audit
+ * Query: project_id=<int>, from=<unix-ms>, to=<unix-ms>, format=json|csv
+ * Returns the immutable audit log of all score updates.
+ */
+router.get("/audit", (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const project_id =
+      parseOptionalInt(req.query.project_id as string | undefined, "project_id", 0) || undefined;
+    const from = parseOptionalInt(req.query.from as string | undefined, "from", 0) || undefined;
+    const to = parseOptionalInt(req.query.to as string | undefined, "to", 0) || undefined;
+    const limit = parseOptionalInt(req.query.limit as string | undefined, "limit", 50);
+    const offset = parseOptionalInt(req.query.offset as string | undefined, "offset", 0);
+
+    if (from && to && from > to) {
+      throw badRequest("from must be earlier than to");
+    }
+    if (limit < 1 || limit > 500) {
+      throw badRequest("limit must be between 1 and 500");
+    }
+    if (offset < 0) {
+      throw badRequest("offset must be a non-negative integer");
+    }
+
+    const allEntries = getAuditLog({ project_id, from, to });
+    const entries = getAuditLog({ project_id, from, to, limit, offset });
+    const format = req.query.format === "csv" ? "csv" : "json";
+
+    if (format === "csv") {
+      res.set("Content-Type", "text/csv");
+      res.set("Content-Disposition", 'attachment; filename="audit-log.csv"');
+      res.send(auditToCsv(allEntries));
+      return;
+    }
+
+    res.json({
+      count: allEntries.length,
+      total: allEntries.length,
+      limit,
+      offset,
+      entries,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+export default router;

@@ -1,0 +1,178 @@
+import { Router, Request, Response, NextFunction } from "express";
+import { logger } from "../lib/logger";
+import {
+  subscribe,
+  unsubscribeByToken,
+  listSubscribers,
+  getThresholds,
+  setThresholds,
+  listTemplates,
+  upsertTemplate,
+  sendDigest,
+  Frequency,
+} from "../lib/email";
+import { badRequest, errorBody } from "../middleware/errors";
+
+const router = Router();
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// ── Public router (#763) ─────────────────────────────────────────────────────
+//
+// The admin `router` below sits behind `ipWhitelist + adminLimiter +
+// requestSigning`, which rejects any browser-followed link out of hand. The
+// public router hosts just the unsubscribe endpoints so recipients can
+// actually opt out. Mount it BEFORE the admin router in src/index.ts so
+// `/unsubscribe` matches the public handler first.
+export const publicEmailRouter = Router();
+
+function extractToken(req: Request): string | undefined {
+  // Accept the token from either the query string (GET click-through) or the
+  // request body (RFC 8058 One-Click POST). Only the first value if a client
+  // duplicates the field.
+  const q = Array.isArray(req.query.token) ? req.query.token[0] : req.query.token;
+  if (typeof q === "string" && q) return q;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const b = body.token;
+  return typeof b === "string" && b ? b : undefined;
+}
+
+function handlePublicUnsubscribe(req: Request, res: Response): void {
+  const token = extractToken(req);
+  if (!token) {
+    throw badRequest("token is required (query string or request body)");
+  }
+  const removed = unsubscribeByToken(token);
+  if (!removed) {
+    res.status(404).json(errorBody("not_found", "Unknown or already-used unsubscribe token"));
+    return;
+  }
+  res.json({ unsubscribed: true });
+}
+
+/** GET /v1/email/unsubscribe?token=: click-through from an email footer. */
+publicEmailRouter.get("/unsubscribe", handlePublicUnsubscribe);
+
+/**
+ * POST /v1/email/unsubscribe: RFC 8058 List-Unsubscribe=One-Click target.
+ * Mail clients POST here without user interaction when the recipient clicks
+ * the Unsubscribe button surfaced from the `List-Unsubscribe` header.
+ */
+publicEmailRouter.post("/unsubscribe", handlePublicUnsubscribe);
+
+function handleSubscribe(req: Request, res: Response) {
+  const { email, frequency } = req.body as { email?: unknown; frequency?: unknown };
+  if (typeof email !== "string" || !EMAIL_RE.test(email)) {
+    throw badRequest("email must be a valid email address");
+  }
+  if (frequency !== undefined && frequency !== "daily" && frequency !== "weekly") {
+    throw badRequest("frequency must be 'daily' or 'weekly'");
+  }
+  const sub = subscribe(email, (frequency as Frequency) ?? "weekly");
+  res.status(201).json({
+    email: sub.email,
+    frequency: sub.frequency,
+    unsubscribe_token: sub.unsubscribe_token,
+    subscribed_at: sub.subscribed_at,
+  });
+}
+
+/** Public subscribe endpoint (#892) */
+publicEmailRouter.post("/subscribe", handleSubscribe);
+
+/** POST /email/subscribe — { email, frequency? } */
+router.post("/subscribe", handleSubscribe);
+
+// GET /email/unsubscribe moved to `publicEmailRouter` above so recipients
+// can actually reach the endpoint from a mail client. See #763.
+
+/** GET /email/subscribers — list current subscribers. */
+router.get("/subscribers", (req: Request, res: Response) => {
+  const frequency =
+    req.query.frequency === "daily" || req.query.frequency === "weekly"
+      ? (req.query.frequency as Frequency)
+      : undefined;
+  res.json({ subscribers: listSubscribers(frequency) });
+});
+
+/** GET /email/thresholds — current alert thresholds. */
+router.get("/thresholds", (_req: Request, res: Response) => {
+  res.json(getThresholds());
+});
+
+/** PUT /email/thresholds — update alert thresholds. */
+router.put("/thresholds", (req: Request, res: Response, next: NextFunction) => {
+  try {
+    res.json(setThresholds(req.body ?? {}));
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("must be a non-negative number")) {
+      throw badRequest(err.message);
+    }
+    next(err);
+  }
+});
+
+/** GET /email/templates — list templates. */
+router.get("/templates", (_req: Request, res: Response) => {
+  res.json({ templates: listTemplates() });
+});
+
+/** PUT /email/templates — create or update a template. */
+router.put("/templates", (req: Request, res: Response) => {
+  const { name, subject, body } = req.body as { name?: unknown; subject?: unknown; body?: unknown };
+  if (typeof name !== "string" || typeof subject !== "string" || typeof body !== "string") {
+    throw badRequest("template requires string name, subject and body");
+  }
+  if (name.length > 100 || subject.length > 200 || body.length > 10000) {
+    throw badRequest("template fields exceed allowed length limits");
+  }
+  res.json(upsertTemplate({ name, subject, body }));
+});
+
+function isValidScoreChange(
+  change: unknown,
+): change is { project_id: number; credit_quality_delta: number; green_impact_delta: number } {
+  return (
+    typeof change === "object" &&
+    change !== null &&
+    "project_id" in change &&
+    "credit_quality_delta" in change &&
+    "green_impact_delta" in change &&
+    typeof (change as any).project_id === "number" &&
+    typeof (change as any).credit_quality_delta === "number" &&
+    typeof (change as any).green_impact_delta === "number"
+  );
+}
+
+/** POST /email/digest — trigger a digest send. Body: { frequency, changes? } */
+router.post("/digest", async (req: Request, res: Response, next: NextFunction) => {
+  const { frequency, changes } = req.body as { frequency?: unknown; changes?: unknown };
+  if (frequency !== "daily" && frequency !== "weekly") {
+    throw badRequest("frequency must be 'daily' or 'weekly'");
+  }
+
+  // Validate changes array
+  if (changes !== undefined && !Array.isArray(changes)) {
+    throw badRequest("changes must be an array");
+  }
+
+  const validatedChanges = Array.isArray(changes)
+    ? changes.filter((c) => {
+        if (!isValidScoreChange(c)) {
+          logger.warn("[email] invalid change object in digest request", { change: c });
+          return false;
+        }
+        return true;
+      })
+    : [];
+
+  try {
+    const sent = await sendDigest(frequency, validatedChanges);
+    res.json({ frequency, sent });
+  } catch (error) {
+    logger.error("[email] digest error", logger.formatError(error));
+    next(error);
+  }
+});
+
+export default router;

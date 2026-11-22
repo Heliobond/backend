@@ -1,339 +1,511 @@
-# MergeFi Backend
+# Heliobond Backend
 
-**Where Open Source Meets Finance.**
+Node.js oracle server for the Heliobond platform. It simulates IoT sensor data for solar panel and satellite readings, computes impact scores from that data, and submits `update_impact_score` transactions to the Soroban **ProjectRegistry** contract on Stellar. An hourly cron job keeps on-chain scores current automatically; the same logic is exposed over REST for on-demand updates.
 
-MergeFi lets sponsors fund open-source work, lets maintainers attach real money
-to GitHub issues, and pays contributors automatically the moment their pull
-request is merged. GitHub stays the source of truth for code and review;
-Stellar/Soroban smart contracts hold the money in escrow and release it
-without anyone having to chase an invoice.
+## System Overview
 
-- **Contributors** discover paid issues, build an on-chain-verifiable
-  reputation, and get paid in stablecoins (USDC) or XLM the moment their PR
-  merges.
-- **Maintainers** create projects, attach rewards to issues or whole
-  milestones, and approve completed work.
-- **Sponsors** fund repos, issues, or milestones, and get a dashboard of
-  spend, impact, and contributor performance.
+Heliobond is a comprehensive platform for green energy investment tracking and impact scoring. The system consists of multiple components:
 
-This repository is the backend API. The Soroban smart contracts themselves
-live in the sibling repo `mergefi-contracts`; this service is the
-orchestration/API layer that talks to those contracts over Stellar/Soroban
-RPC and mirrors on-chain state into Postgres for fast reads.
-
----
-
-## Table of contents
-
-- [Architecture](#architecture)
-- [Modules](#modules)
-- [Data model](#data-model)
-- [Environment variables](#environment-variables)
-- [Escrow / Soroban integration](#escrow--soroban-integration)
-- [API overview](#api-overview)
-- [Setup, run, test](#setup-run-test)
-- [Roadmap](#roadmap)
+- **Backend API (this repository)**: Node.js/TypeScript server that computes impact scores and interacts with the Stellar blockchain
+- **Frontend**: User interface for viewing projects and impact scores
+- **Blockchain Contracts**: Soroban smart contracts for project registry and investment tracking
+- **Data Processing**: Components for handling IoT data and financial calculations
 
 ---
 
 ## Architecture
 
-```
-                     ┌────────────────────┐
-                     │   GitHub (REST +   │
-                     │   webhooks)        │
-                     └─────────┬──────────┘
-                     issues/PRs│  ▲ webhook (pull_request)
-                                │  │ (HMAC-SHA256 verified)
-                                ▼  │
- ┌──────────────────────────────────────────────────────────┐
- │                     MergeFi Backend (NestJS)               │
- │                                                              │
- │  auth ─── users ─── github (sync + webhooks) ─── bounties   │
- │                                        │              │      │
- │                                        │              ▼      │
- │                              teams ◄───┘         escrow      │
- │                                                    │   │     │
- │                              milestones ───────────┘   │     │
- │                              maintenance-pool ──────────┘     │
- │                              sponsors / reputation / analytics│
- │                                                              │
- │                       Postgres (TypeORM)                    │
- └───────────────────────────────┬──────────────────────────────┘
-                                  │ Soroban RPC / Horizon
-                                  ▼
-                   ┌───────────────────────────────┐
-                   │  Escrow smart contract(s)      │
-                   │  deployed from mergefi-contracts│
-                   │  (Stellar / Soroban network)    │
-                   └───────────────────────────────┘
-```
+```mermaid
+flowchart TD
+    subgraph Client
+        A[Browser / External caller]
+    end
 
-Design principles:
+    subgraph Express["Express (src/index.ts)"]
+        H[GET /health]
+        IOT[iot.ts\nGET /v1/iot/solar/:id\nGET /v1/iot/satellite/:id]
+        ADMIN[admin.ts\nPOST /v1/admin/update-scores\n— Bearer token required]
+        CRON[node-cron\nhourly @ :00]
+    end
 
-- **GitHub is the source of truth for code.** We import repos/issues/PRs via
-  the REST API (`@octokit/rest`) and keep a local mirror for fast querying,
-  refreshed by sync calls and kept current by webhooks.
-- **Stellar/Soroban is the source of truth for money.** Every escrow state
-  change (fund/release/refund/split) is a real contract invocation through
-  `@stellar/stellar-sdk`'s Soroban RPC client; Postgres holds an audit-trail
-  mirror (`escrows`, `payments`) of that on-chain activity, not the money
-  itself.
-- **Config-driven, not hardcoded.** There is no deployed escrow contract for
-  this MVP session, so `ESCROW_CONTRACT_ID` / `TREASURY_SECRET` are read from
-  env and the Soroban client transparently falls back to a "dry run" mode
-  when they're absent — see [Escrow / Soroban integration](#escrow--soroban-integration).
+    subgraph Lib["lib modules"]
+        SC[scoring.ts\npure computation\ncomputeScores]
+        ST[stellar.ts\nRPC client\nsignAndSubmit]
+        REG[registry.ts\ncontract calls\nupdateImpactScore\ngetTotalProjects]
+    end
 
-## Modules
+    subgraph Stellar
+        RPC[Stellar RPC\nsoroban-testnet.stellar.org]
+        CONTRACT[Soroban\nProjectRegistry\ncontract]
+    end
 
-| Module | Responsibility |
-|---|---|
-| `auth` | GitHub OAuth login (`passport-github2`) and JWT session issuance/validation (`passport-jwt`). |
-| `users` | User + linked `GithubAccount` records, role management, Stellar address linking. |
-| `github` | Repository/issue sync via Octokit (`github-sync.service.ts`) and inbound webhook handling with HMAC-SHA256 signature verification (`github-webhooks.service.ts`, `webhook-signature.util.ts`). On a merged PR, resolves the linked issue → bounty and triggers escrow release. |
-| `bounties` | Paid-issue lifecycle: create, fund, claim, review, merge, pay, refund, expire. State machine in `bounty-state-machine.ts`. |
-| `escrow` | Orchestrates fund/release/refund against the escrow contract via `SorobanClientService`, and keeps `Escrow`/`Payment` rows in sync. Single-recipient and team-split payouts both go through the contract's one `release(issue_id, recipients)` entrypoint. |
-| `teams` | Team bounties: create a team with percentage splits (e.g. frontend 40 / backend 40 / testing 20), assign it to a bounty, validated to sum to 100%. |
-| `milestones` | Fund an entire milestone's budget up front; distribute it incrementally as issues resolve (`resolveIssue`), splitting the remaining budget across still-open issues. |
-| `maintenance-pool` | Recurring sponsor deposits into a shared pool; maintainers assign rewards out of the running balance for maintenance-type work. |
-| `sponsors` | Sponsor dashboard: active bounties, total spend, budget locked in escrow, milestone progress, recent payments. |
-| `reputation` | Computes and snapshots per-contributor stats: earnings, merged PR count, completion rate, avg review time, on-time delivery %, languages, orgs. |
-| `analytics` | Lifetime earnings, repo/org counts, merge rate, review time, languages, a payout heatmap, and top clients (sponsors) per contributor; a platform-wide summary for the homepage. Contributor stats are SQL `GROUP BY` / `SUM` / `COUNT` (heatmap is UTC calendar days, capped at 366 buckets; top clients `ORDER BY` spend `LIMIT 10`). `GET /analytics/platform` is cached in-process for `ANALYTICS_PLATFORM_SUMMARY_TTL_MS` (default 60s) and invalidated when a bounty is created or paid or a repository is first synced. Multi-instance deploys may serve up to one TTL of stale data per process. |
+    A -->|HTTP| H
+    A -->|HTTP| IOT
+    A -->|HTTP + Bearer| ADMIN
 
-Cross-cutting: `config` (typed `@nestjs/config` configuration + `.env`),
-`common/entities` (all TypeORM entities + enums), Swagger mounted at
-`/api/docs`.
+    IOT -->|read-only sim| SC
+    ADMIN --> SC
+    ADMIN --> REG
+    CRON --> SC
+    CRON --> REG
 
-## Data model
-
-Entities (`src/common/entities`):
-
-- **User** — platform account; `roles` (contributor/maintainer/sponsor can
-  overlap), optional linked `stellarAddress`.
-- **GithubAccount** — 1:1 with User; OAuth tokens (never serialized out).
-- **Repository** — synced GitHub repo metadata.
-- **Issue** — synced GitHub issue; flagged `isMaintenanceType` for pool-eligible work; optionally attached to a **Milestone**.
-- **Bounty** — 1:1 with Issue; amount/asset/difficulty/deadline/status, optional **Team** for split payouts, optional 1:1 **Escrow**.
-- **Escrow** — local mirror of one on-chain escrow instance (owns the FK to whichever of bounty/milestone/maintenance-pool it backs), contract tx hashes, status.
-- **Payment** — one payout leg per escrow release (one row per team-split recipient, or one for a plain release).
-- **Team** / **TeamMemberSplit** — named group + percentage splits (must sum to 100).
-- **Milestone** — budget + asset for a whole release; tracks `distributed` vs `budget`.
-- **MaintenancePool** — recurring balance; `monthlyDeposit`, running `balance`.
-- **ReputationSnapshot** — point-in-time computed contributor stats, appended over time.
-- **WebhookEvent** — audit log of every inbound GitHub webhook (verified or not), for replay/debugging.
-
-## Environment variables
-
-See [`.env.example`](./.env.example) for the full annotated list. Highlights:
-
-| Variable | Purpose |
-|---|---|
-| `DATABASE_URL` | Postgres connection string (TypeORM). |
-| `JWT_SECRET`, `JWT_EXPIRES_IN` | Session token signing. |
-| `GITHUB_CLIENT_ID` / `_SECRET`, `GITHUB_OAUTH_CALLBACK_URL` | GitHub OAuth login app. |
-| `GITHUB_API_TOKEN` | Token used by Octokit for repo/issue sync (PAT for now; see roadmap). |
-| `GITHUB_WEBHOOK_SECRET` | HMAC-SHA256 secret configured on the GitHub webhook. |
-| `ANALYTICS_PLATFORM_SUMMARY_TTL_MS` | In-process TTL for `GET /analytics/platform` (default `60000`). Also invalidated on bounty create/pay and first repository sync. |
-| `STELLAR_NETWORK`, `SOROBAN_RPC_URL`, `STELLAR_NETWORK_PASSPHRASE` | Stellar network config. |
-| `ESCROW_CONTRACT_ID` | Deployed escrow contract ID from `mergefi-contracts`. **Not set in this environment** — see below. |
-| `MAINTENANCE_POOL_CONTRACT_ID` | Optional separate contract for maintenance-pool escrows; falls back to `ESCROW_CONTRACT_ID`. |
-| `USDC_TOKEN_CONTRACT_ID`, `XLM_TOKEN_CONTRACT_ID` | Soroban token (SAC) contract addresses, passed as `escrow::fund`'s required `token` argument. |
-| `ESCROW_DEADLINE_SECONDS` | Fallback `escrow::fund` deadline (seconds from fund time) when the bounty/milestone has none. Default 90 days. |
-| `TREASURY_SECRET` | Platform signer used to submit release/refund transactions. |
-
-## Escrow / Soroban integration
-
-`src/escrow/soroban-client.service.ts` wraps `@stellar/stellar-sdk`'s
-`rpc.Server` to build, simulate, sign, and submit Soroban contract
-invocations (`fund` / `release` / `refund`) against the
-escrow contract. `src/escrow/escrow.service.ts` is the orchestration layer:
-it calls the client, then persists `Escrow`/`Payment` rows and drives the
-`Bounty`/`Milestone`/`MaintenancePool` state alongside it.
-
-**Current limitation:** there is no live deployed escrow contract available
-in this environment (`mergefi-contracts` is a separate repo/session). When
-`ESCROW_CONTRACT_ID` or `TREASURY_SECRET` are unset, `SorobanClientService`
-transparently short-circuits into a deterministic **dry-run** mode — it logs
-a warning, returns a synthetic tx hash, and skips the network call — so the
-rest of the system (state transitions, DB writes, split-percentage math,
-webhook-triggered releases) can still be exercised end-to-end in tests and
-local dev. Once real contracts are deployed:
-
-1. Set `ESCROW_CONTRACT_ID` (and `MAINTENANCE_POOL_CONTRACT_ID` if the pool
-   uses a separate deployment), plus `USDC_TOKEN_CONTRACT_ID` /
-   `XLM_TOKEN_CONTRACT_ID` for the token argument.
-2. Set `TREASURY_SECRET` to a funded Stellar account.
-3. Confirm the contract's `fund`/`release`/`refund` function signatures match
-   the ones documented at the top of `soroban-client.service.ts` (adjusted in
-   this change to track `mergefi-contracts`' `contracts/escrow/src/lib.rs`).
-
-No private keys for end users are ever stored — only the platform treasury
-signer, and only as an env var for this MVP (see Roadmap: move to KMS/multi-sig).
-
-## API overview
-
-All routes are mounted under `/api` (see `app.setGlobalPrefix` in `main.ts`).
-Full interactive documentation, generated from the same decorators as the
-code, is served at:
-
-```
-/api/docs
+    REG --> ST
+    ST --> RPC
+    RPC --> CONTRACT
 ```
 
-Route groups: `/api/auth`, `/api/users`, `/api/github`,
-`/api/github/webhooks` (unauthenticated, HMAC-verified), `/api/bounties`,
-`/api/escrow`, `/api/teams`, `/api/milestones`, `/api/maintenance-pools`,
-`/api/sponsors`, `/api/reputation`, `/api/analytics`.
+**Data flow for a score update** (admin route or cron):
 
-### Idempotency
+1. `getSolarData(id)` and `getSatelliteData(id)` produce deterministic, hourly-seeded sensor readings.
+2. `computeScores({ solar, satellite })` derives `credit_quality` and `green_impact` (pure, no I/O).
+3. `updateImpactScore(id, cq, gi)` in `registry.ts` builds and prepares a Soroban transaction.
+4. `signAndSubmit(xdr, keypair)` in `stellar.ts` signs, submits, and polls until the transaction is confirmed.
 
-Every fund/claim/release/refund mutation — `POST /bounties/:id/fund`,
-`/claim`, `/refund`; `/escrow/fund`, `/escrow/:id/release`,
-`/escrow/:id/split-release`, `/escrow/:id/refund`; `/milestones/:id/fund`,
-`/milestones/:id/issues/:issueId/resolve`; `/maintenance-pools/:id/deposit`,
-`/maintenance-pools/:id/assign-reward` — requires a client-supplied
-`Idempotency-Key` header (a UUID) so a retried request after a dropped
-connection can't double-execute:
+---
 
-- A repeated request with the same key (scoped per endpoint and, once a
-  route requires auth, per caller) returns the original response without
-  re-running the mutation. 2xx and 4xx outcomes are cached and replayed
-  verbatim; a 5xx is not cached, so a retry after a genuine server error
-  runs cleanly rather than replaying the failure forever.
-- A second request reusing a key that's still mid-flight gets `409
-  Conflict` instead of racing into a duplicate execution. If the original
-  request crashed before completing, the key is reclaimed after 30s so it
-  doesn't 409 forever.
-- A key's identity is bound to the actual request, not just the route: a
-  SHA-256 fingerprint of the path params and body is stored alongside the
-  key, and a retry whose fingerprint doesn't match gets `422 Unprocessable
-  Entity` instead of replaying the original request's response. Without
-  this, reusing a key across two different resources on the same route
-  (e.g. `Idempotency-Key: K` sent to both `/escrow/A/release` and
-  `/escrow/B/release`) would silently replay A's cached response for B,
-  which looks like a successful release to the client while B's funds
-  never actually moved (#54).
-- Cached keys are retained for 24h (`IDEMPOTENCY_KEY_TTL_MS` in
-  `IdempotencyInterceptor`) and swept hourly by `IdempotencyCleanupService`.
+## API Reference
 
-See `src/common/idempotency/` for the interceptor, decorator, and cleanup
-job.
+Full request/response details, validation rules, and error codes are in
+[**API.md**](./API.md).
 
-## Setup, run, test
+| Method | Path                      | Auth         | Description                                                |
+| ------ | ------------------------- | ------------ | ---------------------------------------------------------- |
+| `GET`  | `/health`                 | —            | Liveness + uptime and last cron run                        |
+| `GET`  | `/v1/iot/solar/:id`       | —            | Simulated solar panel reading for project `id`             |
+| `GET`  | `/v1/iot/satellite/:id`   | —            | Simulated satellite / vegetation reading for project `id`  |
+| `GET`  | `/v1/projects`            | —            | Paginated list of projects (`?page=&pageSize=`; `limit`/`cursor` aliases) |
+| `GET`  | `/v1/projects/:id`        | —            | Nested project detail (`{project, detail, verifiedMetadata}`); `404` if unknown |
+| `GET`  | `/v1/portfolio/:address`  | —            | Indexed deposit/withdraw history for an address            |
+| `POST` | `/v1/admin/update-scores` | Bearer token | Submit impact score update(s) to the Soroban contract      |
+| `POST` | `/v1/telemetry`           | —            | Ingest frontend error reports and Web Vitals (beacon)      |
 
-You can run this project either natively on your host machine or completely containerized using Docker.
+Errors return a consistent `{ "error": { "code": "<code>", "message": "<detail>" } }`
+JSON shape (never a stack trace). `code` is a stable, machine-readable
+identifier; `message` is human-readable detail. All `/api/*` routes are rate
+limited and return `429` with a `Retry-After` header once the limit is
+exceeded.
 
-### 1. Local Development via Docker Compose (Recommended)
+```json
+{
+  "error": {
+    "code": "bad_request",
+    "message": "project id must be a positive integer"
+  }
+}
+```
 
-This is the easiest way to get up and running with a pre-configured, isolated PostgreSQL database.
+> **Frontend integration:** `NEXT_PUBLIC_API_URL` is the versioned base and
+> **must include `/v1`**, e.g. `http://localhost:3001/v1`. The frontend calls
+> `${NEXT_PUBLIC_API_URL}/projects`, so a base without `/v1` resolves to the
+> deprecated `/api` paths (or `404`).
+
+### `GET /health`
+
+```json
+{ "status": "ok" }
+```
+
+### Project IDs
+
+Every `:id` path parameter is a project ID: a whole number in `1..1000000`
+inclusive. The upper bound is configurable via `MAX_PROJECT_ID`.
+
+Anything else is rejected with `400 bad_request` before the route runs — floats
+(`1.5`), signed values (`-5`, `+5`), exponent notation (`1e6`), surrounding
+whitespace, non-numeric strings, and IDs above the bound.
+
+### `GET /v1/iot/solar/:id`
+
+```json
+{
+  "power_output_kw": 742.15,
+  "efficiency_pct": 74.21,
+  "max_power_kw": 1000,
+  "timestamp": 1718150400000
+}
+```
+
+Readings are deterministic per `(project_id, hour)` — the same id returns the same values within a given clock hour.
+
+Because they are deterministic, readings are cached in memory for the remainder
+of the clock hour instead of being recomputed per request; `timestamp` is still
+the time of the request. Set `IOT_CACHE_DISABLED=true` to recompute every time,
+and `IOT_CACHE_MAX_SIZE` to cap retained entries.
+
+### `GET /v1/iot/satellite/:id`
+
+```json
+{
+  "forest_density_pct": 68.44,
+  "ndvi_score": 0.684,
+  "timestamp": 1718150400000
+}
+```
+
+### `POST /v1/admin/update-scores`
+
+**Headers:** `Authorization: Bearer <ADMIN_API_KEY>`
+
+**Body (optional):**
+
+```json
+{ "project_ids": [1, 2, 3] }
+```
+
+Omit `project_ids` (or send an empty array) to update every project registered on-chain (fetched via `getTotalProjects()`).
+
+**Response:**
+
+```json
+{
+  "updated": 2,
+  "results": [
+    {
+      "project_id": 1,
+      "tx_hash": "abc123...",
+      "credit_quality": 74,
+      "green_impact": 69
+    }
+  ],
+  "errors": [
+    {
+      "project_id": 4,
+      "error": { "code": "update_failed", "message": "Soroban RPC timeout" }
+    }
+  ]
+}
+```
+
+Soroban does not support multi-call batching; transactions are submitted sequentially.
+
+### `POST /v1/telemetry`
+
+Ingests frontend error reports and [Web Vitals](https://web.dev/vitals/) measurements.
+The browser sends beacons with `navigator.sendBeacon` using a `text/plain` Blob
+(JSON string); `application/json` is accepted as well. No authentication or CSRF
+token is required — the route carries no cookies or session, and browser beacons
+cannot set custom headers. It is rate limited per client IP.
+
+Request body (one report per request):
+
+```jsonc
+// ErrorReport
+{ "kind": "runtime", "message": "boom", "contractErrorName": "InvalidScore", "contractErrorCode": 22 }
+
+// WebVitalReport
+{ "name": "LCP", "value": 2345, "rating": "good" }
+```
+
+- `kind` and `contractErrorName` are bounded metric labels (`frontend_errors_total`).
+- `name` and `rating` label the `frontend_web_vital` histogram.
+- A second scrub pass strips anything resembling a Stellar address (`G...`),
+  secret seed (`S...`), contract id (`C...`), XDR blob, or e-mail address before
+  it can reach a metric, log, or trace. Reports are never persisted.
+
+Responses:
+
+| Status | When                                                        |
+| ------ | ----------------------------------------------------------- |
+| `204`  | Accepted (no body)                                          |
+| `400`  | Payload matches neither schema, or malformed JSON           |
+| `413`  | Body exceeds `TELEMETRY_BODY_SIZE_LIMIT` (default `64kb`)   |
+| `429`  | Per-IP telemetry rate limit exceeded                         |
+
+The endpoint is also mounted at the deprecated `/api/telemetry` path.
+
+> **Frontend follow-up:** the frontend lives in a separate repository. Point its
+> `NEXT_PUBLIC_ERROR_REPORT_URL` at `<api-base>/v1/telemetry` (see `.env.example`).
+
+---
+
+## Score Formula
+
+Both output values are integers in `[0, 100]`.
+
+```
+credit_quality = clamp(efficiency_pct, 0, 100)
+
+green_impact   = clamp(
+                   (power_output_kw / max_power_kw) * 50
+                 + (forest_density_pct / 100)        * 50,
+                   0, 100
+                 )
+```
+
+`credit_quality` reflects how efficiently the solar array is operating.
+`green_impact` is a 50/50 blend of power production ratio and vegetation health.
+
+---
+
+## Anomaly Detection
+
+Each sensor reading (`efficiency_pct`, `power_output_kw`, `forest_density_pct`,
+`ndvi_score`) is checked against a rolling per-project baseline before it is
+scored. Detection starts once `minBaseline` readings are recorded.
+
+| Alert type    | Trigger                                                                                   |
+| ------------- | ----------------------------------------------------------------------------------------- |
+| `outlier`     | Value is more than `sensitivityZScore` standard deviations from the baseline mean         |
+| `step_change` | Baseline is flat (zero std dev, e.g. a stuck sensor) and the new value differs; always `high` |
+| `trend`       | Value deviates more than `trendDeviationPct`% from the older half of the window           |
+
+Severity is `low`, `medium` or `high` at 1x, 1.5x and 2x the relevant threshold.
+The score pipeline blocks updates only on `high` severity alerts.
+
+Readings flagged as `outlier` or `step_change` are kept out of the baseline so
+sustained bad data cannot drag it toward acceptance. After `minBaseline`
+consecutive flagged readings the new level is treated as real and the baseline
+restarts from it.
+
+---
+
+## Rate Limiting
+
+All API endpoints are rate-limited to prevent abuse and protect against fee-drain attacks on Soroban transactions.
+
+| Limiter | Default Window | Default Max     | Applied To                        |
+| ------- | -------------- | --------------- | --------------------------------- |
+| Public  | 60 seconds     | 100 requests/IP | All unauthenticated endpoints     |
+| Admin   | 60 seconds     | 20 requests/IP  | All authenticated admin endpoints |
+
+When the limit is exceeded, the API returns `429 Too Many Requests` with:
+
+- `Retry-After` header (seconds until the window resets)
+- `RateLimit-Remaining: 0` and `RateLimit-Reset` headers (RFC 6585 standard)
+
+```json
+{
+  "error": {
+    "code": "too_many_requests",
+    "message": "Rate limit exceeded. Please retry later."
+  }
+}
+```
+
+Configure via environment variables (see below). Admin limits are stricter because each `POST /v1/admin/update-scores` call triggers on-chain Soroban transactions that cost XLM.
+
+---
+
+## Environment Variables
+
+Create a `.env` file (see `.env.example`):
+
+| Variable                       | Required | Default                               | Description                                                           |
+| ------------------------------ | -------- | ------------------------------------- | --------------------------------------------------------------------- |
+| `STELLAR_NETWORK`              | No       | `testnet`                             | `testnet` or `mainnet` — selects the network passphrase               |
+| `ADMIN_SECRET_KEY`             | Yes      | —                                     | Stellar secret key (`S...`) used to sign transactions                 |
+| `PROJECT_REGISTRY_CONTRACT_ID` | Yes      | —                                     | Soroban contract address for the ProjectRegistry                      |
+| `RPC_URL`                      | No       | `https://soroban-testnet.stellar.org` | Stellar RPC endpoint                                                  |
+| `PORT`                         | No       | `3001`                                | HTTP port the server listens on                                       |
+| `FRONTEND_URL`                 | No       | `http://localhost:3000`               | Origin allowed by CORS                                                |
+| `ADMIN_API_KEY`                | No       | —                                     | Bearer token for `/v1/admin/*` and other admin-gated routes. If unset, the server starts but admin endpoints fail closed with `500 server_misconfigured` |
+| `RATE_LIMIT_WINDOW_MS`         | No       | `60000`                               | Public rate-limit window (ms)                                         |
+| `RATE_LIMIT_MAX`               | No       | `100`                                 | Public max requests per IP per window                                 |
+| `RATE_LIMIT_ADMIN_WINDOW_MS`   | No       | `RATE_LIMIT_WINDOW_MS`                | Admin rate-limit window (ms)                                          |
+| `RATE_LIMIT_ADMIN_MAX`         | No       | `20`                                  | Admin max requests per IP per window                                  |
+| `POLL_INTERVAL_MS`             | No       | `1500`                                | Stellar transaction confirmation polling interval (ms)                |
+| `POLL_MAX_ATTEMPTS`            | No       | `20`                                  | Max polling attempts before timing out                                |
+| `TX_TIMEOUT_SECONDS`           | No       | `30`                                  | Soroban transaction timeout (seconds)                                 |
+| `MAX_POWER_KW`                 | No       | `1000`                                | Maximum simulated solar power output (kW)                             |
+| `IOT_CACHE_DISABLED`           | No       | —                                     | `true` bypasses the in-memory IoT reading cache                       |
+| `IOT_CACHE_MAX_SIZE`           | No       | `1000`                                | Max cached IoT readings; oldest are evicted first                     |
+| `MAX_PROJECT_ID`               | No       | `1000000`                             | Inclusive upper bound accepted for a `:id` project param              |
+| `BODY_SIZE_LIMIT`              | No       | `100kb`                               | Max request body size accepted by `express.json()` (e.g. `100kb`, `1mb`). Requests exceeding it return `413 Payload Too Large` |
+| `TELEMETRY_BODY_SIZE_LIMIT`    | No       | `64kb`                                | Max body size for `POST /v1/telemetry`; oversize bodies return `413`  |
+| `TELEMETRY_OTLP_ENABLED`       | No       | `false`                               | `true` forwards accepted telemetry reports to the OTLP exporter       |
+| `TELEMETRY_RATE_LIMIT_WINDOW_MS` | No     | `RATE_LIMIT_WINDOW_MS`                | Per-IP telemetry rate-limit window (ms)                              |
+| `TELEMETRY_RATE_LIMIT_MAX`     | No       | `120`                                 | Max telemetry requests per IP per window                              |
+
+---
+
+## Getting Started
+
+Prerequisites: [Bun](https://bun.sh) (`curl -fsSL https://bun.sh/install | bash`).
 
 ```bash
-# A. Configure Environment Variables
+# 1. Install dependencies
+bun install
+
+# 2. Configure environment
 cp .env.example .env
+# Edit .env — ADMIN_SECRET_KEY and PROJECT_REGISTRY_CONTRACT_ID are required to
+# start the server; the rest have sensible defaults.
 
-# B. Start App and Database services
-docker compose up --build
+# 3. Development (ts-node + hourly cron + 5-min indexer)
+bun run dev          # -> Heliobond backend listening on port 3001
+                     #    watches src/ and restarts on save
+bun run dev:no-watch # same, without file watching
+
+# Verify it's up
+curl http://localhost:3001/health
+
+# Production
+bun run build && bun start
+
+# Quality gate
+bun run build        # tsc type-check
+bun run test         # jest suite
 ```
 
-- **Hot Reloading**: The codebase is mounted into the container using a bind mount. File changes on the host will automatically trigger application restarts.
-- **Node Modules Isolation**: The container uses an anonymous volume for `/usr/src/app/node_modules`. This prevents Windows/Host compiled node packages from contaminating the Linux-native container.
-- **Services**:
-  - The API is served at `http://localhost:3000/api` (Swagger docs at `http://localhost:3000/api/docs`).
-  - PostgreSQL is mapped to port `5432` on your localhost with credentials `postgres:postgres` and database name `mergefi`.
+## Dependency Audit
 
-### 2. Local Development Natively on Host
+Dependency vulnerability checks run in the CI workflow for every pull request. The audit gate uses `npm audit --audit-level=high`, so CI fails when npm reports any high or critical dependency vulnerabilities. Moderate and low findings are still included in the workflow summary for visibility.
 
-If you prefer to run NestJS directly on your host machine:
+Run the same audit locally before opening a PR:
 
 ```bash
-# A. Install Dependencies
-npm install
-
-# B. Spin up only the Database service in Docker
-docker compose up -d db
-
-# C. Configure Environment Variables
-cp .env.example .env
-# Set DATABASE_URL=postgresql://postgres:postgres@localhost:5432/mergefi
-
-# D. Start NestJS in development mode
-npm run start:dev
+npm audit --audit-level=high
 ```
 
-### 3. Production Builds & Security
+Use `npm audit --json` if you need machine-readable details while triaging a finding.
 
-The Dockerfile is structured as a secure, multi-stage build running on Alpine Linux.
+## Dependency Pinning
 
-#### Build the production image:
-```bash
-docker build --target runner -t mergefi-backend:latest .
-```
+Critical packages are pinned to exact versions in `package.json` to prevent
+compromised or buggy minor/patch releases from being silently installed by
+`bun install`. The lockfile (`bun.lock`) records the resolved versions and is
+checked in so installs are reproducible.
 
-#### Production Guardrails (Important):
-- **Least Privilege**: The container runs under the non-root `node` user (`USER node`).
-- **Production Mode**: The final image forces `NODE_ENV=production`.
-- **Required-secret Enforcer**: When `NODE_ENV=production`, `assertRequiredConfig` (`src/config/validate-required-config.ts`, called from `src/main.ts`) crashes the container at boot — listing every problem at once — unless all of `JWT_SECRET` (not the `insecure-dev-secret` default), `DATABASE_URL` (not the local `postgres:postgres@localhost` default), `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_WEBHOOK_SECRET`, `ESCROW_CONTRACT_ID` and `TREASURY_SECRET` are set to real values. This closes the silent-failure gap where, for example, an empty `GITHUB_WEBHOOK_SECRET` made the app boot "healthy" while rejecting 100% of webhook deliveries. You **must** provide these when running the production container, e.g.:
-  ```bash
-  docker run -p 3000:3000 \
-    -e JWT_SECRET="your-highly-secure-random-jwt-key" \
-    -e DATABASE_URL="postgresql://user:pass@db-host:5432/mergefi" \
-    -e GITHUB_CLIENT_ID=... -e GITHUB_CLIENT_SECRET=... \
-    -e GITHUB_WEBHOOK_SECRET=... \
-    -e ESCROW_CONTRACT_ID=... -e TREASURY_SECRET=... \
-    mergefi-backend:latest
-  ```
+The following packages are pinned because they are security-sensitive or
+directly handle blockchain and HTTP trust boundaries:
 
-### 4. Running Tests
+- `@stellar/stellar-sdk` — pinned; Stellar transaction signing and submission.
+- `express` — pinned; HTTP server and request routing.
+- `dotenv` — pinned; loads secrets and configuration.
 
-Unit tests and end-to-end tests are fully supported:
+Only the packages listed above are pinned; all other dependencies retain their
+existing caret ranges. When upgrading a pinned package, change the exact version
+in `package.json`, run `bun install`, and commit the updated `bun.lock`. Do not
+change a pinned dependency back to a caret range.
+
+## Deployment
+
+### Docker
+
+Build and run using Docker:
 
 ```bash
-# Run unit tests natively
-npm test
-
-# Run unit tests with code coverage
-npm run test:cov
-
-# Run End-to-End (E2E) tests (requires PostgreSQL to be running on DATABASE_URL)
-npm run test:e2e
+docker build -t heliobond-backend .
+docker run -p 3001:3001 --env-file .env heliobond-backend
 ```
 
-Unit tests cover critical domains including:
-- `src/bounties/bounty-state-machine.spec.ts` — the bounty lifecycle state machine.
-- `src/teams/team-split.util.spec.ts` — team payout split percentage math.
-- `src/escrow/escrow.service.spec.ts` — escrow fund/release/refund orchestration (Soroban client mocked).
-- `src/github/webhook-signature.util.spec.ts` — GitHub webhook HMAC-SHA256 signature verification.
-- `src/github/github-webhooks.service.spec.ts` — webhook-to-escrow release logic.
-- `src/bounties/bounties.service.spec.ts` — bounty core management.
-- `src/sponsors/sponsors.service.spec.ts` — sponsor dashboard aggregate queries (budgetLocked/totalSpend read the Escrow/Payment ledger directly).
-- `src/database/escrow-fk-integrity.integration.spec.ts` — **integration** test against a real Postgres (requires `DATABASE_URL`, not mocked): the exactly-one-parent CHECK constraint on `escrows`, and that sponsor dashboard figures survive a parent bounty/milestone being deleted.
-- `src/analytics/analytics.integration.spec.ts` — Postgres load/parity test: SQL heatmap + top-N match the old JS bucketing on a small fixture; a 3,000-bounty seed must not call `find`/`getMany` (O(n) entity load → O(days)+O(1) aggregates), `forContributor` under 2s, cached homepage summary on a second call.
+### Docker Compose
 
-`DATABASE_SYNCHRONIZE=true` (set in development) will auto-create tables from entities for fast local iteration. Real deployments should run migrations instead — see `src/database/migrations/` and the `migration:*` npm scripts below.
-
-### Migrations
-
-Schema changes are tracked as TypeORM migrations under `src/database/migrations/`, driven by the `DataSource` in `src/database/data-source.ts`:
+Use the provided docker-compose.yml for local development with all dependencies:
 
 ```bash
-# Generate a migration from entity changes (requires DATABASE_URL pointed at a real DB to diff against)
-npm run migration:generate -- src/database/migrations/SomeChange
-
-# Run all pending migrations
-npm run migration:run
-
-# Revert the most recently applied migration
-npm run migration:revert
+docker-compose up
 ```
 
-## Roadmap
+To run the whole platform locally (Stellar node, contracts, Postgres, backend,
+optional frontend) use `docker compose --profile local-stack up --build backend-local`; see
+[docs/LOCAL_STACK.md](docs/LOCAL_STACK.md).
 
-- [x] ~~Wire up TypeORM migrations (currently relies on `synchronize` for local dev only).~~ See `src/database/migrations/` and the Migrations section above.
-- [ ] Move GitHub sync from a static PAT to a GitHub App installation-token flow for multi-org, least-privilege access.
-- [ ] Deploy the real escrow contract from `mergefi-contracts` and drop the Soroban dry-run fallback.
-- [ ] Replace the single `TREASURY_SECRET` signer with a proper signing service (KMS / multi-sig) before handling real funds.
-- [x] ~~Add a scheduled job for `BountiesService.expireOverdue()` (deadline sweeps).~~ See `BountyExpiryScheduler` (hourly `@Cron`).
-- [ ] Add a scheduled job for recurring `MaintenancePool` deposits.
-- [ ] Add role-based authorization guards (currently JWT-authenticated but not role-scoped) to maintainer/sponsor-only endpoints.
-- [ ] Add pagination/filtering to list endpoints (bounties, milestones, pools) as data volume grows.
-- [ ] Weighted (not just even) per-issue milestone budget distribution.
+### Production Deployment
+
+For production deployments, consider:
+
+1. Using a process manager like PM2 or systemd
+2. Setting up a reverse proxy (Nginx, Caddy)
+3. Configuring SSL/TLS certificates
+4. Implementing proper monitoring and alerting
+
+## Monitoring and Observability
+
+The application includes OpenTelemetry instrumentation for:
+
+- **Distributed Tracing**: Track requests across services
+- **Metrics**: Monitor performance and resource usage
+- **Logging**: Structured logging with correlation IDs
+
+Frontend telemetry ingested at `POST /v1/telemetry` is exposed on the shared
+`/metrics` registry as `frontend_errors_total{kind, contract_error_name}` and the
+`frontend_web_vital{name, rating}` histogram. Set `TELEMETRY_OTLP_ENABLED=true`
+to additionally forward accepted reports to the configured OTLP exporter.
+
+Configure OpenTelemetry exporters in your environment to send data to your preferred observability platform (Jaeger, Zipkin, Prometheus, etc.).
+
+---
+
+## Tech Stack
+
+| Layer                         | Technology                 |
+| ----------------------------- | -------------------------- |
+| Runtime                       | Node.js 20                 |
+| Language                      | TypeScript                 |
+| HTTP framework                | Express 5                  |
+| Stellar SDK                   | `@stellar/stellar-sdk` v15 |
+| Scheduler                     | `node-cron` v4             |
+| Package manager / test runner | Bun                        |
+| Test framework                | Jest + ts-jest + Supertest |
+| Database                      | PostgreSQL (via Knex.js)   |
+| API Documentation             | Swagger/OpenAPI            |
+| Monitoring                    | OpenTelemetry              |
+| Containerization              | Docker                     |
+| CI/CD                         | GitHub Actions             |
+
+## Development Guidelines
+
+### Code Quality
+
+- Use TypeScript strict mode
+- Follow ESLint and Prettier configuration
+- Write comprehensive tests for new features
+- Maintain test coverage above 80%
+
+### Testing
+
+Run the test suite with:
+
+```bash
+bun run test           # Run all tests
+bun run test:coverage  # Run tests with coverage report
+```
+
+### Code Style
+
+- Use meaningful variable and function names
+- Add JSDoc comments for public APIs
+- Follow the existing code patterns and architecture
+- Keep functions small and focused on single responsibilities
+
+## API Documentation
+
+Comprehensive API documentation is available in multiple formats:
+
+### Interactive Documentation
+
+After starting the server, visit `http://localhost:3001/docs` for interactive Swagger UI documentation.
+
+### API Specification
+
+The full OpenAPI specification is available at `http://localhost:3001/docs.json`.
+
+### API.md Reference
+
+Detailed API reference with examples and error codes is available in [API.md](./API.md).
+
+## Changelog
+
+Versioned release notes are published in [GitHub Releases](https://github.com/Heliobond/backend/releases).
+After CI builds and tests a push to `main`, it calls the release workflow for that commit.
+Automatic releases derive their versions and notes from Conventional Commits. Manual releases build and test the selected commit before publishing.
+[CHANGELOG.md](./CHANGELOG.md) retains historical and unreleased notes.
+
+## Contributing
+
+Please read [CONTRIBUTING.md](./CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
+
+## Security
+
+For security concerns, please review [SECURITY.md](./SECURITY.md) and report vulnerabilities through the appropriate channels.
+
+## License
+
+This project is licensed under the terms in the [LICENSE](./LICENSE) file.
+
+
+
+
+
+

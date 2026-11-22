@@ -1,79 +1,59 @@
-# ==========================================
-# Stage 1: Base image
-# ==========================================
-FROM node:24-alpine AS base
+# ── Build stage ──────────────────────────────────────────────────────────────
+# bun.lock is the canonical lockfile (CI installs with `bun install
+# --frozen-lockfile`); there is no package-lock.json, so `npm ci` cannot work.
+FROM oven/bun:1-alpine AS builder
 
-# Install libc6-compat for compatibility with native modules on Alpine
-RUN apk add --no-cache libc6-compat
+WORKDIR /app
 
-WORKDIR /usr/src/app
+# Skip the husky prepare hook — it needs a .git checkout that images lack.
+ENV HUSKY=0
 
-# ==========================================
-# Stage 2: Development dependencies and environment
-# ==========================================
-FROM base AS development
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
 
-# Copy configuration files for dependency installation
-COPY package*.json ./
+COPY tsconfig.json ./
+COPY src ./src
 
-# Install ALL dependencies (including devDependencies)
-RUN npm ci
+RUN bun run build
 
-# Copy the rest of the application files
-COPY . .
+# ── Production dependency stage ─────────────────────────────────────────────
+# Prod-only install for the Node runtime image below.
+FROM oven/bun:1-alpine AS prod-deps
 
-# Set default port and run watch mode for development
-EXPOSE 3000
-CMD ["npm", "run", "start:dev"]
+WORKDIR /app
 
-# ==========================================
-# Stage 3: Build the application
-# ==========================================
-FROM base AS builder
+ENV HUSKY=0
 
-COPY package*.json ./
+# --ignore-scripts: the `prepare` hook runs `husky`, which is a devDependency
+# and therefore absent from a --production install.
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile --production --ignore-scripts && bun pm cache rm
 
-# Copy all node_modules from development stage to compile typescript
-COPY --from=development /usr/src/app/node_modules ./node_modules
-COPY . .
+# ── Production stage ──────────────────────────────────────────────────────────
+FROM node:20-alpine AS production
 
-# Build the production files (calls nest build)
-RUN npm run build
-
-# ==========================================
-# Stage 4: Production dependencies
-# ==========================================
-FROM base AS prod-deps
-
-COPY package*.json ./
-
-# Clean installation of production-only dependencies
-RUN npm ci --omit=dev
-
-# ==========================================
-# Stage 5: Production runner
-# ==========================================
-FROM base AS runner
-
-# Configure environment variables
 ENV NODE_ENV=production
-ENV PORT=3000
 
-# Set ownership of the work directory to the non-root 'node' user
-RUN chown -R node:node /usr/src/app
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+# Cap the V8 old-space heap below the 512MB container memory limit (#225).
+# The headroom covers the Node binary, native buffers and the RPC client, so a
+# runaway polling loop hits an OOM inside Node — with a JS stack trace — rather
+# than being SIGKILLed by the kernel with no diagnostics.
+ENV NODE_OPTIONS="--max-old-space-size=384"
 
-# Use the non-root node user for security compliance
-USER node
+WORKDIR /app
 
-# Copy package files and production node_modules
-COPY --chown=node:node package*.json ./
-COPY --chown=node:node --from=prod-deps /usr/src/app/node_modules ./node_modules
+COPY --from=prod-deps /app/node_modules ./node_modules
+COPY package.json ./
 
-# Copy the built main application bundle
-COPY --chown=node:node --from=builder /usr/src/app/dist ./dist
+COPY --from=builder /app/dist ./dist
 
-# Expose the default NestJS port
-EXPOSE 3000
+RUN chown -R appuser:appgroup /app
+USER appuser
 
-# Run the production bundle
-CMD ["node", "dist/main.js"]
+EXPOSE 3001
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- http://localhost:3001/health || exit 1
+
+CMD ["node", "dist/index.js"]
