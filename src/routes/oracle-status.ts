@@ -1,5 +1,11 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { register } from "../lib/prometheus";
+import {
+  oracleSignerBalance,
+  registryPaused as registryPausedGauge,
+  oracleScoreAge,
+  txSubmissionTotal,
+  oracleSubmitLatency,
+} from "../lib/prometheus";
 import { logger } from "../lib/logger";
 import { getTotalProjects } from "../lib/registry";
 
@@ -55,72 +61,50 @@ function percentileFromBuckets(buckets: { le: number; count: number }[], q: numb
  */
 router.get("/", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const metrics = await register.metrics();
-    const lines = metrics.split("\n");
+    // Read structured registry values directly instead of parsing serialized
+    // metric text (#1062). Text parsing is fragile: the default `app` label
+    // added by the registry, additional labels, or label reordering all cause
+    // exact-string patterns to silently miss their targets.
 
-    // Parse metrics from Prometheus format
-    let signerBalance: number | null = null;
-    let registryPaused = false;
-    const scoreAges: number[] = [];
-    let successCount = 0;
-    let failureCount = 0;
-    const buckets: { le: number; count: number }[] = [];
+    // Signer balance: single unlabelled gauge
+    const signerBalanceData = await oracleSignerBalance.get();
+    const signerBalance: number | null =
+      signerBalanceData.values.length > 0 ? (signerBalanceData.values[0].value ?? null) : null;
 
-    for (const line of lines) {
-      if (line.startsWith("#") || line.trim() === "") continue;
+    // Registry paused: single unlabelled gauge (1 = paused)
+    const pausedData = await registryPausedGauge.get();
+    const registryPaused = (pausedData.values[0]?.value ?? 0) === 1;
 
-      // Parse signer balance
-      if (line.startsWith("oracle_signer_balance_xlm ")) {
-        signerBalance = parseFloat(line.split(" ")[1]);
-      }
-
-      // Parse registry paused state
-      if (line.startsWith("registry_paused ")) {
-        registryPaused = parseFloat(line.split(" ")[1]) === 1;
-      }
-
-      // Parse score ages
-      if (line.startsWith("oracle_score_age_seconds{")) {
-        const value = parseFloat(line.split(" ")[1]);
-        if (!isNaN(value)) {
-          scoreAges.push(value);
-        }
-      }
-
-      // Parse submission totals for success rate
-      if (line.includes('stellar_tx_submissions_total{result="success"}')) {
-        successCount = parseFloat(line.split(" ")[1]) || 0;
-      }
-      if (line.includes('stellar_tx_submissions_total{result="failure"}')) {
-        failureCount = parseFloat(line.split(" ")[1]) || 0;
-      }
-
-      // Parse submission latency histogram buckets
-      if (line.startsWith("oracle_submit_to_confirm_latency_seconds_bucket{")) {
-        const leMatch = line.match(/le="([^"]+)"/);
-        const parts = line.split(" ");
-        const countVal = parseFloat(parts[parts.length - 1]);
-        if (leMatch && !isNaN(countVal)) {
-          const le = leMatch[1] === "+Inf" ? Infinity : parseFloat(leMatch[1]);
-          buckets.push({ le, count: countVal });
-        }
-      }
-    }
-
-    // Calculate percentiles for score ages
-    const sortedAges = scoreAges.sort((a, b) => a - b);
+    // Score ages: one labelled gauge per project
+    const ageData = await oracleScoreAge.get();
+    const scoreAges = ageData.values.map((v) => v.value);
+    const sortedAges = [...scoreAges].sort((a, b) => a - b);
     const p50Age = percentile(sortedAges, 0.5);
     const p95Age = percentile(sortedAges, 0.95);
     const p99Age = percentile(sortedAges, 0.99);
-
-    // Count stale projects (>2 hours)
     const staleProjects = scoreAges.filter((age) => age > 7200).length;
 
-    // Calculate success rate
+    // Submission totals: labelled counter — look up by label value, not string position
+    const subData = await txSubmissionTotal.get();
+    const successCount =
+      subData.values.find((v) => (v.labels as Record<string, string>).result === "success")
+        ?.value ?? 0;
+    const failureCount =
+      subData.values.find((v) => (v.labels as Record<string, string>).result === "failure")
+        ?.value ?? 0;
     const totalSubmissions = successCount + failureCount;
     const successRate = totalSubmissions > 0 ? successCount / totalSubmissions : null;
 
-    // Calculate latency percentiles from histogram buckets
+    // Latency histogram: use the structured bucket values
+    const latencyData = await oracleSubmitLatency.get();
+    const buckets: { le: number; count: number }[] = latencyData.values
+      .filter((v) => (v.labels as Record<string, string>).le !== undefined)
+      .map((v) => ({
+        le: (v.labels as Record<string, string>).le === "+Inf"
+          ? Infinity
+          : parseFloat((v.labels as Record<string, string>).le),
+        count: v.value,
+      }));
     const p50Latency = percentileFromBuckets(buckets, 0.5);
     const p95Latency = percentileFromBuckets(buckets, 0.95);
     const p99Latency = percentileFromBuckets(buckets, 0.99);
