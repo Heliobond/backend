@@ -146,8 +146,9 @@ function recordOutageFailure(): void {
   if (outageState.consecutiveFailures < ALERT_THRESHOLD) return;
 
   const now = Date.now();
-  const isReminder = outageState.lastAlertAt !== null;
-  if (isReminder && now - (outageState.lastAlertAt as number) < ALERT_REMINDER_INTERVAL_MS) {
+  const lastAlertAt = outageState.lastAlertAt;
+  const isReminder = lastAlertAt !== null;
+  if (lastAlertAt !== null && now - lastAlertAt < ALERT_REMINDER_INTERVAL_MS) {
     return;
   }
 
