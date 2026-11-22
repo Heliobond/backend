@@ -246,4 +246,33 @@ describe("health endpoint dependency checks (#277)", () => {
       expect(res.body).toHaveProperty("migrations");
     });
   });
+
+  describe("readiness db probe timeout (#1047)", () => {
+    it("returns not_ready when the db probe exceeds HEALTH_CHECK_TIMEOUT_MS", async () => {
+      jest.useFakeTimers();
+
+      // Simulate a query that never resolves — the probe timeout must fire.
+      (db.pool.query as jest.Mock).mockImplementationOnce(
+        () => new Promise<void>(() => { /* never settles */ }),
+      );
+
+      const probePromise = getReadiness();
+      // Advance past the default 1 s probe budget so the timeout fires.
+      jest.advanceTimersByTime(1500);
+      const readiness = await probePromise;
+
+      jest.useRealTimers();
+
+      expect(readiness.status).toBe("not_ready");
+      expect(readiness.checks.database).toBe(false);
+    });
+
+    it("resolves as ready and clears the timeout when the db probe succeeds quickly", async () => {
+      // Default mock resolves immediately — clearTimeout must run so no stray
+      // timers remain after the test (Jest warns about open handles otherwise).
+      const readiness = await getReadiness();
+      expect(readiness.status).toBe("ready");
+      expect(readiness.checks.database).toBe(true);
+    });
+  });
 });
