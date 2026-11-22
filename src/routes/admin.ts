@@ -214,7 +214,7 @@ router.post(
       for (const projectId of projectIds) {
         try {
           const result = await withProjectLock<ProjectUpdateOutcome>(projectId, async () => {
-            const { allowed, reason } = tryBeginUpdate(projectId);
+            const { allowed, key: lockToken, reason } = tryBeginUpdate(projectId);
             if (!allowed) {
               return { skipped: true, reason };
             }
@@ -234,7 +234,7 @@ router.post(
                   scoreResult.greenImpact,
                   "RPC degraded",
                 );
-                markCompleted(projectId);
+                markCompleted(projectId, lockToken);
                 return {
                   skipped: false,
                   project_id: projectId,
@@ -245,19 +245,19 @@ router.post(
               }
 
               if (scoreResult.status === "skipped") {
-                markCompleted(projectId);
+                markCompleted(projectId, lockToken);
                 return { skipped: true, reason: scoreResult.reason };
               }
 
               if (scoreResult.status === "error") {
                 if (scoreResult.error.includes("duplicate submission rejected")) {
-                  markCompleted(projectId);
+                  markCompleted(projectId, lockToken);
                   return { skipped: true, reason: scoreResult.error };
                 }
                 throw new Error(scoreResult.error);
               }
 
-              markCompleted(projectId);
+              markCompleted(projectId, lockToken);
               recordAudit({
                 project_id: projectId,
                 credit_quality: scoreResult.creditQuality,
@@ -282,7 +282,7 @@ router.post(
                 green_impact: scoreResult.greenImpact,
               };
             } catch (err) {
-              markFailed(projectId);
+              markFailed(projectId, lockToken);
               throw err;
             }
           });

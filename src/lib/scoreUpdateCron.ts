@@ -114,7 +114,7 @@ export async function runHourlyScoreUpdate(): Promise<void> {
 
     for (const projectId of projectIds) {
       await withProjectLock(projectId, async () => {
-        const { allowed, reason } = tryBeginUpdate(projectId);
+        const { allowed, key: lockToken, reason } = tryBeginUpdate(projectId);
         if (!allowed) {
           logger.info(`[cron] skipping project ${projectId}: ${reason}`);
           return;
@@ -125,7 +125,7 @@ export async function runHourlyScoreUpdate(): Promise<void> {
           if (scoreResult.status === "deferred") {
             logger.warn(`[cron] project ${projectId}: RPC degraded, score queued for later`);
             enqueue(projectId, scoreResult.creditQuality, scoreResult.greenImpact, "RPC degraded");
-            markCompleted(projectId);
+            markCompleted(projectId, lockToken);
             resetErrorRateLimit(`cron:project-${projectId}`);
             // Not a success: the update was queued, not submitted. Counting it
             // as one made a total RPC outage look like a fully successful run.
@@ -138,7 +138,7 @@ export async function runHourlyScoreUpdate(): Promise<void> {
               `[cron] project ${projectId}: skipped on-chain update (${scoreResult.reason})`,
             );
             cronProjectsSkipped.inc({ job: "score-update", reason: "unchanged" });
-            markCompleted(projectId);
+            markCompleted(projectId, lockToken);
             resetErrorRateLimit(`cron:project-${projectId}`);
             skippedCount++;
             return;
@@ -189,7 +189,7 @@ export async function runHourlyScoreUpdate(): Promise<void> {
           logger.info(
             `[cron] project ${projectId}: cq=${scoreResult.creditQuality} gi=${scoreResult.greenImpact} tx=${scoreResult.txHash}`,
           );
-          markCompleted(projectId);
+          markCompleted(projectId, lockToken);
           resetErrorRateLimit(`cron:project-${projectId}`);
           successCount++;
         } catch (err) {
@@ -201,12 +201,12 @@ export async function runHourlyScoreUpdate(): Promise<void> {
           if (skipReason) {
             logger.info(`[cron] project ${projectId}: skipping (${skipReason})`);
             cronProjectsSkipped.inc({ job: "score-update", reason: skipReason });
-            markCompleted(projectId);
+            markCompleted(projectId, lockToken);
             resetErrorRateLimit(`cron:project-${projectId}`);
             skippedCount++;
             return;
           }
-          markFailed(projectId);
+          markFailed(projectId, lockToken);
           if (!isErrorRateLimited(`cron:project-${projectId}`)) {
             logger.error(`[cron] project ${projectId} failed`, logger.formatError(err));
           }
