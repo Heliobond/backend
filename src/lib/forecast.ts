@@ -20,18 +20,36 @@ export interface SeasonalPattern {
   strength: number;
 }
 
+/**
+ * Accuracy metrics for a forecast evaluation.
+ *
+ * Error metrics are `null` when no evaluation could be performed
+ * (`sample_count === 0`), so an unavailable result is never confused with a
+ * perfect forecast, which reports `0` with a nonzero `sample_count`.
+ */
 export interface AccuracyMetrics {
-  mae: number;
-  rmse: number;
-  mape: number;
-  bias: number;
+  mae: number | null;
+  rmse: number | null;
+  mape: number | null;
+  bias: number | null;
   sample_count: number;
 }
+
+/**
+ * Machine-readable outcome of a forecast accuracy evaluation.
+ *
+ * - `"ok"`: at least one forecast/actual pair was compared; metrics are numbers.
+ * - `"insufficient_history"`: not enough history to hold out `testHours`
+ *   points plus training data; all error metrics are `null` and
+ *   `sample_count` is `0`.
+ */
+export type ForecastAccuracyStatus = "ok" | "insufficient_history";
 
 export interface ForecastAccuracyResult {
   project_id: number;
   field: string;
   method: string;
+  status: ForecastAccuracyStatus;
   metrics: AccuracyMetrics;
   comparisons: { timestamp: number; actual: number; predicted: number; error: number }[];
 }
@@ -372,13 +390,7 @@ export function evaluateForecastAccuracy(
 ): ForecastAccuracyResult {
   const history = generateHistory(projectId, field, trainingHours);
   if (history.length < testHours + 1) {
-    return {
-      project_id: projectId,
-      field,
-      method,
-      metrics: { mae: 0, rmse: 0, mape: 0, bias: 0, sample_count: 0 },
-      comparisons: [],
-    };
+    return insufficientHistoryResult(projectId, field, method);
   }
 
   const training = history.slice(0, -testHours);
@@ -404,15 +416,34 @@ export function evaluateForecastAccuracy(
   const biases = comparisons.map((c) => c.error);
 
   const count = comparisons.length;
+  if (count === 0) {
+    return insufficientHistoryResult(projectId, field, method);
+  }
+
   const metrics: AccuracyMetrics = {
-    mae: count > 0 ? round(mean(errors), 2) : 0,
-    rmse: count > 0 ? round(Math.sqrt(mean(sqErrors)), 2) : 0,
-    mape: count > 0 ? round(mean(pctErrors), 2) : 0,
-    bias: count > 0 ? round(mean(biases), 2) : 0,
+    mae: round(mean(errors), 2),
+    rmse: round(Math.sqrt(mean(sqErrors)), 2),
+    mape: round(mean(pctErrors), 2),
+    bias: round(mean(biases), 2),
     sample_count: count,
   };
 
-  return { project_id: projectId, field, method, metrics, comparisons };
+  return { project_id: projectId, field, method, status: "ok", metrics, comparisons };
+}
+
+function insufficientHistoryResult(
+  projectId: number,
+  field: string,
+  method: string,
+): ForecastAccuracyResult {
+  return {
+    project_id: projectId,
+    field,
+    method,
+    status: "insufficient_history",
+    metrics: { mae: null, rmse: null, mape: null, bias: null, sample_count: 0 },
+    comparisons: [],
+  };
 }
 
 // ── CSV export ───────────────────────────────────────────────────────────────
@@ -446,6 +477,9 @@ export function accuracyToCsv(result: ForecastAccuracyResult): string {
   const rows = result.comparisons.map((c) =>
     `${result.project_id},${result.field},${result.method},${new Date(c.timestamp).toISOString()},${c.actual},${c.predicted},${c.error}`,
   );
-  const summary = `\nMAE,RMSE,MAPE,Bias,SampleCount\n${result.metrics.mae},${result.metrics.rmse},${result.metrics.mape},${result.metrics.bias},${result.metrics.sample_count}`;
+  // Unavailable metrics are written as empty cells, never as 0.
+  const m = result.metrics;
+  const cell = (v: number | null) => (v === null ? "" : String(v));
+  const summary = `\nStatus,MAE,RMSE,MAPE,Bias,SampleCount\n${result.status},${cell(m.mae)},${cell(m.rmse)},${cell(m.mape)},${cell(m.bias)},${m.sample_count}`;
   return [header, ...rows, summary].join("\n") + "\n";
 }

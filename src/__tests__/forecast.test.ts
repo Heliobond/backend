@@ -207,12 +207,30 @@ describe("evaluateForecastAccuracy", () => {
   it("exponential_smoothing has lower error than naive", () => {
     const naive = evaluateForecastAccuracy(1, "power_output_kw", "naive", 12, 72);
     const es = evaluateForecastAccuracy(1, "power_output_kw", "exponential_smoothing", 12, 72);
-    expect(es.metrics.mae).toBeLessThanOrEqual(naive.metrics.mae * 2 + 1);
+    expect(naive.status).toBe("ok");
+    expect(es.status).toBe("ok");
+    expect(es.metrics.mae).toBeLessThanOrEqual(naive.metrics.mae! * 2 + 1);
   });
 
-  it("returns empty for insufficient history", () => {
+  it("returns an explicit insufficient_history status with null metrics", () => {
     const result = evaluateForecastAccuracy(1, "power_output_kw", "naive", 100, 4);
-    expect(result.metrics.sample_count).toBe(0);
+    expect(result.status).toBe("insufficient_history");
+    expect(result.metrics).toEqual({ mae: null, rmse: null, mape: null, bias: null, sample_count: 0 });
+    expect(result.comparisons).toEqual([]);
+  });
+
+  it("an evaluated result reports status ok with numeric metrics, distinct from unavailable", () => {
+    const result = evaluateForecastAccuracy(1, "power_output_kw", "naive", 6, 48);
+    expect(result.status).toBe("ok");
+    expect(result.metrics.sample_count).toBeGreaterThan(0);
+    for (const key of ["mae", "rmse", "mape", "bias"] as const) {
+      expect(typeof result.metrics[key]).toBe("number");
+    }
+  });
+
+  it("accuracyToCsv writes unavailable metrics as empty cells, not zeros", () => {
+    const csv = accuracyToCsv(evaluateForecastAccuracy(1, "power_output_kw", "naive", 100, 4));
+    expect(csv).toContain("Status,MAE,RMSE,MAPE,Bias,SampleCount\ninsufficient_history,,,,,0");
   });
 });
 
@@ -319,6 +337,15 @@ describe("forecast API routes", () => {
     expect(res.body.metrics).toHaveProperty("rmse");
     expect(res.body.metrics).toHaveProperty("mape");
     expect(res.body.metrics).toHaveProperty("bias");
+    expect(res.body.status).toBe("ok");
+  });
+
+  it("GET /api/forecast/accuracy/1 — insufficient history returns status and null metrics", async () => {
+    const res = await request(app)
+      .get("/api/forecast/accuracy/1?test_hours=100&training_hours=4")
+      .expect(200);
+    expect(res.body.status).toBe("insufficient_history");
+    expect(res.body.metrics).toEqual({ mae: null, rmse: null, mape: null, bias: null, sample_count: 0 });
   });
 
   it("GET /api/forecast/accuracy/1?method=linear_trend — respects method", async () => {
