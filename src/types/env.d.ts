@@ -123,6 +123,8 @@ declare namespace NodeJS {
     SATELLITE_CACHE_TTL_MS?: string;
     /** Integer consecutive source failures before alerting. Default: 3 */
     SATELLITE_ALERT_THRESHOLD?: string;
+    /** Integer ms between repeated alerts during one satellite outage. Default: 3600000 */
+    SATELLITE_ALERT_REMINDER_INTERVAL_MS?: string;
     /** Maximum expected solar output in kW. */
     MAX_POWER_KW?: string;
     /** Idempotency record lifetime in milliseconds. */

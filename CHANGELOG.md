@@ -15,6 +15,10 @@ file when starting a new section.
 
 ### Added
 
+- Satellite outage alerts are rate-limited (#1086): a sustained outage emits one
+  initial alert at `SATELLITE_ALERT_THRESHOLD`, then at most one reminder per
+  `SATELLITE_ALERT_REMINDER_INTERVAL_MS` (default 1 hour) instead of one alert
+  per failed project fetch. After recovery, a new outage alerts again.
 - Structured admin audit logging (#542): every `POST /admin/update-scores` call
   writes a JSON line (timestamp, action, correlation id, IP, user agent, project
   ids, outcome) to a dedicated sink, separate from application logs. Configure

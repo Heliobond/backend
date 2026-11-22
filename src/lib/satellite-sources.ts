@@ -41,6 +41,17 @@ const CACHE_TTL_MS = parseInt(process.env.SATELLITE_CACHE_TTL_MS ?? "7200000", 1
  */
 const ALERT_THRESHOLD = parseInt(process.env.SATELLITE_ALERT_THRESHOLD ?? "3", 10);
 
+/**
+ * Minimum time (ms) between repeated alerts within one outage episode. The
+ * first alert fires as soon as ALERT_THRESHOLD is reached; while the outage
+ * continues, a reminder fires at most once per interval. Default: 1 hour.
+ * Overridable via SATELLITE_ALERT_REMINDER_INTERVAL_MS.
+ */
+const ALERT_REMINDER_INTERVAL_MS = parseInt(
+  process.env.SATELLITE_ALERT_REMINDER_INTERVAL_MS ?? "3600000",
+  10,
+);
+
 // ── In-memory cache ────────────────────────────────────────────────────────────
 interface CacheEntry {
   reading: SatelliteReading;
@@ -98,15 +109,22 @@ function recordOutageFailure(): void {
     outageState.outageStartedAt = Date.now();
   }
 
-  if (outageState.consecutiveFailures >= ALERT_THRESHOLD) {
-    const outageDurationMs = Date.now() - (outageState.outageStartedAt ?? Date.now());
-    logger.error("[satellite] ALERT: extended satellite data outage", {
-      consecutiveFailures: outageState.consecutiveFailures,
-      outageDurationMs,
-      outageDurationMinutes: Math.round(outageDurationMs / 60_000),
-    });
-    outageState.lastAlertAt = Date.now();
+  if (outageState.consecutiveFailures < ALERT_THRESHOLD) return;
+
+  const now = Date.now();
+  const isReminder = outageState.lastAlertAt !== null;
+  if (isReminder && now - (outageState.lastAlertAt as number) < ALERT_REMINDER_INTERVAL_MS) {
+    return;
   }
+
+  const outageDurationMs = now - (outageState.outageStartedAt ?? now);
+  logger.error("[satellite] ALERT: extended satellite data outage", {
+    consecutiveFailures: outageState.consecutiveFailures,
+    outageDurationMs,
+    outageDurationMinutes: Math.round(outageDurationMs / 60_000),
+    reminder: isReminder,
+  });
+  outageState.lastAlertAt = now;
 }
 
 function recordOutageRecovery(): void {
