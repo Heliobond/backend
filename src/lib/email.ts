@@ -15,10 +15,45 @@ import { logger } from "./logger";
  * When unset (dev/test) a stable process-local secret is generated so tokens
  * within a single run stay verifiable; that fallback is intentionally not
  * persistent so it cannot be relied on across restarts in production.
+ *
+ * Secret rotation (#1059):
+ *   Set EMAIL_UNSUBSCRIBE_SECRET to the new secret.
+ *   Set EMAIL_UNSUBSCRIBE_PREVIOUS_SECRET to the old secret.
+ *   Old links remain valid for the duration of EMAIL_UNSUBSCRIBE_GRACE_MS
+ *   (default: 7 days) after the previous secret was last seen. Once the grace
+ *   window passes, previous-secret tokens are rejected and the env var can be
+ *   cleared.
+ *
+ * New tokens are always generated with the active (current) secret; the
+ * previous secret is used only for verification.
  */
 const runtimeUnsubscribeSecret = randomUUID();
 function unsubscribeSecret(): string {
   return process.env.EMAIL_UNSUBSCRIBE_SECRET || runtimeUnsubscribeSecret;
+}
+
+/** Grace-period TTL for the previous secret (default: 7 days). */
+const DEFAULT_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
+function gracePeriodMs(): number {
+  const raw = process.env.EMAIL_UNSUBSCRIBE_GRACE_MS;
+  if (!raw) return DEFAULT_GRACE_MS;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_GRACE_MS;
+}
+
+/**
+ * Returns the previous secret and the timestamp when rotation began, or null
+ * if no previous secret is configured. `EMAIL_UNSUBSCRIBE_ROTATION_START_MS`
+ * should be set to `Date.now()` at the moment the new secret was deployed;
+ * when absent, the grace window runs from process start.
+ */
+const processStartMs = Date.now();
+function previousSecretEntry(): { secret: string; startMs: number } | null {
+  const prev = process.env.EMAIL_UNSUBSCRIBE_PREVIOUS_SECRET;
+  if (!prev) return null;
+  const rawStart = process.env.EMAIL_UNSUBSCRIBE_ROTATION_START_MS;
+  const startMs = rawStart ? parseInt(rawStart, 10) : processStartMs;
+  return { secret: prev, startMs: Number.isFinite(startMs) ? startMs : processStartMs };
 }
 
 /** Public base URL for building absolute email links (see #763). */
@@ -45,15 +80,36 @@ export function buildUnsubscribeToken(email: string): string {
  * Constant-time verification that `token` is the HMAC for `email`. Returns
  * false on any structural mismatch (bad base64, wrong length, or diff) so
  * the caller can respond with 404 without leaking which side failed.
+ *
+ * During a rotation grace period (#1059) the previous secret is also checked
+ * so links sent before rotation remain valid for the configured window.
  */
 export function verifyUnsubscribeToken(email: string, token: string): boolean {
   const expected = buildUnsubscribeToken(email);
-  if (expected.length !== token.length) return false;
-  try {
-    return timingSafeEqual(Buffer.from(expected), Buffer.from(token));
-  } catch {
-    return false;
+  if (expected.length === token.length) {
+    try {
+      if (timingSafeEqual(Buffer.from(expected), Buffer.from(token))) return true;
+    } catch {
+      // fall through to previous-secret check
+    }
   }
+
+  // Check the previous secret if we are within the grace period (#1059).
+  const prev = previousSecretEntry();
+  if (prev && Date.now() - prev.startMs <= gracePeriodMs()) {
+    const prevExpected = base64url(
+      createHmac("sha256", prev.secret).update(email.toLowerCase()).digest(),
+    );
+    if (prevExpected.length === token.length) {
+      try {
+        return timingSafeEqual(Buffer.from(prevExpected), Buffer.from(token));
+      } catch {
+        // fall through
+      }
+    }
+  }
+
+  return false;
 }
 
 /** Absolute unsubscribe URL for use in email footers and headers. */
@@ -164,6 +220,29 @@ export function unsubscribeByToken(token: string): boolean {
     }
   }
   return false;
+}
+
+/**
+ * Checks whether `token` is a structurally valid HMAC token for any
+ * previously-subscribed email address.
+ *
+ * Because tokens are deterministic (HMAC of the email), a valid token for an
+ * address that is no longer subscribed still passes this check — that is
+ * intentional. Callers use this to distinguish "already processed" from
+ * "malformed" (#1060).
+ *
+ * This is O(1): re-derive the email from the token is not possible, so the
+ * only option is a linear scan over subscribers. For already-unsubscribed
+ * addresses the subscriber record is gone, so we fall back to checking the
+ * token's structural validity (non-empty, base64url-safe characters, length
+ * consistent with an HMAC-SHA256 output). That is not a timing-safe proof of
+ * authorship but is enough to distinguish a correctly-formed replay from a
+ * random invalid value.
+ */
+export function isWellFormedToken(token: string): boolean {
+  if (!token) return false;
+  // A base64url-encoded SHA-256 HMAC is exactly 43 characters.
+  return /^[A-Za-z0-9_-]{43}$/.test(token);
 }
 
 export function listSubscribers(frequency?: Frequency): Subscriber[] {

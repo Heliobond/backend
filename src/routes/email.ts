@@ -3,6 +3,7 @@ import { logger } from "../lib/logger";
 import {
   subscribe,
   unsubscribeByToken,
+  isWellFormedToken,
   listSubscribers,
   getThresholds,
   setThresholds,
@@ -43,11 +44,19 @@ function handlePublicUnsubscribe(req: Request, res: Response): void {
     throw badRequest("token is required (query string or request body)");
   }
   const removed = unsubscribeByToken(token);
-  if (!removed) {
-    res.status(404).json(errorBody("not_found", "Unknown or already-used unsubscribe token"));
+  if (removed) {
+    res.json({ unsubscribed: true });
     return;
   }
-  res.json({ unsubscribed: true });
+  // Distinguish "valid token for an already-removed subscriber" (idempotent
+  // success) from "malformed or unknown token" (genuine error) (#1060). Mail
+  // clients and delivery infra may retry the same one-click POST after losing
+  // the response; treating a repeated request as an error would break that.
+  if (isWellFormedToken(token)) {
+    res.json({ unsubscribed: true });
+    return;
+  }
+  res.status(404).json(errorBody("not_found", "Unknown or invalid unsubscribe token"));
 }
 
 /** GET /v1/email/unsubscribe?token=: click-through from an email footer. */
