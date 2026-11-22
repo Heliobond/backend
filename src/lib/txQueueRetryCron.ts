@@ -9,6 +9,7 @@ import {
   remove,
   incrementRetry,
   hasExceededMaxRetries,
+  moveToDeadLetter,
 } from "./tx-queue";
 import { isRpcAvailable } from "./stellar";
 import { logger } from "./logger";
@@ -94,9 +95,12 @@ export async function runTxQueueRetry(): Promise<void> {
 
         if (hasExceededMaxRetries(item.projectId)) {
           logger.error(
-            `[cron] tx-queue: project ${item.projectId} exceeded max retries (${maxRetries}), dropping`,
+            `[cron] tx-queue: project ${item.projectId} exceeded max retries (${maxRetries}), moving to dead-letter`,
           );
-          remove(item.projectId);
+          // Move to dead-letter rather than silently dropping so operators
+          // retain the structured project, attempt and last-error record and
+          // can trigger an explicit replay (#1055).
+          moveToDeadLetter(item.projectId);
           processed.push(item.projectId);
         } else {
           logger.warn(

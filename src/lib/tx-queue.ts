@@ -67,3 +67,78 @@ export function getQueueSize(): number {
 export function getQueueSnapshot(): QueueItem[] {
   return Array.from(queue.values());
 }
+
+// ── Dead-letter store (#1055) ─────────────────────────────────────────────────
+//
+// When a queued item exhausts all retries the cron moves it here instead of
+// silently discarding it. Operators can inspect dead-letter items and trigger
+// an explicit replay; replays are protected by idempotency so a confirmed
+// on-chain submission cannot be duplicated.
+
+/** Maximum number of dead-letter items kept in memory (oldest evicted first). */
+const DEAD_LETTER_MAX = parseInt(process.env.TX_QUEUE_DEAD_LETTER_MAX ?? "200", 10);
+
+export interface DeadLetterItem {
+  projectId: number;
+  creditQuality: number;
+  greenImpact: number;
+  reason: string;
+  attempts: number;
+  lastError: string;
+  failedAt: number;
+}
+
+const deadLetter: DeadLetterItem[] = [];
+
+/**
+ * Move an exhausted queue item to the dead-letter list. The item is removed
+ * from the active queue and appended to the dead-letter list (oldest entries
+ * evicted once the list reaches DEAD_LETTER_MAX).
+ */
+export function moveToDeadLetter(projectId: number): void {
+  const item = queue.get(projectId);
+  if (!item) return;
+  queue.delete(projectId);
+
+  deadLetter.push({
+    projectId: item.projectId,
+    creditQuality: item.creditQuality,
+    greenImpact: item.greenImpact,
+    reason: item.reason,
+    attempts: item.retryCount,
+    lastError: item.lastError ?? "",
+    failedAt: Date.now(),
+  });
+
+  if (deadLetter.length > DEAD_LETTER_MAX) {
+    deadLetter.splice(0, deadLetter.length - DEAD_LETTER_MAX);
+  }
+}
+
+/** Returns a snapshot of all dead-letter items (oldest first). */
+export function getDeadLetterItems(): DeadLetterItem[] {
+  return [...deadLetter];
+}
+
+/**
+ * Re-enqueue a dead-letter item so the cron will retry it. The dead-letter
+ * record is removed immediately; a fresh queue entry is created with
+ * retryCount reset to 0.
+ *
+ * Returns true if the item was found and re-enqueued, false if not found.
+ */
+export function replayDeadLetterItem(projectId: number): boolean {
+  const idx = deadLetter.findIndex((d) => d.projectId === projectId);
+  if (idx === -1) return false;
+  const [item] = deadLetter.splice(idx, 1);
+  enqueue(item.projectId, item.creditQuality, item.greenImpact, item.reason);
+  // Reset the retry counter so the replayed item gets a full retry budget.
+  const queued = queue.get(item.projectId);
+  if (queued) queued.retryCount = 0;
+  return true;
+}
+
+/** Clear the dead-letter list. Intended for test isolation only. */
+export function clearDeadLetter(): void {
+  deadLetter.length = 0;
+}

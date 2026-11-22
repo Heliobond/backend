@@ -112,6 +112,16 @@ export function getHistory(
   from?: number,
   to?: number,
 ): ScoreEntry[] {
+  // Enforce the same retention policy on reads as on writes (#1056).
+  // A project that stops receiving updates would otherwise serve stale entries
+  // past the configured TTL indefinitely.
+  evictHistoryForProject(projectId);
+
+  // Remove empty project buckets so the store stays clean.
+  if (store.has(projectId) && store.get(projectId)!.length === 0) {
+    store.delete(projectId);
+  }
+
   const entries = store.get(projectId) ?? [];
   return entries.filter((e) => {
     if (from !== undefined && e.timestamp < from) return false;
