@@ -1234,6 +1234,11 @@ metadata address ranges (defense-in-depth SSRF check via
 contract strkey. `enabled` must be a boolean. `name` must be a non-empty
 string of at most 200 characters.
 
+Only the fields present in the body are changed; omitted fields keep their
+current values, so `{ "name": "Stellar Testnet" }` leaves `enabled`, `rpcUrl`
+and `contractAddress` untouched. To clear a configured contract address, send
+`"contractAddress": null`.
+
 ### `POST /v1/chains/broadcast/:projectId`
 
 Broadcasts computed project impact scores to Stellar. **Admin only**: same

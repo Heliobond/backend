@@ -7,6 +7,7 @@ import {
   configureChain,
   broadcastToChains,
   ChainId,
+  ChainConfigUpdate,
 } from "../lib/multichain";
 import { badRequest, parseProjectId, errorBody } from "../middleware/errors";
 import { ipWhitelist } from "../middleware/ipWhitelist";
@@ -50,7 +51,9 @@ router.get("/:id", (req: Request, res: Response) => {
  *
  * `rpcUrl` goes through `validatePublicUrl` to reject SSRF targets
  * (loopback, link-local, metadata, private ranges). `contractAddress`
- * must be a valid Stellar contract strkey. `name` is bounded by length.
+ * must be a valid Stellar contract strkey, or `null` to clear it. `name` is
+ * bounded by length. Only fields present in the body are changed; omitted
+ * fields keep their current values (#1087).
  */
 router.patch("/:id", ...adminAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -81,13 +84,15 @@ router.patch("/:id", ...adminAuth, async (req: Request, res: Response, next: Nex
       }
     }
 
-    let contractAddress: string | undefined;
-    if (body.contractAddress !== undefined) {
+    let contractAddress: string | null | undefined;
+    if (body.contractAddress === null) {
+      contractAddress = null;
+    } else if (body.contractAddress !== undefined) {
       if (
         typeof body.contractAddress !== "string" ||
         !StrKey.isValidContract(body.contractAddress)
       ) {
-        throw badRequest("contractAddress must be a valid Stellar contract strkey");
+        throw badRequest("contractAddress must be a valid Stellar contract strkey or null");
       }
       contractAddress = body.contractAddress;
     }
@@ -100,12 +105,14 @@ router.patch("/:id", ...adminAuth, async (req: Request, res: Response, next: Nex
       name = body.name;
     }
 
-    const ok = configureChain(req.params.id as ChainId, {
-      enabled,
-      rpcUrl,
-      contractAddress,
-      name,
-    });
+    // Forward only the fields the caller supplied so omitted ones are preserved.
+    const updates: ChainConfigUpdate = {};
+    if (enabled !== undefined) updates.enabled = enabled;
+    if (rpcUrl !== undefined) updates.rpcUrl = rpcUrl;
+    if (contractAddress !== undefined) updates.contractAddress = contractAddress;
+    if (name !== undefined) updates.name = name;
+
+    const ok = configureChain(req.params.id as ChainId, updates);
     if (!ok) return res.status(404).json(errorBody("not_found", "chain not found"));
     res.json({ ok: true, chain: getChain(req.params.id as ChainId) });
   } catch (err) {
