@@ -50,7 +50,7 @@ export function validateRetryConfig(config: Required<Omit<RetryConfig, "signal">
   }
 }
 
-const DEFAULT_CONFIG: Required<RetryConfig> = {
+const DEFAULT_CONFIG: Required<Omit<RetryConfig, "signal">> = {
   maxAttempts: 4,
   baseDelayMs: 200,
   maxDelayMs: 30_000,
