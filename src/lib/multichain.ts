@@ -88,10 +88,26 @@ export function getChain(id: ChainId): ChainConfig | undefined {
   return chainRegistry.get(id);
 }
 
-export function configureChain(id: ChainId, updates: Partial<Omit<ChainConfig, "id">>): boolean {
+/**
+ * Partial chain update. Omitted (or `undefined`) fields are left unchanged.
+ * `contractAddress: null` explicitly clears the configured address (#1087).
+ */
+export type ChainConfigUpdate = Partial<Omit<ChainConfig, "id" | "contractAddress">> & {
+  contractAddress?: string | null;
+};
+
+export function configureChain(id: ChainId, updates: ChainConfigUpdate): boolean {
   const chain = chainRegistry.get(id);
   if (!chain) return false;
-  Object.assign(chain, updates);
+  if (updates.name !== undefined) chain.name = updates.name;
+  if (updates.rpcUrl !== undefined) chain.rpcUrl = updates.rpcUrl;
+  if (updates.nativeSymbol !== undefined) chain.nativeSymbol = updates.nativeSymbol;
+  if (updates.enabled !== undefined) chain.enabled = updates.enabled;
+  if (updates.contractAddress === null) {
+    delete chain.contractAddress;
+  } else if (updates.contractAddress !== undefined) {
+    chain.contractAddress = updates.contractAddress;
+  }
   return true;
 }
 

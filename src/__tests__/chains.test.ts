@@ -207,6 +207,21 @@ describe("chains routes — PATCH input validation (#831)", () => {
     );
   });
 
+  it("forwards only the supplied fields on a name-only PATCH (#1087)", async () => {
+    await request(app).patch("/v1/chains/stellar").set(AUTH).send({ name: "Renamed" }).expect(200);
+    const updates = (multichain.configureChain as jest.Mock).mock.calls[0][1];
+    expect(updates).toStrictEqual({ name: "Renamed" });
+  });
+
+  it("forwards contractAddress: null to clear the address (#1087)", async () => {
+    await request(app)
+      .patch("/v1/chains/stellar").set(AUTH)
+      .send({ contractAddress: null })
+      .expect(200);
+    const updates = (multichain.configureChain as jest.Mock).mock.calls[0][1];
+    expect(updates).toStrictEqual({ contractAddress: null });
+  });
+
   it("rejects a non-boolean enabled value", async () => {
     await request(app).patch("/v1/chains/stellar").set(AUTH).send({ enabled: "yes" }).expect(400);
   });

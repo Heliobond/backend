@@ -176,8 +176,8 @@ describe("configureChain", () => {
       configureChain(id, { enabled });
     }
     // Restore EVM chains to their unconfigured defaults
-    configureChain("ethereum", { rpcUrl: "", contractAddress: undefined });
-    configureChain("polygon", { rpcUrl: "", contractAddress: undefined });
+    configureChain("ethereum", { rpcUrl: "", contractAddress: null });
+    configureChain("polygon", { rpcUrl: "", contractAddress: null });
   });
 
   it("returns true when chain exists and updates the field", () => {
@@ -228,6 +228,69 @@ describe("configureChain", () => {
     expect(getChain("stellar")?.id).toBe("stellar");
     // restore
     configureChain("stellar", { name: "Stellar" });
+  });
+
+  // ── #1087: omitted fields must be preserved ──────────────────────────────
+
+  it("preserves enabled, rpcUrl and contractAddress on a name-only update", () => {
+    configureChain("ethereum", {
+      enabled: true,
+      rpcUrl: "https://eth.example.com",
+      contractAddress: "0xKEEP",
+    });
+    configureChain("ethereum", { name: "Ethereum Renamed" });
+
+    const eth = getChain("ethereum");
+    expect(eth?.name).toBe("Ethereum Renamed");
+    expect(eth?.enabled).toBe(true);
+    expect(eth?.rpcUrl).toBe("https://eth.example.com");
+    expect(eth?.contractAddress).toBe("0xKEEP");
+    configureChain("ethereum", { name: "Ethereum Mainnet" });
+  });
+
+  it("ignores keys that are present but undefined", () => {
+    configureChain("ethereum", { rpcUrl: "https://eth.example.com", contractAddress: "0xKEEP" });
+    configureChain("ethereum", {
+      name: undefined,
+      enabled: undefined,
+      rpcUrl: undefined,
+      contractAddress: undefined,
+    });
+
+    const eth = getChain("ethereum");
+    expect(eth?.name).toBe("Ethereum Mainnet");
+    expect(eth?.rpcUrl).toBe("https://eth.example.com");
+    expect(eth?.contractAddress).toBe("0xKEEP");
+  });
+
+  it.each([
+    ["name", { name: "Only Name" }],
+    ["enabled", { enabled: true }],
+    ["rpcUrl", { rpcUrl: "https://only-rpc.example.com" }],
+    ["contractAddress", { contractAddress: "0xONLY" }],
+  ] as const)("changes only %s when it is the sole field supplied", (field, update) => {
+    configureChain("polygon", {
+      name: "Polygon",
+      enabled: false,
+      rpcUrl: "https://polygon.example.com",
+      contractAddress: "0xBEFORE",
+    });
+    const before = { ...getChain("polygon")! };
+
+    configureChain("polygon", update);
+
+    const after = getChain("polygon")!;
+    expect(after).toEqual({ ...before, ...update });
+    for (const key of ["name", "enabled", "rpcUrl", "contractAddress"] as const) {
+      if (key !== field) expect(after[key]).toEqual(before[key]);
+    }
+    configureChain("polygon", { name: "Polygon" });
+  });
+
+  it("clears contractAddress only when null is passed explicitly", () => {
+    configureChain("ethereum", { contractAddress: "0xCLEARME" });
+    configureChain("ethereum", { contractAddress: null });
+    expect(getChain("ethereum")).not.toHaveProperty("contractAddress");
   });
 });
 
@@ -296,8 +359,8 @@ describe("broadcastToChains", () => {
     for (const [id, enabled] of Object.entries(original) as [ChainId, boolean][]) {
       configureChain(id, { enabled });
     }
-    configureChain("ethereum", { rpcUrl: "", contractAddress: undefined });
-    configureChain("polygon", { rpcUrl: "", contractAddress: undefined });
+    configureChain("ethereum", { rpcUrl: "", contractAddress: null });
+    configureChain("polygon", { rpcUrl: "", contractAddress: null });
   });
 
   // ── return shape ────────────────────────────────────────────────────────────
