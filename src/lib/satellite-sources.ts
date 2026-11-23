@@ -30,7 +30,21 @@ export const CONSERVATIVE_SATELLITE_DEFAULT: Omit<SatelliteReading, "timestamp">
 };
 
 /**
- * How long (ms) a cached reading is considered fresh enough to serve.
+ * Observation-age policy for cached readings.
+ *
+ * A reading is fresh while its *observation age* (`now - reading.timestamp`)
+ * is at most CACHE_TTL_MS. Age is measured from when the satellite observed
+ * the data, not from when we fetched or cached it, so re-fetching an old
+ * observation never grants it a new freshness window:
+ *
+ * - A reading that is already older than CACHE_TTL_MS when fetched is not
+ *   cached (it is still returned to the caller as the live result).
+ * - A cached reading stops being served as a fallback once its observation
+ *   age exceeds CACHE_TTL_MS, regardless of when it was cached.
+ * - A newer observation already in the cache is never replaced by an older one.
+ * - A reading timestamped in the future is aged from its fetch time instead,
+ *   so clock skew cannot extend its freshness.
+ *
  * Default: 2 hours. Overridable via SATELLITE_CACHE_TTL_MS env var.
  */
 const CACHE_TTL_MS = parseInt(process.env.SATELLITE_CACHE_TTL_MS ?? "7200000", 10);
@@ -55,25 +69,45 @@ const ALERT_REMINDER_INTERVAL_MS = parseInt(
 // ── In-memory cache ────────────────────────────────────────────────────────────
 interface CacheEntry {
   reading: SatelliteReading;
-  cachedAt: number;
+  /** When the reading was fetched from its source (not when it was observed). */
+  fetchedAt: number;
 }
 
 const satelliteCache = new Map<number, CacheEntry>();
 
-/** Write a fresh reading into the cache. */
-function cacheSet(projectId: number, reading: SatelliteReading): void {
-  satelliteCache.set(projectId, { reading, cachedAt: Date.now() });
+/** Reference time for freshness: the observation time, capped at fetch time. */
+function observedAt(entry: CacheEntry): number {
+  return Math.min(entry.reading.timestamp, entry.fetchedAt);
 }
 
-/** Return a cached reading if it exists and hasn't expired, else null. */
-function cacheGet(projectId: number): SatelliteReading | null {
+function isFresh(entry: CacheEntry, now: number): boolean {
+  return now - observedAt(entry) <= CACHE_TTL_MS;
+}
+
+/**
+ * Cache a successfully fetched reading if it is still fresh by observation age
+ * and is not older than an observation already cached for this project.
+ */
+function cacheSet(projectId: number, reading: SatelliteReading): void {
+  const now = Date.now();
+  const entry: CacheEntry = { reading, fetchedAt: now };
+  if (!isFresh(entry, now)) return;
+
+  const existing = satelliteCache.get(projectId);
+  if (existing && isFresh(existing, now) && observedAt(existing) > observedAt(entry)) return;
+
+  satelliteCache.set(projectId, entry);
+}
+
+/** Return a cached entry if its observation is still fresh, else null. */
+function cacheGet(projectId: number): CacheEntry | null {
   const entry = satelliteCache.get(projectId);
   if (!entry) return null;
-  if (Date.now() - entry.cachedAt > CACHE_TTL_MS) {
+  if (!isFresh(entry, Date.now())) {
     satelliteCache.delete(projectId);
     return null;
   }
-  return { ...entry.reading };
+  return { reading: { ...entry.reading }, fetchedAt: entry.fetchedAt };
 }
 
 /** Wipe a single cache entry (used in tests). */
@@ -112,8 +146,9 @@ function recordOutageFailure(): void {
   if (outageState.consecutiveFailures < ALERT_THRESHOLD) return;
 
   const now = Date.now();
-  const isReminder = outageState.lastAlertAt !== null;
-  if (isReminder && now - (outageState.lastAlertAt as number) < ALERT_REMINDER_INTERVAL_MS) {
+  const lastAlertAt = outageState.lastAlertAt;
+  const isReminder = lastAlertAt !== null;
+  if (lastAlertAt !== null && now - lastAlertAt < ALERT_REMINDER_INTERVAL_MS) {
     return;
   }
 
@@ -282,7 +317,8 @@ export function configureSource(
  * Fetch satellite data with graceful degradation:
  *
  * 1. Try each enabled source in priority order.
- * 2. On total failure, serve cached data if available (up to CACHE_TTL_MS old).
+ * 2. On total failure, serve cached data if its observation is at most
+ *    CACHE_TTL_MS old (see the observation-age policy above).
  * 3. If no cache, fall back to conservative estimates (forest_density_pct=50).
  * 4. Log all failures; emit an alert after ALERT_THRESHOLD consecutive outages.
  *
@@ -291,7 +327,13 @@ export function configureSource(
  */
 export async function fetchSatelliteWithFallback(
   projectId: number,
-): Promise<SatelliteReading & { dataSource: "live" | "cache" | "conservative-fallback" }> {
+): Promise<
+  SatelliteReading & {
+    dataSource: "live" | "cache" | "conservative-fallback";
+    /** Only set for `dataSource: "cache"`: when the cached reading was fetched. */
+    fetchedAt?: number;
+  }
+> {
   const enabled = sources.filter((s) => s.enabled).sort((a, b) => a.priority - b.priority);
 
   // ── 1. Try live sources ──────────────────────────────────────────────────
@@ -327,14 +369,16 @@ export async function fetchSatelliteWithFallback(
   // ── 2. Cache fallback ────────────────────────────────────────────────────
   const cached = cacheGet(projectId);
   if (cached) {
-    const ageMs = Date.now() - cached.timestamp;
+    const { reading, fetchedAt } = cached;
+    const ageMs = Date.now() - reading.timestamp;
     logger.warn("[satellite] serving cached data due to source failure", {
       projectId,
-      source: cached.source,
+      source: reading.source,
       ageMs,
       ageMinutes: Math.round(ageMs / 60_000),
+      fetchedAt,
     });
-    return { ...cached, source: `${cached.source}(cached)`, dataSource: "cache" };
+    return { ...reading, source: `${reading.source}(cached)`, dataSource: "cache", fetchedAt };
   }
 
   // ── 3. Conservative estimate ─────────────────────────────────────────────
