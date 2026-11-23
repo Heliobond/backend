@@ -19,7 +19,7 @@ Heliobond is a comprehensive platform for green energy investment tracking and i
 flowchart TD
     subgraph Client
         A[Browser / External caller]
-    end
+    end.
 
     subgraph Express["Express (src/index.ts)"]
         H[GET /health]
