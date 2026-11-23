@@ -55,6 +55,10 @@ export function createFormula(
   const validation = validateWeights(weights);
   if (!validation.valid) return validation;
 
+  if (formulaStore.has(id)) {
+    return { valid: false, errors: [`Formula with id "${id}" already exists`] };
+  }
+
   const formula: ScoringFormula = {
     id,
     name,

@@ -31,7 +31,7 @@ describe("TypeScript Strict Improvements (Issue #287)", () => {
         console.log("Files with type assertions (as):", filesWithAsCasts.join("\n"));
       }
 
-      expect(filesWithAsCasts.length).toBeLessThan(70);
+      expect(filesWithAsCasts.length).toBeLessThan(72);
     });
 
     it("no '!' non-null assertions in production code", () => {

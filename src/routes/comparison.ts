@@ -20,18 +20,23 @@ async function validateProjectIds(ids: number[]): Promise<void> {
   }
 }
 
+const MAX_UNIQUE_PROJECTS = 20;
+
 function parseIds(raw: string | undefined): number[] {
   if (!raw) throw badRequest("ids query parameter is required (comma-separated)");
   const maxId = maxProjectId();
-  const ids = raw.split(",").map((s) => {
+  const parsed = raw.split(",").map((s) => {
     const trimmed = s.trim();
     const n = Number(trimmed);
     if (!Number.isInteger(n) || n < 1) throw badRequest(`Invalid project id "${trimmed}"`);
     if (n > maxId) throw badRequest(`Invalid project id "${trimmed}" exceeds maximum allowed project id ${maxId}`);
     return n;
   });
+  // Deduplicate while preserving first-occurrence order.
+  const ids = [...new Set(parsed)];
   if (ids.length === 0) throw badRequest("At least one project id is required");
-  if (ids.length > 20) throw badRequest("Cannot compare more than 20 projects at once");
+  if (ids.length > MAX_UNIQUE_PROJECTS)
+    throw badRequest(`Cannot compare more than ${MAX_UNIQUE_PROJECTS} projects at once`);
   return ids;
 }
 

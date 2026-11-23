@@ -298,13 +298,21 @@ function firstDelivery(e: NotificationEvent, channel: string, address: string): 
 }
 
 export interface DispatchSummary {
+  /** Successfully delivered email count. */
   email: number;
+  /** Successfully delivered webhook count. */
   webhook: number;
+  /** Total delivery attempts (email + webhook) across all matching subscribers. */
+  attempted: number;
+  /** Attempts that threw or received a non-OK response. */
+  failed: number;
+  /** Attempts suppressed because the (event, channel, address) triple was already delivered. */
+  skipped: number;
 }
 
 /** Deliver one event to every matching address. Channel failures are isolated. */
 export async function notify(e: NotificationEvent): Promise<DispatchSummary> {
-  const summary: DispatchSummary = { email: 0, webhook: 0 };
+  const summary: DispatchSummary = { email: 0, webhook: 0, attempted: 0, failed: 0, skipped: 0 };
   const targets = e.address
     ? [records.get(e.address)].filter((r): r is Record_ => !!r)
     : [...records.values()];
@@ -313,51 +321,63 @@ export async function notify(e: NotificationEvent): Promise<DispatchSummary> {
   for (const r of targets) {
     if (!wants(r, e)) continue;
 
-    if (r.email && r.email_verified && firstDelivery(e, "email", r.address)) {
-      try {
-        await sendEmail({
-          to: r.email,
-          subject: `[Heliobond] ${subject}`,
-          body: `${text}\n\nUnsubscribe: ${baseUrl()}/v1/notifications/unsubscribe?token=${r.unsubscribe_token}`,
-        });
-        summary.email++;
-      } catch (err) {
-        delivered.delete(`${e.type}:${e.id}:email:${r.address}`);
-        logger.error(`[notifications] email failed for ${r.address}`, logger.formatError(err));
+    if (r.email && r.email_verified) {
+      if (!firstDelivery(e, "email", r.address)) {
+        summary.skipped++;
+      } else {
+        summary.attempted++;
+        try {
+          await sendEmail({
+            to: r.email,
+            subject: `[Heliobond] ${subject}`,
+            body: `${text}\n\nUnsubscribe: ${baseUrl()}/v1/notifications/unsubscribe?token=${r.unsubscribe_token}`,
+          });
+          summary.email++;
+        } catch (err) {
+          summary.failed++;
+          delivered.delete(`${e.type}:${e.id}:email:${r.address}`);
+          logger.error(`[notifications] email failed for ${r.address}`, logger.formatError(err));
+        }
       }
     }
 
-    if (r.webhook_url && firstDelivery(e, "webhook", r.address)) {
-      const url = r.webhook_url;
-      const body = JSON.stringify({
-        event: e.type,
-        event_id: e.id,
-        address: r.address,
-        project_id: e.project_id,
-        data: e.data,
-        unsubscribe_url: `${baseUrl()}/v1/notifications/unsubscribe?token=${r.unsubscribe_token}`,
-        timestamp: Date.now(),
-      });
-      try {
-        await withRetry(
-          async () => {
-            await validatePublicUrl(url); // re-check at send time (DNS rebinding)
-            const res = await fetch(url, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "X-Heliobond-Signature": signPayload(body, r.webhook_secret),
-              },
-              body,
-            });
-            if (!res.ok) throw new Error(`webhook responded HTTP ${res.status}`);
-          },
-          { maxAttempts: 3, baseDelayMs: 500, label: "notification-webhook" },
-        );
-        summary.webhook++;
-      } catch (err) {
-        delivered.delete(`${e.type}:${e.id}:webhook:${r.address}`);
-        logger.error(`[notifications] webhook failed for ${r.address}`, logger.formatError(err));
+    if (r.webhook_url) {
+      if (!firstDelivery(e, "webhook", r.address)) {
+        summary.skipped++;
+      } else {
+        summary.attempted++;
+        const url = r.webhook_url;
+        const body = JSON.stringify({
+          event: e.type,
+          event_id: e.id,
+          address: r.address,
+          project_id: e.project_id,
+          data: e.data,
+          unsubscribe_url: `${baseUrl()}/v1/notifications/unsubscribe?token=${r.unsubscribe_token}`,
+          timestamp: Date.now(),
+        });
+        try {
+          await withRetry(
+            async () => {
+              await validatePublicUrl(url); // re-check at send time (DNS rebinding)
+              const res = await fetch(url, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "X-Heliobond-Signature": signPayload(body, r.webhook_secret),
+                },
+                body,
+              });
+              if (!res.ok) throw new Error(`webhook responded HTTP ${res.status}`);
+            },
+            { maxAttempts: 3, baseDelayMs: 500, label: "notification-webhook" },
+          );
+          summary.webhook++;
+        } catch (err) {
+          summary.failed++;
+          delivered.delete(`${e.type}:${e.id}:webhook:${r.address}`);
+          logger.error(`[notifications] webhook failed for ${r.address}`, logger.formatError(err));
+        }
       }
     }
   }

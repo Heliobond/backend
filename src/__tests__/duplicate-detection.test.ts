@@ -42,7 +42,7 @@ describe("duplicate-detection (cron concurrency guard)", () => {
     const result = tryBeginUpdate("project-1");
 
     expect(result.allowed).toBe(true);
-    expect(result.key).toMatch(/^lock-project-1-\d+$/);
+    expect(result.key).toMatch(/^lock-project-1-\d+-.+$/);
     expect(result.reason).toBe("");
     expect(logger.warn).not.toHaveBeenCalled();
   });
@@ -72,9 +72,9 @@ describe("duplicate-detection (cron concurrency guard)", () => {
   });
 
   it("releases lock after successful completion", () => {
-    tryBeginUpdate("project-1");
+    const { key } = tryBeginUpdate("project-1");
 
-    markCompleted("project-1");
+    markCompleted("project-1", key);
 
     // Should allow new attempt after lock is released
     const result = tryBeginUpdate("project-1");
@@ -85,9 +85,9 @@ describe("duplicate-detection (cron concurrency guard)", () => {
   });
 
   it("releases lock after failure", () => {
-    tryBeginUpdate("project-1");
+    const { key } = tryBeginUpdate("project-1");
 
-    markFailed("project-1");
+    markFailed("project-1", key);
 
     // Should allow new attempt after lock is released
     const result = tryBeginUpdate("project-1");
@@ -111,7 +111,7 @@ describe("duplicate-detection (cron concurrency guard)", () => {
     expect(logger.warn as jest.Mock).toHaveBeenCalledTimes(1);
 
     // Complete first run
-    markCompleted(projectId);
+    markCompleted(projectId, firstRun.key);
 
     // Third run after completion should succeed
     const thirdRun = tryBeginUpdate(projectId);
@@ -122,7 +122,7 @@ describe("duplicate-detection (cron concurrency guard)", () => {
     const result = tryBeginUpdate(123);
 
     expect(result.allowed).toBe(true);
-    expect(result.key).toMatch(/^lock-123-\d+$/);
+    expect(result.key).toMatch(/^lock-123-\d+-.+$/);
 
     // Concurrent attempt should be blocked
     const concurrent = tryBeginUpdate(123);

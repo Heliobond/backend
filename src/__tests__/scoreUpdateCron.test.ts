@@ -156,7 +156,7 @@ describe("runHourlyScoreUpdate (cron job execution flow)", () => {
     await runHourlyScoreUpdate();
 
     expect(updateImpactScore).toHaveBeenCalledTimes(3);
-    expect(markFailed).toHaveBeenCalledWith(2);
+    expect(markFailed).toHaveBeenCalledWith(2, expect.any(String));
     // Not all projects failed, so it records success (below failure threshold config)
     expect(recordCronRun).toHaveBeenCalledWith("score-update", "success");
   });
@@ -242,7 +242,7 @@ describe("runHourlyScoreUpdate (cron job execution flow)", () => {
 
       await runHourlyScoreUpdate();
 
-      expect(markFailed).not.toHaveBeenCalledWith(2);
+      expect(markFailed).not.toHaveBeenCalledWith(2, expect.any(String));
       // 2 submissions succeeded, 1 skipped, 0 failed. The "ALL projects failed"
       // path must NOT fire.
       expect(recordCronRun).toHaveBeenCalledWith("score-update", "success");
@@ -258,7 +258,7 @@ describe("runHourlyScoreUpdate (cron job execution flow)", () => {
 
       await runHourlyScoreUpdate();
 
-      expect(markFailed).not.toHaveBeenCalledWith(1);
+      expect(markFailed).not.toHaveBeenCalledWith(1, expect.any(String));
       expect(recordCronRun).toHaveBeenCalledWith("score-update", "success");
       expect(await readCounter("deleted")).toBe(before + 1);
     });

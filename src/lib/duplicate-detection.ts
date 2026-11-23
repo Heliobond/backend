@@ -2,6 +2,7 @@ import { logger } from "./logger";
 
 interface LockEntry {
   timestamp: number;
+  token: string;
 }
 
 const activeLocks = new Map<number | string, LockEntry>();
@@ -73,28 +74,44 @@ export function tryBeginUpdate(id: number | string): {
     }
   }
 
-  const key = `lock-${id}-${Date.now()}`;
-  activeLocks.set(id, { timestamp: Date.now() });
+  const token = `lock-${id}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  activeLocks.set(id, { timestamp: Date.now(), token });
 
   return {
     allowed: true,
-    key,
+    key: token,
     reason: "",
   };
 }
 
 /**
  * Releases the lock for the given ID after successful completion.
+ * The caller must supply the token returned by tryBeginUpdate; a stale
+ * completion that arrives after the lock has been re-acquired by a new
+ * owner is silently ignored.
  */
-export function markCompleted(id: number | string): void {
+export function markCompleted(id: number | string, token: string): void {
+  const entry = activeLocks.get(id);
+  if (!entry || entry.token !== token) {
+    logger.warn(`[duplicate-detection] markCompleted ignored for ${id}: token mismatch (stale completion)`);
+    return;
+  }
   activeLocks.delete(id);
   logger.debug(`[duplicate-detection] Lock released for ${id} after successful completion`);
 }
 
 /**
  * Releases the lock for the given ID after failure.
+ * The caller must supply the token returned by tryBeginUpdate; a stale
+ * failure that arrives after the lock has been re-acquired by a new
+ * owner is silently ignored.
  */
-export function markFailed(id: number | string): void {
+export function markFailed(id: number | string, token: string): void {
+  const entry = activeLocks.get(id);
+  if (!entry || entry.token !== token) {
+    logger.warn(`[duplicate-detection] markFailed ignored for ${id}: token mismatch (stale failure)`);
+    return;
+  }
   activeLocks.delete(id);
   logger.debug(`[duplicate-detection] Lock released for ${id} after failure`);
 }

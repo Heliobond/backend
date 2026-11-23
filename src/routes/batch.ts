@@ -60,7 +60,7 @@ router.post("/score-update", async (req: Request, res: Response) => {
   // Fire-and-forget — caller polls /status
   runJob(job, async (projectId) => {
     return withProjectLock(projectId, async () => {
-      const { allowed, reason } = tryBeginUpdate(projectId);
+      const { allowed, key: lockToken, reason } = tryBeginUpdate(projectId);
       if (!allowed) {
         return { project_id: projectId, skipped: true, skip_reason: reason };
       }
@@ -77,7 +77,7 @@ router.post("/score-update", async (req: Request, res: Response) => {
         const idempotencyKey = generateIdempotencyKey(projectId);
         const { isDuplicate, recordedAt } = checkIdempotency(idempotencyKey);
         if (isDuplicate) {
-          markCompleted(projectId);
+          markCompleted(projectId, lockToken);
           return {
             project_id: projectId,
             skipped: true,
@@ -102,17 +102,17 @@ router.post("/score-update", async (req: Request, res: Response) => {
             // silently lost (#833). Mirror the cron behavior: enqueue
             // only, no history, no webhooks until a real tx_hash exists.
             enqueue(projectId, scores.credit_quality, scores.green_impact, "RPC degraded");
-            markCompleted(projectId);
+            markCompleted(projectId, lockToken);
             return { project_id: projectId, tx_hash: "deferred", ...scores };
           }
           throw updateErr;
         }
         recordScoreHistory(projectId, scores.credit_quality, scores.green_impact);
         triggerWebhooks({ project_id: projectId, ...scores, tx_hash, timestamp: Date.now() });
-        markCompleted(projectId);
+        markCompleted(projectId, lockToken);
         return { project_id: projectId, tx_hash, ...scores };
       } catch (err) {
-        markFailed(projectId);
+        markFailed(projectId, lockToken);
         const decoded = parseContractError(err);
         return {
           project_id: projectId,

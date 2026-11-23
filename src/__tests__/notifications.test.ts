@@ -81,8 +81,8 @@ describe("investor notifications (#661)", () => {
       address: ADDR,
       data: { amount: 5 },
     } as const;
-    expect(await notify(ev)).toEqual({ email: 1, webhook: 1 });
-    expect(await notify(ev)).toEqual({ email: 0, webhook: 0 });
+    expect(await notify(ev)).toMatchObject({ email: 1, webhook: 1 });
+    expect(await notify(ev)).toMatchObject({ email: 0, webhook: 0 });
   });
 
   it("signs webhook payloads with the per-address secret", async () => {
