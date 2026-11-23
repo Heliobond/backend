@@ -13,7 +13,7 @@ Heliobond is a comprehensive platform for green energy investment tracking and i
 
 ---
 
-## Architecture.
+## Architecture
 
 ```mermaid
 flowchart TD
