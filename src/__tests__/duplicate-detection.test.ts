@@ -42,7 +42,7 @@ describe("duplicate-detection (cron concurrency guard)", () => {
     const result = tryBeginUpdate("project-1");
 
     expect(result.allowed).toBe(true);
-    expect(result.key).toMatch(/^lock-project-1-\d+$/);
+    expect(result.key).toMatch(/^lock-project-1-\d+-.+$/);
     expect(result.reason).toBe("");
     expect(logger.warn).not.toHaveBeenCalled();
   });
