@@ -40,7 +40,9 @@ export async function runTxQueueRetry(): Promise<void> {
 
   // Read max retries from config instead of hardcoding
   const maxRetries = parseInt(process.env.TX_QUEUE_MAX_RETRIES ?? "10", 10);
-  const processed: number[] = [];
+  const succeeded: number[] = [];
+  const duplicates: number[] = [];
+  const exhausted: { projectId: number; reason: string }[] = [];
 
   // Snapshot the queue once and make a single pass over it. Each item gets
   // at most one attempt per cron tick: on success (or a detected duplicate)
@@ -66,7 +68,7 @@ export async function runTxQueueRetry(): Promise<void> {
           `[cron] tx-queue: project ${item.projectId} skipped — already submitted this hour (key=${idempotencyKey})`,
         );
         remove(item.projectId);
-        processed.push(item.projectId);
+        duplicates.push(item.projectId);
       } else {
         const tx_hash = await updateImpactScore(
           item.projectId,
@@ -75,7 +77,7 @@ export async function runTxQueueRetry(): Promise<void> {
           idempotencyKey,
         );
         remove(item.projectId);
-        processed.push(item.projectId);
+        succeeded.push(item.projectId);
         logger.info(
           `[cron] tx-queue: project ${item.projectId} retried successfully tx=${tx_hash}`,
         );
@@ -87,7 +89,7 @@ export async function runTxQueueRetry(): Promise<void> {
           `[cron] tx-queue: project ${item.projectId} skipped (duplicate): ${err.message}`,
         );
         remove(item.projectId);
-        processed.push(item.projectId);
+        duplicates.push(item.projectId);
       } else {
         const errMsg = err instanceof Error ? err.message : String(err);
         removeIdempotencyKey(generateIdempotencyKey(item.projectId));
@@ -101,7 +103,7 @@ export async function runTxQueueRetry(): Promise<void> {
           // retain the structured project, attempt and last-error record and
           // can trigger an explicit replay (#1055).
           moveToDeadLetter(item.projectId);
-          processed.push(item.projectId);
+          exhausted.push({ projectId: item.projectId, reason: errMsg });
         } else {
           logger.warn(
             `[cron] tx-queue: project ${item.projectId} retry failed (attempt ${item.retryCount}), will retry`,
@@ -111,7 +113,10 @@ export async function runTxQueueRetry(): Promise<void> {
     }
   }
 
-  if (processed.length > 0) {
-    logger.info(`[cron] tx-queue: successfully retried ${processed.length} transactions`);
+  logger.info(
+    `[cron] tx-queue: run complete — succeeded=${succeeded.length} duplicates=${duplicates.length} exhausted=${exhausted.length}`,
+  );
+  if (exhausted.length > 0) {
+    logger.error(`[cron] tx-queue: exhausted items: ${JSON.stringify(exhausted)}`);
   }
 }

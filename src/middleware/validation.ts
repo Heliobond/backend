@@ -21,7 +21,7 @@ function validateSchema(
     return { valid: false, error: "Request body must be an object" };
   }
 
-  const obj = data as Record<string, unknown>;
+  const obj: Record<string, unknown> = { ...data };
 
   if (schema.required) {
     for (const field of schema.required) {
