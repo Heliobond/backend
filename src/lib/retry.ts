@@ -20,9 +20,37 @@ export interface RetryConfig {
   jitter: number;
   /** Optional label used in log messages. */
   label?: string;
+  /** Optional AbortSignal to cancel in-flight waits and stop retrying (#1049). */
+  signal?: AbortSignal;
 }
 
-const DEFAULT_CONFIG: Required<RetryConfig> = {
+/** Errors thrown when configuration is invalid (#1052). */
+export class RetryConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RetryConfigError";
+  }
+}
+
+/** Validate RetryConfig fields and throw RetryConfigError if any are invalid (#1052). */
+export function validateRetryConfig(config: Required<Omit<RetryConfig, "signal">> & { signal?: AbortSignal }): void {
+  if (!Number.isInteger(config.maxAttempts) || config.maxAttempts < 1) {
+    throw new RetryConfigError(`maxAttempts must be a positive integer, got ${config.maxAttempts}`);
+  }
+  if (!Number.isFinite(config.baseDelayMs) || config.baseDelayMs < 0) {
+    throw new RetryConfigError(`baseDelayMs must be a non-negative number, got ${config.baseDelayMs}`);
+  }
+  if (!Number.isFinite(config.maxDelayMs) || config.maxDelayMs < config.baseDelayMs) {
+    throw new RetryConfigError(
+      `maxDelayMs (${config.maxDelayMs}) must be >= baseDelayMs (${config.baseDelayMs})`,
+    );
+  }
+  if (!Number.isFinite(config.jitter) || config.jitter < 0 || config.jitter > 1) {
+    throw new RetryConfigError(`jitter must be in [0, 1], got ${config.jitter}`);
+  }
+}
+
+const DEFAULT_CONFIG: Required<Omit<RetryConfig, "signal">> = {
   maxAttempts: 4,
   baseDelayMs: 200,
   maxDelayMs: 30_000,
@@ -48,13 +76,18 @@ interface StatusCarryingError {
   response?: { status?: number };
 }
 
+function isStatusCarryingError(err: unknown): err is StatusCarryingError {
+  if (!err || typeof err !== "object") return false;
+  return "status" in err || "statusCode" in err || "response" in err;
+}
+
 /** Pulls an HTTP-style status code off an error, strictly from structured fields or numeric values. */
 export function extractHttpStatus(err: unknown): number | undefined {
   if (typeof err === "number") {
     return err;
   }
-  if (err && typeof err === "object") {
-    const { status, statusCode, response } = err as StatusCarryingError;
+  if (isStatusCarryingError(err)) {
+    const { status, statusCode, response } = err;
     const direct = status ?? statusCode ?? response?.status;
     if (typeof direct === "number") return direct;
   }
@@ -80,26 +113,90 @@ export function isTransientError(err: unknown): boolean {
 
 /**
  * Calculate the next delay using exponential backoff + jitter.
- * delay = min(baseDelay * 2^attempt, maxDelay) * (1 ± jitter)
+ * delay = min(min(baseDelay * 2^attempt, maxDelay) * (1 ± jitter), maxDelay)
+ *
+ * The cap is applied both before and after jitter so jitter can never push
+ * the delay above maxDelayMs (#1050).
  */
-export function backoffDelay(attempt: number, config: Required<RetryConfig>): number {
+export function backoffDelay(attempt: number, config: Required<Omit<RetryConfig, "signal">> & { signal?: AbortSignal }): number {
   const exponential = Math.min(config.baseDelayMs * Math.pow(2, attempt), config.maxDelayMs);
   const jitterFactor = 1 - config.jitter + Math.random() * config.jitter * 2;
-  return Math.floor(exponential * jitterFactor);
+  // Re-apply the cap after jitter so jitter can never exceed maxDelayMs (#1050).
+  return Math.min(Math.floor(exponential * jitterFactor), config.maxDelayMs);
+}
+
+interface RetryAfterCarryingError {
+  headers?: Record<string, string | string[]> | { get?: (name: string) => string | null };
+  response?: { headers?: Record<string, string | string[]> | { get?: (name: string) => string | null } };
+}
+
+function isRetryAfterCarryingError(err: unknown): err is RetryAfterCarryingError {
+  if (!err || typeof err !== "object") return false;
+  return "headers" in err || "response" in err;
+}
+
+/**
+ * Extracts the Retry-After delay in ms from a structured error (#1051).
+ * Returns undefined if no Retry-After header is present or cannot be parsed.
+ * Handles both seconds (integer) and HTTP-date formats.
+ */
+export function extractRetryAfterMs(err: unknown): number | undefined {
+  if (!isRetryAfterCarryingError(err)) return undefined;
+  const headers = err.headers ?? err.response?.headers;
+  if (!headers || typeof headers !== "object") return undefined;
+
+  let raw: string | null | undefined;
+  const getMethod: unknown = Reflect.get(headers, "get");
+  if (typeof getMethod === "function") {
+    const result: unknown = getMethod.call(headers, "retry-after");
+    raw = typeof result === "string" ? result : result === null ? null : undefined;
+  } else {
+    const after: unknown = Reflect.get(headers, "retry-after") ?? Reflect.get(headers, "Retry-After");
+    raw = Array.isArray(after) ? after[0] : typeof after === "string" ? after : undefined;
+  }
+
+  if (!raw) return undefined;
+
+  // Integer seconds
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
+
+  // HTTP-date format
+  const date = Date.parse(raw);
+  if (Number.isFinite(date)) {
+    const delta = date - Date.now();
+    return delta > 0 ? delta : 0;
+  }
+
+  return undefined;
 }
 
 /**
  * Execute fn with automatic exponential-backoff retries.
  * Integrates with an optional CircuitBreaker via the shouldRetry override.
+ *
+ * Changes:
+ *  - Validates config before the first attempt (#1052).
+ *  - Accepts an optional AbortSignal; aborts during backoff sleeps and before
+ *    each attempt re-throw the last captured error (#1049).
+ *  - Respects structured Retry-After headers on 429/503 errors (#1051).
  */
 export async function withRetry<T>(
   fn: () => Promise<T>,
   config: Partial<RetryConfig> = {},
 ): Promise<T> {
   const cfg = { ...DEFAULT_CONFIG, ...config };
+
+  // Validate before consuming any retry budget (#1052).
+  validateRetryConfig(cfg);
+
+  const { signal } = cfg;
   let lastError: unknown;
 
   for (let attempt = 0; attempt < cfg.maxAttempts; attempt++) {
+    // Honor pre-attempt abort (#1049).
+    if (signal?.aborted) throw lastError ?? signal.reason;
+
     try {
       const result = await fn();
       if (attempt > 0) {
@@ -125,7 +222,12 @@ export async function withRetry<T>(
 
       if (attempt + 1 >= cfg.maxAttempts) break;
 
-      const delay = backoffDelay(attempt, cfg);
+      // Use Retry-After if the server provided one (#1051); fall back to backoff.
+      const retryAfter = extractRetryAfterMs(err);
+      const delay = retryAfter !== undefined
+        ? Math.min(retryAfter, cfg.maxDelayMs)
+        : backoffDelay(attempt, cfg);
+
       logger.warn(`[${cfg.label}] attempt ${attempt + 1}/${cfg.maxAttempts} failed; retrying`, {
         ...logger.formatError(err),
         attempt: attempt + 1,
@@ -133,7 +235,20 @@ export async function withRetry<T>(
         label: cfg.label,
         maxAttempts: cfg.maxAttempts,
       });
-      await new Promise((r) => setTimeout(r, delay));
+
+      // Cancellable sleep: abort during backoff clears the timer and re-throws
+      // the original error (not the AbortError) so the caller sees what failed (#1049).
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, delay);
+        signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            reject(lastError);
+          },
+          { once: true },
+        );
+      });
     }
   }
 

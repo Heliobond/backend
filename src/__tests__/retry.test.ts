@@ -11,7 +11,15 @@ jest.mock("../lib/logger", () => ({
 }));
 
 import { logger } from "../lib/logger";
-import { backoffDelay, extractHttpStatus, isTransientError, withRetry } from "../lib/retry";
+import {
+  backoffDelay,
+  extractHttpStatus,
+  extractRetryAfterMs,
+  isTransientError,
+  RetryConfigError,
+  validateRetryConfig,
+  withRetry,
+} from "../lib/retry";
 
 const mockedLogger = logger as jest.Mocked<typeof logger>;
 
@@ -325,5 +333,178 @@ describe("withRetry", () => {
     await jest.runAllTimersAsync();
     await expect(p).resolves.toBe("recovered");
     expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  // ── #1052: config validation ──────────────────────────────────────────────
+
+  it("throws RetryConfigError before the first attempt when maxAttempts is 0", async () => {
+    const fn = jest.fn().mockResolvedValue("ok");
+    await expect(
+      withRetry(fn, { maxAttempts: 0, baseDelayMs: 10, jitter: 0 }),
+    ).rejects.toBeInstanceOf(RetryConfigError);
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it("throws RetryConfigError before the first attempt when maxDelayMs < baseDelayMs", async () => {
+    const fn = jest.fn().mockResolvedValue("ok");
+    await expect(
+      withRetry(fn, { maxAttempts: 3, baseDelayMs: 500, maxDelayMs: 100, jitter: 0 }),
+    ).rejects.toBeInstanceOf(RetryConfigError);
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  // ── #1049: AbortSignal cancellation ──────────────────────────────────────
+
+  it("aborts immediately without calling fn when signal is already aborted", async () => {
+    const ctrl = new AbortController();
+    ctrl.abort();
+    const fn = jest.fn().mockResolvedValue("ok");
+    await expect(withRetry(fn, { signal: ctrl.signal })).rejects.toBeDefined();
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it("re-throws the original error (not AbortError) when aborted during backoff sleep", async () => {
+    jest.useRealTimers();
+    const ctrl = new AbortController();
+    const originalError = new Error("timeout");
+    let rejectCall = 0;
+    const fn = jest.fn().mockImplementation(() => {
+      rejectCall++;
+      if (rejectCall === 1) {
+        // Abort mid-sleep right after the first failure.
+        setTimeout(() => ctrl.abort(), 10);
+        return Promise.reject(originalError);
+      }
+      return Promise.resolve("ok");
+    });
+
+    await expect(
+      withRetry(fn, { maxAttempts: 4, baseDelayMs: 500, jitter: 0, signal: ctrl.signal }),
+    ).rejects.toBe(originalError);
+    expect(fn).toHaveBeenCalledTimes(1);
+    jest.useFakeTimers();
+  });
+
+  // ── #1050: jitter cap ─────────────────────────────────────────────────────
+
+  it("backoffDelay never exceeds maxDelayMs even with maximum jitter", () => {
+    const cfg = { maxAttempts: 4, baseDelayMs: 200, maxDelayMs: 1_000, jitter: 1, label: "test" };
+    for (let i = 0; i < 50; i++) {
+      expect(backoffDelay(10, cfg)).toBeLessThanOrEqual(1_000);
+    }
+  });
+
+  // ── #1051: Retry-After header ─────────────────────────────────────────────
+
+  it("uses Retry-After seconds header to override backoff delay", async () => {
+    jest.useRealTimers();
+    const delays: number[] = [];
+    const spy = jest
+      .spyOn(global, "setTimeout")
+      .mockImplementation((cb: (...args: unknown[]) => void, ms?: number) => {
+        delays.push(ms ?? 0);
+        (cb as () => void)();
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      });
+
+    const retryAfterError = Object.assign(new Error("rate limited"), {
+      headers: { "retry-after": "2" },
+    });
+    const fn = jest
+      .fn()
+      .mockRejectedValueOnce(retryAfterError)
+      .mockResolvedValue("ok");
+
+    await withRetry(fn, { maxAttempts: 3, baseDelayMs: 50, maxDelayMs: 30_000, jitter: 0 });
+    // Retry-After: 2 seconds → 2000 ms
+    expect(delays[0]).toBe(2000);
+    spy.mockRestore();
+    jest.useFakeTimers();
+  });
+
+  it("caps Retry-After delay at maxDelayMs", async () => {
+    jest.useRealTimers();
+    const delays: number[] = [];
+    const spy = jest
+      .spyOn(global, "setTimeout")
+      .mockImplementation((cb: (...args: unknown[]) => void, ms?: number) => {
+        delays.push(ms ?? 0);
+        (cb as () => void)();
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      });
+
+    const retryAfterError = Object.assign(new Error("rate limited"), {
+      headers: { "retry-after": "999" }, // 999 s → 999_000 ms, capped at maxDelayMs
+    });
+    const fn = jest
+      .fn()
+      .mockRejectedValueOnce(retryAfterError)
+      .mockResolvedValue("ok");
+
+    await withRetry(fn, { maxAttempts: 3, baseDelayMs: 50, maxDelayMs: 30_000, jitter: 0 });
+    expect(delays[0]).toBe(30_000);
+    spy.mockRestore();
+    jest.useFakeTimers();
+  });
+});
+
+// ── validateRetryConfig ───────────────────────────────────────────────────────
+
+describe("validateRetryConfig", () => {
+  const base = { maxAttempts: 4, baseDelayMs: 200, maxDelayMs: 30_000, jitter: 0.3, label: "test" };
+
+  it("does not throw for valid config", () => {
+    expect(() => validateRetryConfig(base)).not.toThrow();
+  });
+
+  it("throws for maxAttempts = 0", () => {
+    expect(() => validateRetryConfig({ ...base, maxAttempts: 0 })).toThrow(RetryConfigError);
+  });
+
+  it("throws for negative baseDelayMs", () => {
+    expect(() => validateRetryConfig({ ...base, baseDelayMs: -1 })).toThrow(RetryConfigError);
+  });
+
+  it("throws when maxDelayMs < baseDelayMs", () => {
+    expect(() => validateRetryConfig({ ...base, maxDelayMs: 100 })).toThrow(RetryConfigError);
+  });
+
+  it("throws for jitter > 1", () => {
+    expect(() => validateRetryConfig({ ...base, jitter: 1.5 })).toThrow(RetryConfigError);
+  });
+});
+
+// ── extractRetryAfterMs ───────────────────────────────────────────────────────
+
+describe("extractRetryAfterMs", () => {
+  it("returns undefined for non-object errors", () => {
+    expect(extractRetryAfterMs("string")).toBeUndefined();
+    expect(extractRetryAfterMs(null)).toBeUndefined();
+  });
+
+  it("parses integer seconds from headers record", () => {
+    const err = { headers: { "retry-after": "5" } };
+    expect(extractRetryAfterMs(err)).toBe(5000);
+  });
+
+  it("parses via fetch-style Headers.get()", () => {
+    const err = { headers: { get: (name: string) => (name === "retry-after" ? "3" : null) } };
+    expect(extractRetryAfterMs(err)).toBe(3000);
+  });
+
+  it("reads from err.response.headers when err.headers absent", () => {
+    const err = { response: { headers: { "retry-after": "1" } } };
+    expect(extractRetryAfterMs(err)).toBe(1000);
+  });
+
+  it("parses HTTP-date format", () => {
+    const future = new Date(Date.now() + 10_000).toUTCString();
+    const result = extractRetryAfterMs({ headers: { "retry-after": future } });
+    expect(result).toBeGreaterThan(0);
+    expect(result).toBeLessThanOrEqual(10_000);
+  });
+
+  it("returns undefined when header is absent", () => {
+    expect(extractRetryAfterMs({ headers: {} })).toBeUndefined();
   });
 });
