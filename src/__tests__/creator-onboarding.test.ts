@@ -16,6 +16,8 @@ import {
   verifyMetadataHash,
   CreatorProjectMetadata,
   buildSetWhitelistTx,
+  confirmWhitelistForApplication,
+  setRegistryWhitelistChecker,
 } from "../lib/creatorOnboarding";
 import { setAuditSink } from "../lib/audit-logger";
 import { indexer } from "../lib/indexer";
@@ -290,6 +292,7 @@ describe("creator onboarding pipeline (#771)", () => {
     it("returns an unsigned create_project XDR for the creator's wallet", async () => {
       const created = (await submit(app).expect(201)).body;
       const approved = await approve(app, created.id);
+      confirmWhitelistForApplication(created.id, { txHash: "tx-mock-whitelist" });
 
       const res = await request(app)
         .get(
@@ -306,14 +309,125 @@ describe("creator onboarding pipeline (#771)", () => {
       expect(tx.signatures).toHaveLength(0);
     });
 
+    it("rejects project tx build if approved but whitelist is not yet confirmed (409)", async () => {
+      const created = (await submit(app).expect(201)).body;
+      const approved = await approve(app, created.id);
+      expect(approved.body.status).toBe("approved");
+      expect(approved.body.whitelist_confirmed).toBe(false);
+      expect(approved.body.ready_for_registration).toBe(false);
+
+      const res = await request(app)
+        .get(
+          `/creators/applications/${created.id}/create-project-tx?sequence=7&maturity_date=2000000000`,
+        )
+        .set("x-wallet-address", WALLET)
+        .expect(409);
+
+      expect(res.body.error.message).toContain("not yet confirmed on-chain as whitelisted");
+    });
+
     it("rejects a wallet that does not own the application", async () => {
       const created = (await submit(app).expect(201)).body;
       await approve(app, created.id);
+      confirmWhitelistForApplication(created.id);
       const other = Keypair.random().publicKey();
       await request(app)
         .get(`/creators/applications/${created.id}/create-project-tx`)
         .set("x-wallet-address", other)
         .expect(403);
+    });
+  });
+
+  describe("whitelist confirmation and registration readiness (#1004)", () => {
+    it("approval without confirmed whitelisting reports ready_for_registration=false", async () => {
+      const created = (await submit(app).expect(201)).body;
+      const approved = await approve(app, created.id, {
+        whitelister: WHITELISTER,
+        whitelister_sequence: "3",
+      });
+
+      expect(approved.body.status).toBe("approved");
+      expect(approved.body.whitelist_status).toBe("unconfirmed");
+      expect(approved.body.whitelist_confirmed).toBe(false);
+      expect(approved.body.ready_for_registration).toBe(false);
+      expect(typeof approved.body.set_whitelist_tx).toBe("string");
+
+      // Observable via creator GET /creators/applications/:id
+      const creatorView = await request(app)
+        .get(`/creators/applications/${created.id}`)
+        .set("x-wallet-address", WALLET)
+        .expect(200);
+      expect(creatorView.body.ready_for_registration).toBe(false);
+      expect(creatorView.body.whitelist_confirmed).toBe(false);
+    });
+
+    it("confirmation makes registration readiness observable without requiring second review", async () => {
+      const created = (await submit(app).expect(201)).body;
+      await approve(app, created.id);
+
+      // Confirm whitelist via admin confirm endpoint
+      const confirmed = await request(app)
+        .post(`/admin/creators/applications/${created.id}/confirm-whitelist`)
+        .set("Authorization", `Bearer ${ADMIN_KEY}`)
+        .send({ tx_hash: "mock-tx-hash-1", actor: "admin_whitelister" })
+        .expect(200);
+
+      expect(confirmed.body.status).toBe("approved"); // status unchanged, no re-review needed
+      expect(confirmed.body.whitelist_status).toBe("confirmed");
+      expect(confirmed.body.whitelist_confirmed).toBe(true);
+      expect(confirmed.body.ready_for_registration).toBe(true);
+      expect(confirmed.body.whitelist_tx_hash).toBe("mock-tx-hash-1");
+
+      // Verify creator can now fetch create-project-tx
+      const txRes = await request(app)
+        .get(
+          `/creators/applications/${created.id}/create-project-tx?sequence=7&maturity_date=2000000000`,
+        )
+        .set("x-wallet-address", WALLET)
+        .expect(200);
+      expect(txRes.body.signed).toBe(false);
+    });
+
+    it("reconciles whitelist readiness via confirmed indexer event", async () => {
+      const created = (await submit(app).expect(201)).body;
+      await approve(app, created.id);
+
+      const tx = {
+        source: WHITELISTER,
+        events: [{ type: "CreatorWhitelisted", account: WALLET, whitelisted: true }],
+      };
+      const client = { getTransaction: jest.fn().mockResolvedValue(tx) };
+
+      await (
+        indexer as unknown as {
+          processTransaction: (c: unknown, hash: string, ledger: number) => Promise<void>;
+        }
+      ).processTransaction(client, "b".repeat(64), 6);
+
+      const updated = getApplication(created.id);
+      expect(updated?.whitelist_confirmed).toBe(true);
+      expect(updated?.ready_for_registration).toBe(true);
+      expect(updated?.whitelist_tx_hash).toBe("b".repeat(64));
+    });
+
+    it("reconciles whitelist readiness via on-chain registry state checker", async () => {
+      const created = (await submit(app).expect(201)).body;
+      await approve(app, created.id);
+
+      // Set mock registry checker returning true
+      setRegistryWhitelistChecker(async (contractId, wallet) => {
+        expect(contractId).toBe(CONTRACT_ID);
+        expect(wallet).toBe(WALLET);
+        return true;
+      });
+
+      const res = await request(app)
+        .post(`/creators/applications/${created.id}/reconcile-whitelist`)
+        .set("x-wallet-address", WALLET)
+        .expect(200);
+
+      expect(res.body.whitelist_confirmed).toBe(true);
+      expect(res.body.ready_for_registration).toBe(true);
     });
   });
 

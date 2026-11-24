@@ -26,8 +26,10 @@ import {
   StrKey,
 } from "@stellar/stellar-sdk";
 import { networkPassphrase } from "./stellar";
+import { config } from "../config";
 
 export type CreatorApplicationStatus = "submitted" | "in_review" | "approved" | "rejected";
+export type WhitelistConfirmationStatus = "unconfirmed" | "confirmed";
 
 /** Document URI schemes accepted by the application schema. */
 export const ALLOWED_URI_SCHEMES: readonly string[] = ["ipfs", "https", "ar"];
@@ -86,6 +88,14 @@ export interface CreatorApplication {
   audit: StatusAuditEntry[];
   created_at: string;
   updated_at: string;
+  /** Separate whitelist confirmation status (#1004). */
+  whitelist_status: WhitelistConfirmationStatus;
+  /** True only after on-chain whitelisting has been confirmed (#1004). */
+  whitelist_confirmed: boolean;
+  whitelist_confirmed_at: string | null;
+  whitelist_tx_hash: string | null;
+  /** True only when approved, metadata pinned, AND whitelist is confirmed on-chain (#1004). */
+  ready_for_registration: boolean;
 }
 
 // ── Canonical serialisation + hashing ────────────────────────────────────────
@@ -301,8 +311,30 @@ const TRANSITIONS: Record<CreatorApplicationStatus, readonly CreatorApplicationS
 
 const applications = new Map<string, CreatorApplication>();
 
+export type RegistryWhitelistChecker = (contractId: string, wallet: string) => Promise<boolean>;
+
+let activeWhitelistChecker: RegistryWhitelistChecker = async () => false;
+
+export function setRegistryWhitelistChecker(checker: RegistryWhitelistChecker | null): void {
+  activeWhitelistChecker = checker ?? (async () => false);
+}
+
+export function getRegistryWhitelistChecker(): RegistryWhitelistChecker {
+  return activeWhitelistChecker;
+}
+
+export function isReadyForRegistration(app: CreatorApplication): boolean {
+  return (
+    app.status === "approved" &&
+    Boolean(app.metadata_hash) &&
+    Boolean(app.metadata_uri) &&
+    app.whitelist_confirmed === true
+  );
+}
+
 export function resetCreatorApplications(): void {
   applications.clear();
+  activeWhitelistChecker = async () => false;
 }
 
 export function submitApplication(wallet: string, input: unknown): CreatorApplication {
@@ -321,6 +353,11 @@ export function submitApplication(wallet: string, input: unknown): CreatorApplic
     audit: [{ from: null, to: "submitted", at: now, actor: wallet }],
     created_at: now,
     updated_at: now,
+    whitelist_status: "unconfirmed",
+    whitelist_confirmed: false,
+    whitelist_confirmed_at: null,
+    whitelist_tx_hash: null,
+    ready_for_registration: false,
   };
   applications.set(application.id, application);
   return application;
@@ -377,6 +414,7 @@ export async function reviewApplication(
 
   const now = new Date().toISOString();
   application.status = next;
+  application.ready_for_registration = isReadyForRegistration(application);
   application.audit.push({
     from: application.audit.at(-1)?.to ?? null,
     to: next,
@@ -385,6 +423,92 @@ export async function reviewApplication(
     note,
   });
   application.updated_at = now;
+  return application;
+}
+
+export interface ConfirmWhitelistParams {
+  txHash?: string;
+  ledger?: number;
+  confirmedAt?: string;
+  actor?: string;
+  note?: string;
+}
+
+/**
+ * Confirm on-chain whitelisting for an application (#1004).
+ * Updates whitelist confirmation state and makes registration readiness observable
+ * without requiring a second application review.
+ */
+export function confirmWhitelistForApplication(
+  id: string,
+  params?: ConfirmWhitelistParams,
+): CreatorApplication {
+  const application = applications.get(id);
+  if (!application) throw new CreatorApplicationNotFoundError(id);
+
+  const now = params?.confirmedAt ?? new Date().toISOString();
+  application.whitelist_status = "confirmed";
+  application.whitelist_confirmed = true;
+  application.whitelist_confirmed_at = now;
+  if (params?.txHash) {
+    application.whitelist_tx_hash = params.txHash;
+  }
+  application.ready_for_registration = isReadyForRegistration(application);
+  application.audit.push({
+    from: application.status,
+    to: application.status,
+    at: now,
+    actor: params?.actor ?? "whitelist_confirmation",
+    note:
+      params?.note ??
+      (params?.txHash
+        ? `Whitelist confirmed on-chain in tx ${params.txHash}`
+        : "Whitelist confirmed on-chain"),
+  });
+  application.updated_at = now;
+  return application;
+}
+
+/**
+ * Confirm on-chain whitelisting for all applications belonging to a wallet (#1004).
+ */
+export function confirmWhitelistForWallet(
+  wallet: string,
+  params?: ConfirmWhitelistParams,
+): CreatorApplication[] {
+  const matched: CreatorApplication[] = [];
+  for (const app of applications.values()) {
+    if (app.wallet === wallet) {
+      confirmWhitelistForApplication(app.id, params);
+      matched.push(app);
+    }
+  }
+  return matched;
+}
+
+/**
+ * Reconcile application whitelisting status against on-chain registry state (#1004).
+ */
+export async function reconcileApplicationWhitelist(
+  id: string,
+  checker?: RegistryWhitelistChecker,
+): Promise<CreatorApplication> {
+  const application = applications.get(id);
+  if (!application) throw new CreatorApplicationNotFoundError(id);
+
+  if (application.whitelist_confirmed) {
+    return application;
+  }
+
+  const checkFn = checker ?? activeWhitelistChecker;
+  const contractId = config.PROJECT_REGISTRY_CONTRACT_ID;
+  const isWhitelisted = await checkFn(contractId, application.wallet);
+  if (isWhitelisted) {
+    return confirmWhitelistForApplication(id, {
+      actor: "registry_reconciliation",
+      note: "Whitelisting verified against on-chain registry state",
+    });
+  }
   return application;
 }
 

@@ -23,6 +23,8 @@ import {
   reviewApplication,
   submitApplication,
   CreatorApplicationStatus,
+  confirmWhitelistForApplication,
+  reconcileApplicationWhitelist,
 } from "../lib/creatorOnboarding";
 import { ApiError, badRequest } from "../middleware/errors";
 import { walletAuth } from "../middleware/walletAuth";
@@ -136,6 +138,13 @@ creatorApplicationsRouter.get(
           "Application must be approved (and metadata pinned) before a project transaction can be built",
         );
       }
+      if (!application.ready_for_registration || !application.whitelist_confirmed) {
+        throw new ApiError(
+          409,
+          "conflict",
+          "Application is approved but creator wallet is not yet confirmed on-chain as whitelisted for project registration",
+        );
+      }
       const contractId = config.PROJECT_REGISTRY_CONTRACT_ID;
       if (!contractId) {
         throw new ApiError(
@@ -150,10 +159,16 @@ creatorApplicationsRouter.get(
         throw badRequest("sequence must be a non-negative integer string up to 19 digits");
       const maturityRaw = String(req.query.maturity_date ?? "0");
       if (!/^\d+$/.test(maturityRaw) || maturityRaw.length > 19) {
-        throw badRequest("maturity_date must be a non-negative integer (unix seconds) up to 19 digits");
+        throw badRequest(
+          "maturity_date must be a non-negative integer (unix seconds) up to 19 digits",
+        );
       }
       const maturityDate = Number(maturityRaw);
-      if (!Number.isFinite(maturityDate) || maturityDate < 0 || BigInt(maturityRaw) > 18446744073709551615n) {
+      if (
+        !Number.isFinite(maturityDate) ||
+        maturityDate < 0 ||
+        BigInt(maturityRaw) > 18446744073709551615n
+      ) {
         throw badRequest("maturity_date exceeds maximum allowed range");
       }
 
@@ -176,6 +191,42 @@ creatorApplicationsRouter.get(
         unsigned_xdr: xdr,
         signed: false,
       });
+    } catch (err) {
+      fail(next, err);
+    }
+  },
+);
+
+/** GET /v1/creators/applications/:id — fetch application and registration readiness for creator (#1004). */
+creatorApplicationsRouter.get(
+  "/applications/:id",
+  (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const application = getApplication(String(req.params.id));
+      if (!application) throw new CreatorApplicationNotFoundError(String(req.params.id));
+      if (application.wallet !== req.walletAddress) {
+        throw new ApiError(403, "forbidden", "This application belongs to another wallet");
+      }
+      res.json(application);
+    } catch (err) {
+      fail(next, err);
+    }
+  },
+);
+
+/** POST /v1/creators/applications/:id/reconcile-whitelist — reconcile whitelist readiness against on-chain registry (#1004). */
+creatorApplicationsRouter.post(
+  "/applications/:id/reconcile-whitelist",
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const application = getApplication(String(req.params.id));
+      if (!application) throw new CreatorApplicationNotFoundError(String(req.params.id));
+      if (application.wallet !== req.walletAddress) {
+        throw new ApiError(403, "forbidden", "This application belongs to another wallet");
+      }
+      const updated = await reconcileApplicationWhitelist(application.id);
+      auditApplication(req, "creator.application.whitelist_reconciled", updated, true);
+      res.json(updated);
     } catch (err) {
       fail(next, err);
     }
@@ -277,6 +328,56 @@ creatorAdminRouter.patch(
       await notifyStatus(application);
 
       res.json(setWhitelistTx ? { ...application, set_whitelist_tx: setWhitelistTx } : application);
+    } catch (err) {
+      fail(next, err);
+    }
+  },
+);
+
+/** POST /v1/admin/creators/applications/:id/confirm-whitelist — record on-chain whitelist confirmation (#1004). */
+creatorAdminRouter.post(
+  "/applications/:id/confirm-whitelist",
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const id = applicationId(req);
+      const body = req.body ?? {};
+      const txHash =
+        typeof body.tx_hash === "string" && body.tx_hash.trim() ? body.tx_hash.trim() : undefined;
+      const actor =
+        typeof body.actor === "string" && body.actor.trim() ? body.actor.trim() : "admin";
+      const note = typeof body.note === "string" ? body.note : undefined;
+
+      const application = confirmWhitelistForApplication(id, {
+        txHash,
+        actor,
+        note,
+      });
+
+      auditApplication(req, "creator.application.whitelist_confirmed", application, true, {
+        actor,
+        tx_hash: txHash,
+      });
+      await notifyStatus(application);
+
+      res.json(application);
+    } catch (err) {
+      fail(next, err);
+    }
+  },
+);
+
+/** POST /v1/admin/creators/applications/:id/reconcile-whitelist — reconcile application against on-chain registry state (#1004). */
+creatorAdminRouter.post(
+  "/applications/:id/reconcile-whitelist",
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const id = applicationId(req);
+      const application = await reconcileApplicationWhitelist(id);
+
+      auditApplication(req, "creator.application.whitelist_reconciled", application, true);
+      await notifyStatus(application);
+
+      res.json(application);
     } catch (err) {
       fail(next, err);
     }
