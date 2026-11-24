@@ -1,10 +1,10 @@
-import { rpc } from "@stellar/stellar-sdk";
+import { rpc, StrKey } from "@stellar/stellar-sdk";
 import { withRpcConnection } from "./stellar";
 import { logger } from "./logger";
 import { pool } from "./db";
 import { config } from "../config";
 import { ApiError } from "../middleware/errors";
-import { linkProjectToApplication } from "./creatorOnboarding";
+import { linkProjectToApplication, confirmWhitelistForWallet } from "./creatorOnboarding";
 
 export type VaultEventType =
   "deposit" | "withdraw" | "WithdrawQueued" | "WithdrawClaimed" | "YieldClaimed";
@@ -288,6 +288,60 @@ function extractProjectCreatedEvent(tx: unknown): IndexedProjectCreated | null {
   return null;
 }
 
+interface IndexedWhitelistEvent {
+  account: string;
+  whitelisted: boolean;
+}
+
+/**
+ * Extract a whitelist event or `set_whitelist` invocation emitted by the registry contract (#1004).
+ */
+function extractWhitelistEvent(tx: unknown): IndexedWhitelistEvent | null {
+  const candidates: unknown[] = [];
+  flattenEventCandidates(tx, candidates);
+
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const name = findFirstMatchingValue(candidate, [
+      "type",
+      "eventType",
+      "kind",
+      "action",
+      "method",
+      "name",
+    ]);
+    const normalized = typeof name === "string" ? name.replace(/[^a-z]/gi, "").toLowerCase() : "";
+    if (
+      normalized.includes("whitelist") ||
+      normalized.includes("setwhitelist") ||
+      normalized.includes("creatorwhitelisted")
+    ) {
+      const account = findFirstMatchingValue(candidate, [
+        "account",
+        "creator",
+        "address",
+        "wallet",
+      ]);
+      if (typeof account === "string" && StrKey.isValidEd25519PublicKey(account)) {
+        const whitelistedVal = findFirstMatchingValue(candidate, [
+          "whitelisted",
+          "is_whitelisted",
+          "status",
+          "enabled",
+        ]);
+        const whitelisted =
+          whitelistedVal === undefined ||
+          whitelistedVal === true ||
+          whitelistedVal === "true" ||
+          whitelistedVal === 1;
+        return { account, whitelisted };
+      }
+    }
+  }
+
+  return null;
+}
+
 /** Persisted event row from the vault_events table. */
 export interface PersistedVaultEvent {
   ledger: number;
@@ -532,6 +586,25 @@ export class EventIndexer {
           }
         } catch (err) {
           logger.debug("[indexer] project link failed", logger.formatError(err));
+        }
+      }
+
+      // Creator-onboarding: confirmed whitelisting updates application readiness (#1004).
+      const whitelistEvent = extractWhitelistEvent(tx);
+      if (whitelistEvent && whitelistEvent.whitelisted) {
+        try {
+          const confirmedApps = confirmWhitelistForWallet(whitelistEvent.account, {
+            txHash,
+            ledger,
+            actor: "indexer",
+          });
+          if (confirmedApps.length > 0) {
+            logger.info(
+              `[indexer] confirmed whitelist for wallet ${whitelistEvent.account} on ${confirmedApps.length} application(s)`,
+            );
+          }
+        } catch (err) {
+          logger.debug("[indexer] whitelist confirmation failed", logger.formatError(err));
         }
       }
 

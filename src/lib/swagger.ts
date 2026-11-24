@@ -177,6 +177,14 @@ export const openApiSpec = {
           metadata_hash: { type: "string", nullable: true },
           metadata_uri: { type: "string", nullable: true },
           project_id: { type: "integer", nullable: true },
+          whitelist_status: {
+            type: "string",
+            enum: ["unconfirmed", "confirmed"],
+          },
+          whitelist_confirmed: { type: "boolean" },
+          whitelist_confirmed_at: { type: "string", nullable: true },
+          whitelist_tx_hash: { type: "string", nullable: true },
+          ready_for_registration: { type: "boolean" },
         },
       },
     },
@@ -657,6 +665,42 @@ export const openApiSpec = {
         },
       },
     },
+    "/creators/applications/{id}": {
+      get: {
+        summary: "Get creator application by id (#1004)",
+        tags: ["Creators"],
+        security: [{ WalletAddress: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          200: {
+            description: "Application details including registration readiness",
+            content: {
+              "application/json": { schema: { $ref: "#/components/schemas/CreatorApplication" } },
+            },
+          },
+          403: { description: "Application belongs to another wallet" },
+          404: { description: "Not found" },
+        },
+      },
+    },
+    "/creators/applications/{id}/reconcile-whitelist": {
+      post: {
+        summary: "Reconcile creator application whitelist status against registry (#1004)",
+        tags: ["Creators"],
+        security: [{ WalletAddress: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          200: {
+            description: "Reconciled application",
+            content: {
+              "application/json": { schema: { $ref: "#/components/schemas/CreatorApplication" } },
+            },
+          },
+          403: { description: "Application belongs to another wallet" },
+          404: { description: "Not found" },
+        },
+      },
+    },
     "/creators/applications/{id}/create-project-tx": {
       get: {
         summary: "Build an unsigned create_project transaction (#771)",
@@ -723,6 +767,55 @@ export const openApiSpec = {
               "Updated application; includes set_whitelist_tx on approval when a whitelister is supplied",
           },
           400: { description: "Invalid transition or input" },
+          404: { description: "Not found" },
+        },
+      },
+    },
+    "/admin/creators/applications/{id}/confirm-whitelist": {
+      post: {
+        summary: "Confirm on-chain whitelisting for an application (#1004)",
+        tags: ["Admin", "Creators"],
+        security: [{ UserId: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  tx_hash: { type: "string" },
+                  actor: { type: "string" },
+                  note: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: "Application with confirmed whitelist and updated registration readiness",
+            content: {
+              "application/json": { schema: { $ref: "#/components/schemas/CreatorApplication" } },
+            },
+          },
+          404: { description: "Not found" },
+        },
+      },
+    },
+    "/admin/creators/applications/{id}/reconcile-whitelist": {
+      post: {
+        summary:
+          "Reconcile application whitelisting status against on-chain registry state (#1004)",
+        tags: ["Admin", "Creators"],
+        security: [{ UserId: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          200: {
+            description: "Reconciled application",
+            content: {
+              "application/json": { schema: { $ref: "#/components/schemas/CreatorApplication" } },
+            },
+          },
           404: { description: "Not found" },
         },
       },
