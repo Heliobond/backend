@@ -213,6 +213,39 @@ describe("gRPC Service Integration", () => {
     stream.cancel();
   });
 
+  it("sends an opt-in initial snapshot before buffered live score updates", async () => {
+    const meta = new grpc.Metadata();
+    meta.add("authorization", "Bearer grpc-admin-key");
+
+    const stream = client.StreamProjectScores({ include_initial_snapshot: true }, meta);
+    const received: any[] = [];
+    const firstSnapshot = new Promise<void>((resolve, reject) => {
+      stream.on("error", (err: grpc.ServiceError) => reject(err));
+      stream.on("data", (data: any) => {
+        received.push(data);
+        if (received.length === 2) resolve();
+      });
+    });
+
+    await firstSnapshot;
+    expect(received.map((item) => item.project_id)).toEqual([1, 2]);
+
+    const liveUpdate = new Promise<void>((resolve, reject) => {
+      const onData = (data: any) => {
+        if (received.length === 3) {
+          stream.off("data", onData);
+          resolve();
+        }
+      };
+      stream.on("data", onData);
+      stream.on("error", reject);
+    });
+    scoreEvents.emit(SCORE_UPDATE_EVENT, { project_id: 2 });
+    await liveUpdate;
+    expect(received.map((item) => item.project_id)).toEqual([1, 2, 2]);
+    stream.cancel();
+  });
+
   it("should not leak internal error details in unary responses", (done) => {
     const meta = new grpc.Metadata();
     meta.add("x-api-key", consumerKey);

@@ -21,6 +21,8 @@ const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
 });
 
 const heliobondProto = grpc.loadPackageDefinition(packageDefinition).heliobond as any;
+const MAX_INITIAL_SNAPSHOT_PROJECTS = 1000;
+const MAX_BUFFERED_SNAPSHOT_UPDATES = 1000;
 
 type GrpcAuthResult =
   | { success: true }
@@ -144,7 +146,37 @@ function streamProjectScores(call: grpc.ServerWritableStream<any, any>) {
     return;
   }
 
+  let snapshotting = call.request.include_initial_snapshot === true;
+  const bufferedUpdates = new Map<number, { project_id: number }>();
+  let closed = false;
+
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    scoreEvents.off(SCORE_UPDATE_EVENT, listener);
+    call.off("cancelled", cleanup);
+    call.off("close", cleanup);
+  };
+
   const listener = (update: { project_id: number }) => {
+    if (snapshotting) {
+      if (
+        !bufferedUpdates.has(update.project_id) &&
+        bufferedUpdates.size >= MAX_BUFFERED_SNAPSHOT_UPDATES
+      ) {
+        const err = new Error(
+          "Too many score updates during initial snapshot",
+        ) as grpc.ServiceError;
+        err.code = grpc.status.RESOURCE_EXHAUSTED;
+        err.details = "Initial snapshot could not keep up with live score updates";
+        cleanup();
+        call.destroy(err);
+        return;
+      }
+      bufferedUpdates.set(update.project_id, update);
+      return;
+    }
+
     try {
       const details = getProjectDetails(update.project_id);
       call.write(details);
@@ -159,20 +191,52 @@ function streamProjectScores(call: grpc.ServerWritableStream<any, any>) {
 
   scoreEvents.on(SCORE_UPDATE_EVENT, listener);
 
-  call.on("cancelled", () => {
-    scoreEvents.off(SCORE_UPDATE_EVENT, listener);
-  });
-  call.on("close", () => {
-    scoreEvents.off(SCORE_UPDATE_EVENT, listener);
-  });
+  call.on("cancelled", cleanup);
+  call.on("close", cleanup);
   call.on("error", (err) => {
     logger.error("[gRPC Stream] stream error", {
       stream_type: "streamProjectScores",
       error_code: (err as grpc.ServiceError).code,
       ...logger.formatError(err),
     });
-    scoreEvents.off(SCORE_UPDATE_EVENT, listener);
+    cleanup();
   });
+
+  if (snapshotting) {
+    void (async () => {
+      try {
+        const total = await getTotalProjects();
+        if (total > MAX_INITIAL_SNAPSHOT_PROJECTS) {
+          const err = new Error(
+            "Initial score snapshot exceeds the supported size",
+          ) as grpc.ServiceError;
+          err.code = grpc.status.RESOURCE_EXHAUSTED;
+          err.details = `Initial snapshot is limited to ${MAX_INITIAL_SNAPSHOT_PROJECTS} projects`;
+          cleanup();
+          call.destroy(err);
+          return;
+        }
+
+        for (let projectId = 1; projectId <= total && !closed; projectId++) {
+          call.write(getProjectDetails(projectId));
+        }
+
+        while (!closed && bufferedUpdates.size > 0) {
+          const update = bufferedUpdates.values().next().value as { project_id: number };
+          bufferedUpdates.delete(update.project_id);
+          call.write(getProjectDetails(update.project_id));
+        }
+        snapshotting = false;
+      } catch (error) {
+        logger.error("[gRPC Stream] initial snapshot failed", logger.formatError(error));
+        const err = new Error("Unable to load initial score snapshot") as grpc.ServiceError;
+        err.code = grpc.status.INTERNAL;
+        err.details = "Unable to load initial score snapshot";
+        cleanup();
+        call.destroy(err);
+      }
+    })();
+  }
 }
 
 // Bidirectional streaming handler

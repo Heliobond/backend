@@ -12,7 +12,9 @@ message ProjectRequest {
   int32 project_id = 1;
 }
 
-message StreamRequest {}
+message StreamRequest {
+  bool include_initial_snapshot = 1;
+}
 
 message ProjectResponse {
   int32 project_id = 1;
