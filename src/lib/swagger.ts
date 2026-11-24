@@ -724,7 +724,13 @@ export const openApiSpec = {
         parameters: [
           { name: "id", in: "path", required: true, schema: { type: "string" } },
           { name: "sequence", in: "query", schema: { type: "string" } },
-          { name: "maturity_date", in: "query", schema: { type: "integer" } },
+          {
+            name: "maturity_date",
+            in: "query",
+            description:
+              "Unix seconds as a decimal u64 (0..18446744073709551615). Values are carried exactly; out-of-range or non-integer values return 400.",
+            schema: { type: "string", pattern: "^[0-9]+$" },
+          },
         ],
         responses: {
           200: {
@@ -738,7 +744,11 @@ export const openApiSpec = {
                     project_id: { type: "integer", nullable: true },
                     metadata_hash: { type: "string" },
                     metadata_uri: { type: "string" },
-                    maturity_date: { type: "integer" },
+                    maturity_date: {
+                      type: "string",
+                      pattern: "^[0-9]+$",
+                      description: "Exact decimal u64 echo of the encoded maturity_date",
+                    },
                     unsigned_xdr: { type: "string" },
                     signed: { type: "boolean" },
                     prepared: { type: "boolean" },
@@ -791,6 +801,12 @@ export const openApiSpec = {
                       "Whitelister G... address; when set the response includes the unsigned set_whitelist XDR.",
                   },
                   whitelister_sequence: { type: "string" },
+                  whitelist_valid_until: {
+                    type: "string",
+                    pattern: "^[0-9]+$",
+                    description:
+                      "set_whitelist valid_until (unix seconds, u64). Omitted or 0 = permanent whitelist.",
+                  },
                 },
               },
             },
@@ -799,10 +815,14 @@ export const openApiSpec = {
         responses: {
           200: {
             description:
-              "Updated application; includes set_whitelist_tx on approval when a whitelister is supplied",
+              "Updated application; includes set_whitelist_tx and set_whitelist_valid_until on approval when a whitelister is supplied",
           },
           400: { description: "Invalid transition or input" },
           404: { description: "Not found" },
+          409: {
+            description:
+              "Another review changed the application while this one was in progress; nothing was applied",
+          },
         },
       },
     },

@@ -20,7 +20,7 @@ Endpoints that return unsigned transactions (`GET /v1/creators/applications/:id/
   "project_id": null,
   "metadata_hash": "a1b2c3...",
   "metadata_uri": "ipfs://...",
-  "maturity_date": 2000000000,
+  "maturity_date": "2000000000",
   "unsigned_xdr": "AAAAAg...",
   "signed": false,
   "prepared": false,
@@ -40,6 +40,28 @@ Endpoints that return unsigned transactions (`GET /v1/creators/applications/:id/
   }
 }
 ```
+
+---
+
+## Contract Arguments
+
+The unsigned transactions encode the registry arguments exactly, in contract order:
+
+| Function | Arguments |
+| --- | --- |
+| `set_whitelist` | `account: Address`, `status: bool`, `valid_until: u64` |
+| `create_project` | `creator: Address`, `uri: String`, `maturity_date: u64`, `metadata_hash: BytesN<32>` |
+
+- **`valid_until`**: pass `whitelist_valid_until` (unix seconds, decimal string or integer) with the admin approval `PATCH`. If it is omitted or `0`, the whitelist is **permanent**: the registry only enforces expiry when `valid_until > 0`. The approval response echoes the encoded value as `set_whitelist_valid_until`.
+- **`maturity_date`**: supply it as a decimal query parameter. It is parsed as an exact u64 (`0`–`18446744073709551615`) and echoed back as a decimal **string**, so values above `Number.MAX_SAFE_INTEGER` are never rounded. Out-of-range or non-integer values return `400`.
+
+## Review Concurrency
+
+Approving pins metadata asynchronously. If another review changes the application while the pin is in flight, only the first transition commits. The losing request returns `409 conflict`, and neither its pinned metadata nor its audit entry is recorded.
+
+## Project Linking
+
+The indexer links a confirmed `ProjectCreated(project_id, owner)` event to an approved application whose pinned `metadata_hash` matches **and** whose wallet is the event's `owner`, so two wallets that submit identical metadata are never confused. If one creator has several approved applications with identical metadata, they are linked in submission order, one per project. Replaying an event leaves the links and audit history unchanged.
 
 ---
 

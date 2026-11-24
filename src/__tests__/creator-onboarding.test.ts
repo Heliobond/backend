@@ -480,7 +480,7 @@ describe("creator onboarding pipeline (#771)", () => {
 
       const tx = {
         source: WALLET,
-        events: [{ type: "ProjectCreated", project_id: 42, metadata_hash: hash }],
+        events: [{ type: "ProjectCreated", project_id: 42, owner: WALLET, metadata_hash: hash }],
       };
       const client = { getTransaction: jest.fn().mockResolvedValue(tx) };
 

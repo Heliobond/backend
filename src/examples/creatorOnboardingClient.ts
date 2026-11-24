@@ -23,7 +23,8 @@ export interface OnboardingApiResponse {
   project_id: number | null;
   metadata_hash: string;
   metadata_uri: string;
-  maturity_date: number;
+  /** Exact decimal u64 (unix seconds). */
+  maturity_date: string;
   unsigned_xdr: string;
   signed: boolean;
   prepared: boolean;
