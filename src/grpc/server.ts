@@ -22,8 +22,16 @@ const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
 
 const heliobondProto = grpc.loadPackageDefinition(packageDefinition).heliobond as any;
 
-// Helper to authenticate metadata
-function authenticateGrpc(metadata: grpc.Metadata): { success: boolean; error?: string } {
+type GrpcAuthResult =
+  | { success: true }
+  | {
+      success: false;
+      reason: "missing" | "invalid" | "quota_exhausted";
+      error: string;
+      retryAfterSeconds?: number;
+    };
+
+function authenticateGrpc(metadata: grpc.Metadata): GrpcAuthResult {
   const authHeader = metadata.get("authorization")[0] as string | undefined;
   const apiKeyHeader = metadata.get("x-api-key")[0] as string | undefined;
   let providedKey = "";
@@ -40,20 +48,44 @@ function authenticateGrpc(metadata: grpc.Metadata): { success: boolean; error?: 
   }
 
   if (!providedKey) {
-    return { success: false, error: "Missing API key in metadata (authorization or x-api-key)" };
+    return {
+      success: false,
+      reason: "missing",
+      error: "Missing API key in metadata (authorization or x-api-key)",
+    };
   }
 
   const keyRecord = validateApiKey(providedKey);
   if (!keyRecord) {
-    return { success: false, error: "Invalid or revoked API key" };
+    return { success: false, reason: "invalid", error: "Invalid or revoked API key" };
   }
 
   if (isRateLimited(keyRecord.id, keyRecord.rate_limit)) {
-    return { success: false, error: "Rate limit exceeded" };
+    return {
+      success: false,
+      reason: "quota_exhausted",
+      error: "Rate limit exceeded for this API key. Please retry later.",
+      retryAfterSeconds: Math.max(1, Math.ceil((60000 - (Date.now() % 60000)) / 1000)),
+    };
   }
 
   incrementUsage(keyRecord.id);
   return { success: true };
+}
+
+function grpcAuthError(auth: Extract<GrpcAuthResult, { success: false }>): grpc.ServiceError {
+  const err = new Error(auth.error) as grpc.ServiceError;
+  err.code =
+    auth.reason === "quota_exhausted"
+      ? grpc.status.RESOURCE_EXHAUSTED
+      : grpc.status.UNAUTHENTICATED;
+  err.details = auth.error;
+  err.metadata = new grpc.Metadata();
+  if (auth.retryAfterSeconds !== undefined) {
+    err.metadata.add("retry-after", String(auth.retryAfterSeconds));
+    err.metadata.add("grpc-retry-pushback-ms", String(auth.retryAfterSeconds * 1000));
+  }
+  return err;
 }
 
 // Helper to get score details for a project
@@ -81,10 +113,7 @@ async function getProjectScore(
   try {
     const auth = authenticateGrpc(call.metadata);
     if (!auth.success) {
-      return callback({
-        code: grpc.status.UNAUTHENTICATED,
-        details: auth.error,
-      });
+      return callback(grpcAuthError(auth));
     }
 
     const { project_id } = call.request;
@@ -111,9 +140,7 @@ async function getProjectScore(
 function streamProjectScores(call: grpc.ServerWritableStream<any, any>) {
   const auth = authenticateGrpc(call.metadata);
   if (!auth.success) {
-    const err = new Error(auth.error || "Authentication failed") as grpc.ServiceError;
-    err.code = grpc.status.UNAUTHENTICATED;
-    call.destroy(err);
+    call.destroy(grpcAuthError(auth));
     return;
   }
 
@@ -152,9 +179,7 @@ function streamProjectScores(call: grpc.ServerWritableStream<any, any>) {
 function chatProjectScores(call: grpc.ServerDuplexStream<any, any>) {
   const auth = authenticateGrpc(call.metadata);
   if (!auth.success) {
-    const err = new Error(auth.error || "Authentication failed") as grpc.ServiceError;
-    err.code = grpc.status.UNAUTHENTICATED;
-    call.destroy(err);
+    call.destroy(grpcAuthError(auth));
     return;
   }
 

@@ -1,5 +1,7 @@
 import * as grpc from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
+import express from "express";
+import request from "supertest";
 import path from "path";
 import { startGrpcServer } from "../grpc/server";
 import * as registry from "../lib/registry";
@@ -7,6 +9,7 @@ import * as iot from "../routes/iot";
 import * as scoring from "../lib/scoring";
 import { clearApiKeys, generateApiKey } from "../lib/apiKeys";
 import { scoreEvents, SCORE_UPDATE_EVENT } from "../lib/events";
+import { apiKeyAuth } from "../middleware/apiKeyAuth";
 
 jest.mock("../lib/registry", () => ({
   getTotalProjects: jest.fn(),
@@ -105,6 +108,48 @@ describe("gRPC Service Integration", () => {
       expect(response).toBeUndefined();
       done();
     });
+  });
+
+  it("returns UNAUTHENTICATED for invalid credentials", (done) => {
+    const meta = new grpc.Metadata();
+    meta.add("x-api-key", "invalid-key");
+    client.GetProjectScore({ project_id: 1 }, meta, (err: grpc.ServiceError | null) => {
+      expect(err).toBeDefined();
+      expect(err?.code).toBe(grpc.status.UNAUTHENTICATED);
+      done();
+    });
+  });
+
+  it("returns quota exhaustion with retry guidance and shares quota with REST", async () => {
+    const limitedKey = generateApiKey("Shared quota consumer", 2);
+    const meta = new grpc.Metadata();
+    meta.add("x-api-key", limitedKey.key);
+
+    await new Promise<void>((resolve, reject) => {
+      client.GetProjectScore({ project_id: 1 }, meta, (err: grpc.ServiceError | null) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve();
+      });
+    });
+
+    const restApp = express();
+    restApp.get("/test", apiKeyAuth, (_req, res) => res.sendStatus(204));
+    await request(restApp).get("/test").set("X-API-Key", limitedKey.key).expect(204);
+
+    const err = await new Promise<grpc.ServiceError>((resolve) => {
+      client.GetProjectScore(
+        { project_id: 1 },
+        meta,
+        (error: grpc.ServiceError | null) => resolve(error!),
+      );
+    });
+    expect(err.code).toBe(grpc.status.RESOURCE_EXHAUSTED);
+    expect(Number(err.metadata.get("retry-after")[0])).toBeGreaterThan(0);
+    expect(Number(err.metadata.get("grpc-retry-pushback-ms")[0])).toBeGreaterThan(0);
+    await request(restApp).get("/test").set("X-API-Key", limitedKey.key).expect(429);
   });
 
   it("should allow unary calls with valid consumer key in metadata", (done) => {
