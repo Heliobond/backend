@@ -1506,12 +1506,24 @@ export interface paths {
       };
       requestBody?: never;
       responses: {
-        /** @description Unsigned create_project XDR (never signed server-side) */
+        /** @description Unsigned create_project XDR and preparation contract (#1005) */
         200: {
           headers: {
             [name: string]: unknown;
           };
-          content?: never;
+          content: {
+            "application/json": {
+              application_id?: string;
+              project_id?: number | null;
+              metadata_hash?: string;
+              metadata_uri?: string;
+              maturity_date?: number;
+              unsigned_xdr?: string;
+              signed?: boolean;
+              prepared?: boolean;
+              preparation?: components["schemas"]["OnboardingTxPreparation"];
+            };
+          };
         };
         /** @description Application belongs to another wallet */
         403: {
@@ -1820,6 +1832,15 @@ export interface components {
       whitelist_confirmed_at?: string | null;
       whitelist_tx_hash?: string | null;
       ready_for_registration?: boolean;
+    };
+    OnboardingTxPreparation: {
+      prepared?: boolean;
+      simulation_required?: boolean;
+      resource_assembly_required?: boolean;
+      authorization_required?: boolean;
+      signing_required?: boolean;
+      steps?: string[];
+      instructions?: string;
     };
   };
   responses: never;

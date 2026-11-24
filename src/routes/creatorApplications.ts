@@ -25,6 +25,7 @@ import {
   CreatorApplicationStatus,
   confirmWhitelistForApplication,
   reconcileApplicationWhitelist,
+  ONBOARDING_TX_PREPARATION_CONTRACT,
 } from "../lib/creatorOnboarding";
 import { ApiError, badRequest } from "../middleware/errors";
 import { walletAuth } from "../middleware/walletAuth";
@@ -190,6 +191,8 @@ creatorApplicationsRouter.get(
         maturity_date: maturityDate,
         unsigned_xdr: xdr,
         signed: false,
+        prepared: false,
+        preparation: ONBOARDING_TX_PREPARATION_CONTRACT,
       });
     } catch (err) {
       fail(next, err);
@@ -327,7 +330,16 @@ creatorAdminRouter.patch(
       });
       await notifyStatus(application);
 
-      res.json(setWhitelistTx ? { ...application, set_whitelist_tx: setWhitelistTx } : application);
+      res.json(
+        setWhitelistTx
+          ? {
+              ...application,
+              set_whitelist_tx: setWhitelistTx,
+              set_whitelist_prepared: false,
+              set_whitelist_preparation: ONBOARDING_TX_PREPARATION_CONTRACT,
+            }
+          : application,
+      );
     } catch (err) {
       fail(next, err);
     }
