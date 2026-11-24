@@ -52,6 +52,17 @@ export class CreatorValidationError extends Error {
   }
 }
 
+/**
+ * A review lost a race (#997): the application changed while this transition
+ * was awaiting asynchronous work (metadata pinning), so it was not committed.
+ */
+export class CreatorConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CreatorConflictError";
+  }
+}
+
 export class CreatorApplicationNotFoundError extends Error {
   constructor(id: string) {
     super(`Creator application ${id} not found`);
@@ -314,6 +325,17 @@ const TRANSITIONS: Record<CreatorApplicationStatus, readonly CreatorApplicationS
 
 const applications = new Map<string, CreatorApplication>();
 
+/**
+ * Per-application status revision (#997). Bumped on every committed status
+ * transition; a review that awaited the pinner only commits when the revision
+ * it started from is still current. Kept out of the public application shape.
+ */
+const revisions = new Map<string, number>();
+
+function currentRevision(id: string): number {
+  return revisions.get(id) ?? 0;
+}
+
 export type RegistryWhitelistChecker = (contractId: string, wallet: string) => Promise<boolean>;
 
 let activeWhitelistChecker: RegistryWhitelistChecker = async () => false;
@@ -337,6 +359,7 @@ export function isReadyForRegistration(app: CreatorApplication): boolean {
 
 export function resetCreatorApplications(): void {
   applications.clear();
+  revisions.clear();
   activeWhitelistChecker = async () => false;
 }
 
@@ -374,14 +397,39 @@ export function listApplications(): CreatorApplication[] {
   return Array.from(applications.values());
 }
 
-/** Find an approved application by its pinned metadata hash (indexer linking). */
+/**
+ * Find an application by its pinned metadata hash. Identical metadata from
+ * different wallets hashes equally, so this is ambiguous on its own — project
+ * linking uses `findApplicationsForProject` with the creator as well (#998).
+ */
 export function findApplicationByMetadataHash(hash: string): CreatorApplication | undefined {
-  if (!hash) return undefined;
+  return findApplicationsByMetadataHash(hash)[0];
+}
+
+/**
+ * All applications whose pinned metadata hash equals `hash`, in submission
+ * order (the store is insertion-ordered, which is exact even when two
+ * submissions share a millisecond timestamp).
+ */
+export function findApplicationsByMetadataHash(hash: string): CreatorApplication[] {
+  if (!hash) return [];
   const normalized = hash.toLowerCase();
-  for (const app of applications.values()) {
-    if (app.metadata_hash?.toLowerCase() === normalized) return app;
-  }
-  return undefined;
+  return Array.from(applications.values()).filter(
+    (app) => app.metadata_hash?.toLowerCase() === normalized,
+  );
+}
+
+/**
+ * Applications that a `ProjectCreated(project_id, owner)` event could belong
+ * to: the pinned metadata hash matches AND the application was submitted by
+ * the wallet that created the project on-chain (#998). Oldest first.
+ */
+export function findApplicationsForProject(
+  metadataHash: string,
+  creator: string,
+): CreatorApplication[] {
+  if (!creator) return [];
+  return findApplicationsByMetadataHash(metadataHash).filter((app) => app.wallet === creator);
 }
 
 /**
@@ -399,34 +447,52 @@ export async function reviewApplication(
   const application = applications.get(id);
   if (!application) throw new CreatorApplicationNotFoundError(id);
 
-  const allowed = TRANSITIONS[application.status];
-  if (!allowed.includes(next)) {
-    throw new CreatorValidationError(
-      `cannot transition application from "${application.status}" to "${next}"`,
-    );
-  }
+  assertTransitionAllowed(application, next);
+  const startRevision = currentRevision(id);
 
+  let pinned: { hash: string; uri: string } | null = null;
   if (next === "approved") {
     const { bytes, hash } = computeMetadataHash(application.metadata);
     const { uri } = await activePinner.pin(bytes);
     // The hash is always recomputed from the bytes we hand to the pinner, so
     // `verify_metadata_hash(bytes, hash)` holds for the exact pinned payload.
-    application.metadata_hash = hash;
-    application.metadata_uri = uri;
+    pinned = { hash, uri };
   }
 
+  // #997: another review may have committed while we awaited the pinner.
+  // Only a transition based on the state we validated may commit; the loser
+  // must not overwrite pinned metadata or append an impossible audit entry.
+  if (currentRevision(id) !== startRevision) {
+    throw new CreatorConflictError(
+      `application ${id} changed to "${application.status}" while this review was in progress; ` +
+        `"${next}" was not applied`,
+    );
+  }
+  assertTransitionAllowed(application, next);
+
+  if (pinned) {
+    application.metadata_hash = pinned.hash;
+    application.metadata_uri = pinned.uri;
+  }
   const now = new Date().toISOString();
+  const from = application.status;
   application.status = next;
+  revisions.set(id, startRevision + 1);
   application.ready_for_registration = isReadyForRegistration(application);
-  application.audit.push({
-    from: application.audit.at(-1)?.to ?? null,
-    to: next,
-    at: now,
-    actor,
-    note,
-  });
+  application.audit.push({ from, to: next, at: now, actor, note });
   application.updated_at = now;
   return application;
+}
+
+function assertTransitionAllowed(
+  application: CreatorApplication,
+  next: CreatorApplicationStatus,
+): void {
+  if (!TRANSITIONS[application.status].includes(next)) {
+    throw new CreatorValidationError(
+      `cannot transition application from "${application.status}" to "${next}"`,
+    );
+  }
 }
 
 export interface ConfirmWhitelistParams {
@@ -515,22 +581,49 @@ export async function reconcileApplicationWhitelist(
   return application;
 }
 
-/** Indexer hook: link a confirmed `ProjectCreated` event to its application. */
+/**
+ * Indexer hook: link a confirmed `ProjectCreated` event to its application.
+ *
+ * Matching uses both metadata identity and creator ownership (#998): two
+ * wallets may submit identical metadata, so the hash alone cannot tell their
+ * applications apart. Among one creator's matching applications:
+ *  - replay: an application already linked to `projectId` is returned as-is
+ *    (no relinking, no new audit entry);
+ *  - several approved, unlinked submissions with the same metadata are linked
+ *    deterministically in submission order (oldest first), one per project;
+ *  - applications already linked to a different project are never relinked.
+ * Returns null when no application can be linked.
+ */
 export function linkProjectToApplication(params: {
   metadataHash: string;
+  creator: string;
   projectId: number;
   txHash: string;
   ledger: number;
 }): CreatorApplication | null {
-  const application = findApplicationByMetadataHash(params.metadataHash);
-  if (!application) return null;
-  if (application.project_id !== null) return application;
-  if (application.status !== "approved") return null;
+  const candidates = findApplicationsForProject(params.metadataHash, params.creator);
+  if (candidates.length === 0) return null;
 
+  const alreadyLinked = candidates.find((app) => app.project_id === params.projectId);
+  if (alreadyLinked) return alreadyLinked;
+
+  const application = candidates.find(
+    (app) => app.status === "approved" && app.project_id === null,
+  );
+  if (!application) return null;
+
+  const now = new Date().toISOString();
   application.project_id = params.projectId;
   application.linked_tx_hash = params.txHash;
-  application.linked_at = new Date().toISOString();
-  application.updated_at = application.linked_at;
+  application.linked_at = now;
+  application.updated_at = now;
+  application.audit.push({
+    from: application.status,
+    to: application.status,
+    at: now,
+    actor: "indexer",
+    note: `Linked to on-chain project ${params.projectId} in tx ${params.txHash} (ledger ${params.ledger})`,
+  });
   return application;
 }
 
@@ -545,6 +638,47 @@ export interface UnsignedTxParams {
   sequence: string;
   /** Optional timebound in seconds (0 = none). */
   timeoutSeconds?: number;
+}
+
+/** Largest value a Soroban `u64` argument can hold. */
+export const U64_MAX = 18_446_744_073_709_551_615n;
+
+/**
+ * `valid_until` for a permanent whitelist entry. The registry treats
+ * `valid_until == 0` as "never expires" (see `create_project`'s expiry check),
+ * so this is the default when no expiry is supplied (#995).
+ */
+export const PERMANENT_WHITELIST_VALID_UNTIL = 0n;
+
+/** Input accepted for a `u64` argument: bigint, decimal string or safe integer. */
+export type U64Input = bigint | string | number;
+
+/**
+ * Exactly convert a `u64` input to bigint (#996). Decimal strings and bigints
+ * are carried through without precision loss; JS numbers are only accepted
+ * when they are safe integers, because anything above
+ * `Number.MAX_SAFE_INTEGER` may already have been rounded.
+ */
+export function parseU64(value: U64Input, field: string): bigint {
+  let parsed: bigint;
+  if (typeof value === "bigint") {
+    parsed = value;
+  } else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) {
+      throw new CreatorValidationError(
+        `${field} must be a safe integer when passed as a number; pass a decimal string for larger values`,
+      );
+    }
+    parsed = BigInt(value);
+  } else if (typeof value === "string" && /^\d+$/.test(value)) {
+    parsed = BigInt(value);
+  } else {
+    throw new CreatorValidationError(`${field} must be a non-negative integer`);
+  }
+  if (parsed < 0n || parsed > U64_MAX) {
+    throw new CreatorValidationError(`${field} must be between 0 and ${U64_MAX} (u64)`);
+  }
+  return parsed;
 }
 
 function assertContractId(contractId: string): void {
@@ -575,17 +709,31 @@ function buildUnsigned(
 }
 
 /**
- * Build an *unsigned* `set_whitelist(account, true)` transaction for the
- * whitelister to sign and submit. The whitelister's public address is the
- * source account; no secret key is used or stored.
+ * Build an *unsigned* `set_whitelist(account, status, valid_until)`
+ * transaction for the whitelister to sign and submit, matching the registry
+ * signature `set_whitelist(account: Address, status: bool, valid_until: u64)`
+ * (#995). The whitelister's public address is the source account; no secret
+ * key is used or stored.
+ *
+ * - `status` defaults to `true` (whitelist the account).
+ * - `validUntil` is a unix timestamp in seconds after which the entry expires;
+ *   it defaults to `PERMANENT_WHITELIST_VALID_UNTIL` (`0`, never expires).
  */
-export function buildSetWhitelistTx(params: UnsignedTxParams & { account: string }): string {
+export function buildSetWhitelistTx(
+  params: UnsignedTxParams & { account: string; status?: boolean; validUntil?: U64Input },
+): string {
   assertAccount(params.account, "account");
+  const status = params.status ?? true;
+  if (typeof status !== "boolean") {
+    throw new CreatorValidationError("status must be a boolean");
+  }
+  const validUntil = parseU64(params.validUntil ?? PERMANENT_WHITELIST_VALID_UNTIL, "validUntil");
   return buildUnsigned(params, (contract) =>
     contract.call(
       "set_whitelist",
       Address.fromString(params.account).toScVal(),
-      nativeToScVal(true, { type: "bool" }),
+      nativeToScVal(status, { type: "bool" }),
+      nativeToScVal(validUntil, { type: "u64" }),
     ),
   );
 }
@@ -598,7 +746,8 @@ export function buildCreateProjectTx(
   params: UnsignedTxParams & {
     creator: string;
     uri: string;
-    maturityDate: number;
+    /** Unix seconds as bigint, decimal string or safe integer (#996). */
+    maturityDate: U64Input;
     metadataHash: string;
   },
 ): string {
@@ -606,9 +755,7 @@ export function buildCreateProjectTx(
   if (typeof params.uri !== "string" || params.uri.length === 0) {
     throw new CreatorValidationError("uri must be a non-empty string");
   }
-  if (!Number.isInteger(params.maturityDate) || params.maturityDate < 0) {
-    throw new CreatorValidationError("maturityDate must be a non-negative integer (unix seconds)");
-  }
+  const maturityDate = parseU64(params.maturityDate, "maturityDate");
   if (!/^[0-9a-fA-F]{64}$/.test(params.metadataHash)) {
     throw new CreatorValidationError("metadataHash must be a 32-byte sha256 hex string");
   }
@@ -617,7 +764,7 @@ export function buildCreateProjectTx(
       "create_project",
       Address.fromString(params.creator).toScVal(),
       nativeToScVal(params.uri, { type: "string" }),
-      nativeToScVal(params.maturityDate, { type: "u64" }),
+      nativeToScVal(maturityDate, { type: "u64" }),
       nativeToScVal(Buffer.from(params.metadataHash, "hex"), { type: "bytes" }),
     ),
   );

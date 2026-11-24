@@ -15,7 +15,10 @@ import { Router, Request, Response, NextFunction } from "express";
 import {
   CreatorApplication,
   CreatorApplicationNotFoundError,
+  CreatorConflictError,
   CreatorValidationError,
+  PERMANENT_WHITELIST_VALID_UNTIL,
+  parseU64,
   buildCreateProjectTx,
   buildSetWhitelistTx,
   getApplication,
@@ -46,6 +49,10 @@ function isReviewStatus(value: unknown): value is ReviewStatus {
 function fail(next: NextFunction, err: unknown): void {
   if (err instanceof CreatorValidationError) {
     next(badRequest(err.message));
+    return;
+  }
+  if (err instanceof CreatorConflictError) {
+    next(new ApiError(409, "conflict", err.message));
     return;
   }
   if (err instanceof CreatorApplicationNotFoundError) {
@@ -158,19 +165,17 @@ creatorApplicationsRouter.get(
       const sequence = String(req.query.sequence ?? "0");
       if (!/^\d+$/.test(sequence) || sequence.length > 19)
         throw badRequest("sequence must be a non-negative integer string up to 19 digits");
+      // #996: carry maturity_date as an exact bigint end to end. Converting to
+      // a JS number would silently round values above Number.MAX_SAFE_INTEGER.
       const maturityRaw = String(req.query.maturity_date ?? "0");
-      if (!/^\d+$/.test(maturityRaw) || maturityRaw.length > 19) {
-        throw badRequest(
-          "maturity_date must be a non-negative integer (unix seconds) up to 19 digits",
-        );
+      if (!/^\d+$/.test(maturityRaw)) {
+        throw badRequest("maturity_date must be a non-negative integer (unix seconds)");
       }
-      const maturityDate = Number(maturityRaw);
-      if (
-        !Number.isFinite(maturityDate) ||
-        maturityDate < 0 ||
-        BigInt(maturityRaw) > 18446744073709551615n
-      ) {
-        throw badRequest("maturity_date exceeds maximum allowed range");
+      let maturityDate: bigint;
+      try {
+        maturityDate = parseU64(maturityRaw, "maturity_date");
+      } catch {
+        throw badRequest("maturity_date exceeds maximum allowed range (u64)");
       }
 
       const xdr = buildCreateProjectTx({
@@ -188,7 +193,8 @@ creatorApplicationsRouter.get(
         project_id: application.project_id,
         metadata_hash: application.metadata_hash,
         metadata_uri: application.metadata_uri,
-        maturity_date: maturityDate,
+        // Decimal string so u64 values above 2^53 survive JSON clients (#996).
+        maturity_date: maturityDate.toString(),
         unsigned_xdr: xdr,
         signed: false,
         prepared: false,
@@ -277,9 +283,13 @@ creatorAdminRouter.get("/applications/:id", (req: Request, res: Response, next: 
 
 /**
  * PATCH /v1/admin/creators/applications/:id — advance the review workflow.
- * Body: `{ status, actor?, note?, whitelister?, whitelister_sequence? }`.
+ * Body: `{ status, actor?, note?, whitelister?, whitelister_sequence?,
+ * whitelist_valid_until? }`.
  * On `approved` the response includes the unsigned `set_whitelist_tx` when a
- * `whitelister` public address is supplied.
+ * `whitelister` public address is supplied. `whitelist_valid_until` is the
+ * entry's expiry in unix seconds (decimal string or integer); omitted or `0`
+ * means a permanent whitelist (#995). A review that loses a race with a
+ * concurrent review returns 409 (#997).
  */
 creatorAdminRouter.patch(
   "/applications/:id",
@@ -300,12 +310,20 @@ creatorAdminRouter.patch(
       // Build (and validate) the whitelist transaction *before* mutating the
       // application so an invalid whitelister cannot leave it approved.
       let setWhitelistTx: string | undefined;
+      let whitelistValidUntil: bigint | undefined;
       if (body.status === "approved" && typeof body.whitelister === "string" && body.whitelister) {
         const sequence =
           typeof body.whitelister_sequence === "string" ? body.whitelister_sequence : "0";
         if (!/^\d+$/.test(sequence)) {
           throw badRequest("whitelister_sequence must be a non-negative integer string");
         }
+        // Unix seconds; omitted or 0 = permanent. Invalid values surface as a
+        // CreatorValidationError and therefore a 400 (#995).
+        const validUntil = parseU64(
+          body.whitelist_valid_until ?? PERMANENT_WHITELIST_VALID_UNTIL,
+          "whitelist_valid_until",
+        );
+        whitelistValidUntil = validUntil;
         const contractId = config.PROJECT_REGISTRY_CONTRACT_ID;
         if (!contractId) {
           throw new ApiError(
@@ -319,6 +337,8 @@ creatorAdminRouter.patch(
           sourceAccount: body.whitelister,
           sequence,
           account: existing.wallet,
+          status: true,
+          validUntil,
         });
       }
 
@@ -335,6 +355,9 @@ creatorAdminRouter.patch(
           ? {
               ...application,
               set_whitelist_tx: setWhitelistTx,
+              set_whitelist_valid_until: String(
+                whitelistValidUntil ?? PERMANENT_WHITELIST_VALID_UNTIL,
+              ),
               set_whitelist_prepared: false,
               set_whitelist_preparation: ONBOARDING_TX_PREPARATION_CONTRACT,
             }

@@ -249,12 +249,15 @@ function extractVaultEvent(tx: unknown): Partial<VaultEvent> | null {
 interface IndexedProjectCreated {
   projectId: number;
   metadataHash: string;
+  /** `owner` topic of the registry's `ProjectCreated` event (the creator). */
+  creator: string;
 }
 
 /**
  * Extract a `ProjectCreated` contract event (#771) emitted by `create_project`.
- * Linking is by `metadata_hash`, which uniquely identifies the approved
- * application whose metadata was pinned. Returns null for non-matching txs.
+ * Linking needs both `metadata_hash` and the creator (`owner`): identical
+ * metadata from different wallets hashes equally (#998). Returns null for
+ * non-matching txs or events without a creator.
  */
 function extractProjectCreatedEvent(tx: unknown): IndexedProjectCreated | null {
   const candidates: unknown[] = [];
@@ -282,8 +285,10 @@ function extractProjectCreatedEvent(tx: unknown): IndexedProjectCreated | null {
       "meta_hash",
     ]);
     const metadataHash = typeof hashValue === "string" ? hashValue : null;
-    if (projectId === null || !metadataHash) continue;
-    return { projectId, metadataHash };
+    const ownerValue = findFirstMatchingValue(candidate, ["owner", "creator"]);
+    const creator = typeof ownerValue === "string" ? ownerValue : null;
+    if (projectId === null || !metadataHash || !creator) continue;
+    return { projectId, metadataHash, creator };
   }
   return null;
 }
@@ -575,6 +580,7 @@ export class EventIndexer {
         try {
           const linked = linkProjectToApplication({
             metadataHash: projectCreated.metadataHash,
+            creator: projectCreated.creator,
             projectId: projectCreated.projectId,
             txHash,
             ledger,
