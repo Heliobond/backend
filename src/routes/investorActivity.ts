@@ -5,6 +5,8 @@ import { validateStellarAddress } from "../lib/vault";
 
 const DEFAULT_ACTIVITY_LIMIT = 50;
 const MAX_ACTIVITY_LIMIT = 200;
+const DEFAULT_PENDING_WITHDRAWALS_LIMIT = 50;
+const MAX_PENDING_WITHDRAWALS_LIMIT = 200;
 
 const router = Router();
 
@@ -45,7 +47,7 @@ router.get("/:address/activity", async (req: Request, res: Response, next: NextF
   }
 });
 
-// GET /:address/pending-withdrawals — queued claims not yet claimed
+// GET /:address/pending-withdrawals — paginated queued claims not yet claimed
 router.get(
   "/:address/pending-withdrawals",
   async (req: Request, res: Response, next: NextFunction) => {
@@ -57,8 +59,34 @@ router.get(
         throw badRequest(err instanceof Error ? err.message : String(err));
       }
 
-      const pending = await indexer.getPendingWithdrawals(address);
-      res.json({ address, pending_withdrawals: pending });
+      const cursorRaw = req.query.cursor;
+      if (cursorRaw !== undefined && typeof cursorRaw !== "string") {
+        throw badRequest("cursor must be a string");
+      }
+      const cursor = typeof cursorRaw === "string" && cursorRaw.trim() ? cursorRaw.trim() : null;
+
+      const limitRaw = req.query.limit;
+      let limit = DEFAULT_PENDING_WITHDRAWALS_LIMIT;
+      if (limitRaw !== undefined) {
+        const parsed = Number(limitRaw);
+        if (
+          !Number.isInteger(parsed) ||
+          parsed < 1 ||
+          parsed > MAX_PENDING_WITHDRAWALS_LIMIT
+        ) {
+          throw badRequest(
+            `limit must be an integer between 1 and ${MAX_PENDING_WITHDRAWALS_LIMIT}`,
+          );
+        }
+        limit = parsed;
+      }
+
+      const page = await indexer.getPendingWithdrawals(address, cursor, limit);
+      res.json({
+        address,
+        pending_withdrawals: page.withdrawals,
+        next_cursor: page.next_cursor,
+      });
     } catch (error) {
       next(error);
     }

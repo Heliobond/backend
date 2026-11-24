@@ -373,6 +373,11 @@ export interface PendingWithdrawal {
   ts: number;
 }
 
+export interface PendingWithdrawalPage {
+  withdrawals: PendingWithdrawal[];
+  next_cursor: string | null;
+}
+
 const CURSOR_ID = "vault";
 
 function decodeCursor(
@@ -396,8 +401,12 @@ function decodeCursor(
 }
 
 function encodeCursor(event: PersistedVaultEvent): string {
+  return encodeCursorPosition(event.ts, event.tx_hash, event.event_index);
+}
+
+function encodeCursorPosition(ts: number, txHash: string, eventIndex: number): string {
   return Buffer.from(
-    JSON.stringify({ ts: event.ts, txHash: event.tx_hash, eventIndex: event.event_index }),
+    JSON.stringify({ ts, txHash, eventIndex }),
   ).toString("base64");
 }
 
@@ -695,33 +704,70 @@ export class EventIndexer {
    * no shared id, so they are paired first-in-first-out per (address, shares):
    * each WithdrawClaimed settles the oldest matching WithdrawQueued.
    */
-  async getPendingWithdrawals(address: string): Promise<PendingWithdrawal[]> {
+  async getPendingWithdrawals(
+    address: string,
+    cursor: string | null = null,
+    limit = 50,
+  ): Promise<PendingWithdrawalPage> {
     this.requirePersistence();
+    const decoded = decodeCursor(cursor);
+    const params: unknown[] = [address.trim()];
+    let cursorFilter = "";
+    if (decoded) {
+      params.push(decoded.ts, decoded.txHash, decoded.eventIndex);
+      cursorFilter =
+        `AND (pending.ts, pending.tx_hash, pending.event_index) < ($2, $3, $4)`;
+    }
+    params.push(limit + 1);
     const res = await pool.query(
       `WITH queued AS (
          SELECT ledger, tx_hash, address, usdc, shares, ts,
-                ROW_NUMBER() OVER (PARTITION BY shares ORDER BY ts DESC, tx_hash DESC) AS rn,
-                COUNT(*) OVER (PARTITION BY shares) AS total
+                ROW_NUMBER() OVER (PARTITION BY shares ORDER BY ts ASC, tx_hash ASC) AS rn
          FROM vault_events WHERE address = $1 AND type = 'WithdrawQueued'
        ), claimed AS (
          SELECT shares, COUNT(*) AS n
          FROM vault_events WHERE address = $1 AND type = 'WithdrawClaimed'
          GROUP BY shares
+       ), pending AS (
+         SELECT q.ledger, q.tx_hash, q.address, q.usdc, q.shares, q.ts,
+                0 AS event_index
+         FROM queued q LEFT JOIN claimed c ON c.shares = q.shares
+         WHERE q.rn > COALESCE(c.n, 0)
        )
-       SELECT q.ledger, q.tx_hash, q.address, q.usdc, q.shares, q.ts
-       FROM queued q LEFT JOIN claimed c ON c.shares = q.shares
-       WHERE q.rn <= q.total - COALESCE(c.n, 0)
-       ORDER BY q.ts DESC, q.tx_hash DESC`,
-      [address.trim()],
+       SELECT pending.ledger, pending.tx_hash, pending.address, pending.usdc,
+              pending.shares, pending.ts, pending.event_index
+       FROM pending
+       WHERE true ${cursorFilter}
+       ORDER BY pending.ts DESC, pending.tx_hash DESC, pending.event_index DESC
+       LIMIT $${params.length}`,
+      params,
     );
-    return res.rows.map((r: Record<string, unknown>) => ({
+    const rows = res.rows.map((r: Record<string, unknown>) => ({
       ledger: Number(r.ledger),
       tx_hash: String(r.tx_hash),
       address: String(r.address),
       usdc: Number(r.usdc),
       shares: Number(r.shares),
       ts: Number(r.ts),
+      event_index: Number(r.event_index),
     }));
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    const last = page[page.length - 1];
+    return {
+      withdrawals: page.map((row) => ({
+        ledger: row.ledger,
+        tx_hash: row.tx_hash,
+        address: row.address,
+        usdc: row.usdc,
+        shares: row.shares,
+        ts: row.ts,
+      })),
+      next_cursor:
+        hasMore && last
+          ? encodeCursorPosition(last.ts, last.tx_hash, last.event_index)
+          : null,
+    };
   }
 
   getStore(): IndexerStore {

@@ -59,13 +59,34 @@ describe("GET /v1/investors/:address/activity", () => {
 });
 
 describe("GET /v1/investors/:address/pending-withdrawals", () => {
+  beforeEach(() => getPending.mockReset());
+
   it("returns pending withdrawals for the address", async () => {
-    getPending.mockResolvedValue([{ tx_hash: "q1", shares: 5 }]);
+    getPending.mockResolvedValue({
+      withdrawals: [{ tx_hash: "q1", shares: 5 }],
+      next_cursor: "next",
+    });
     const res = await request(app).get(`/v1/investors/${ADDRESS}/pending-withdrawals`).expect(200);
     expect(res.body).toEqual({
       address: ADDRESS,
       pending_withdrawals: [{ tx_hash: "q1", shares: 5 }],
+      next_cursor: "next",
     });
-    expect(getPending).toHaveBeenCalledWith(ADDRESS);
+    expect(getPending).toHaveBeenCalledWith(ADDRESS, null, 50);
+  });
+
+  it("passes the cursor and bounded limit to the indexer", async () => {
+    getPending.mockResolvedValue({ withdrawals: [], next_cursor: null });
+    await request(app)
+      .get(`/v1/investors/${ADDRESS}/pending-withdrawals?cursor=abc&limit=2`)
+      .expect(200);
+    expect(getPending).toHaveBeenCalledWith(ADDRESS, "abc", 2);
+  });
+
+  it.each(["0", "201", "abc", "1.5", "-3"])("rejects limit=%s with 400", async (limit) => {
+    await request(app)
+      .get(`/v1/investors/${ADDRESS}/pending-withdrawals?limit=${limit}`)
+      .expect(400);
+    expect(getPending).not.toHaveBeenCalled();
   });
 });
