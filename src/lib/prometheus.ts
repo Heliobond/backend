@@ -138,6 +138,13 @@ export const frontendErrorsTotal = new client.Counter({
   registers: [register],
 });
 
+export const frontendTelemetryRejectionsTotal = new client.Counter({
+  name: "frontend_telemetry_rejections_total",
+  help: "Rejected frontend telemetry reports by bounded reason",
+  labelNames: ["reason"] as const,
+  registers: [register],
+});
+
 export const frontendWebVital = new client.Histogram({
   name: "frontend_web_vital",
   help: "Frontend Web Vitals measurements by metric name and rating",
