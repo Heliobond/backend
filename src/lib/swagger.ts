@@ -187,6 +187,21 @@ export const openApiSpec = {
           ready_for_registration: { type: "boolean" },
         },
       },
+      OnboardingTxPreparation: {
+        type: "object",
+        properties: {
+          prepared: { type: "boolean" },
+          simulation_required: { type: "boolean" },
+          resource_assembly_required: { type: "boolean" },
+          authorization_required: { type: "boolean" },
+          signing_required: { type: "boolean" },
+          steps: {
+            type: "array",
+            items: { type: "string" },
+          },
+          instructions: { type: "string" },
+        },
+      },
     },
   },
   paths: {
@@ -712,7 +727,27 @@ export const openApiSpec = {
           { name: "maturity_date", in: "query", schema: { type: "integer" } },
         ],
         responses: {
-          200: { description: "Unsigned create_project XDR (never signed server-side)" },
+          200: {
+            description: "Unsigned create_project XDR and preparation contract (#1005)",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    application_id: { type: "string" },
+                    project_id: { type: "integer", nullable: true },
+                    metadata_hash: { type: "string" },
+                    metadata_uri: { type: "string" },
+                    maturity_date: { type: "integer" },
+                    unsigned_xdr: { type: "string" },
+                    signed: { type: "boolean" },
+                    prepared: { type: "boolean" },
+                    preparation: { $ref: "#/components/schemas/OnboardingTxPreparation" },
+                  },
+                },
+              },
+            },
+          },
           403: { description: "Application belongs to another wallet" },
           409: { description: "Application is not approved yet" },
         },

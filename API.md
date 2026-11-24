@@ -108,6 +108,7 @@ Replace the `/api` prefix with `/v1` (e.g. `/api/projects` → `/v1/projects`). 
 | **Scoring Formulas**   | `/v1/scoring/formulas`                   | IP Whitelist                | Admin           | Custom impact scoring formulas, metric weighting, and A/B score preview                     |
 | **Oracle & Admin**     | `/v1/admin`                              | Bearer Token / IP Whitelist | Admin           | Soroban smart contract oracle score updates and immutable audit logging                     |
 | **Batch Operations**   | `/v1/admin/batch`                        | IP Whitelist                | Admin           | Asynchronous multi-project score update batch jobs with concurrency controls                |
+| **Creator Onboarding** | `/v1/creators`                           | Wallet Address / Bearer     | Public / Admin  | Creator applications, pinned metadata, and unsigned transaction builders                    |
 | **Consumer API Keys**  | `/v1/admin/api-keys`                     | Bearer Token / IP Whitelist | Admin           | Generation, usage monitoring, scheduled rotation, and revocation of client API keys         |
 | **RBAC Roles**         | `/v1/roles`                              | RBAC (`X-User-Id`)          | Admin           | User role assignment (`admin`, `operator`, `viewer`) and authorization policies             |
 | **System Operations**  | `/v1/admin/*`, `/v1/traces`              | IP Whitelist / Admin        | Admin           | DB migrations, secret rotation, dynamic log levels, compression stats, OpenTelemetry traces |
@@ -1814,3 +1815,27 @@ message ProjectResponse {
   int64 timestamp = 6;
 }
 ```
+
+---
+
+## Creator Onboarding & Transaction Preparation (#1005)
+
+The onboarding API allows creators to submit project metadata and obtain unsigned Stellar/Soroban transactions for contract registration.
+
+### Endpoints
+
+- `POST /v1/creators/applications`: Submit project metadata for review. Authenticated via `x-wallet-address`.
+- `GET /v1/creators/applications/:id/create-project-tx`: Returns unsigned `create_project` XDR and explicit preparation contract requirements.
+- `PATCH /v1/admin/creators/applications/:id`: Admin review endpoint; returns unsigned `set_whitelist_tx` and preparation contract when a whitelister address is supplied.
+
+### Preparation Contract Requirements
+
+Transactions returned by the backend contain raw smart contract calls with `BASE_FEE` limits. Clients and wallets **must simulate and assemble** the transaction before signing:
+
+1. **Simulate**: Call `simulateTransaction` on Soroban RPC to determine storage footprint and resource costs.
+2. **Assemble**: Call `assembleTransaction` (or `prepareTransaction`) to inject resources and authorization entries.
+3. **Sign**: Sign with the source account private key.
+4. **Submit**: Send to the network via `sendTransaction`.
+
+For full client examples and documentation, see [`docs/CREATOR_ONBOARDING.md`](docs/CREATOR_ONBOARDING.md) and [`src/examples/creatorOnboardingClient.ts`](src/examples/creatorOnboardingClient.ts).
+

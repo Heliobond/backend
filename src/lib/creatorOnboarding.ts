@@ -21,9 +21,12 @@ import {
   Address,
   Contract,
   TransactionBuilder,
+  Transaction,
+  Keypair,
   BASE_FEE,
   nativeToScVal,
   StrKey,
+  rpc,
 } from "@stellar/stellar-sdk";
 import { networkPassphrase } from "./stellar";
 import { config } from "../config";
@@ -618,4 +621,140 @@ export function buildCreateProjectTx(
       nativeToScVal(Buffer.from(params.metadataHash, "hex"), { type: "bytes" }),
     ),
   );
+}
+
+// ── Transaction preparation contract & client pipeline (#1005) ─────────────
+
+export interface OnboardingTxPreparationContract {
+  prepared: boolean;
+  simulation_required: boolean;
+  resource_assembly_required: boolean;
+  authorization_required: boolean;
+  signing_required: boolean;
+  steps: readonly [
+    "simulateTransaction",
+    "assembleTransaction",
+    "signTransaction",
+    "sendTransaction",
+  ];
+  instructions: string;
+}
+
+/**
+ * Published preparation contract for unsigned onboarding transactions (#1005).
+ * States explicitly that BASE_FEE transactions must be simulated via Soroban RPC
+ * and assembled with required resources and authorization footprint before signing.
+ */
+export const ONBOARDING_TX_PREPARATION_CONTRACT: OnboardingTxPreparationContract = Object.freeze({
+  prepared: false,
+  simulation_required: true,
+  resource_assembly_required: true,
+  authorization_required: true,
+  signing_required: true,
+  steps: [
+    "simulateTransaction",
+    "assembleTransaction",
+    "signTransaction",
+    "sendTransaction",
+  ] as const,
+  instructions:
+    "This transaction is unsigned and unprepared. Before signing, the wallet or client must simulate the transaction via Soroban RPC (simulateTransaction) and assemble the authorization footprint and resource fees (assembleTransaction or prepareTransaction), sign with the source account secret key, and submit via sendTransaction.",
+});
+
+/**
+ * Prepares an unsigned Soroban onboarding transaction by running it through
+ * read-only simulation and resource assembly (#1005).
+ */
+export async function prepareOnboardingTransaction(
+  unsignedXdr: string,
+  server: {
+    simulateTransaction: (tx: Transaction) => Promise<rpc.Api.SimulateTransactionResponse>;
+    prepareTransaction?: (tx: Transaction) => Promise<Transaction>;
+  },
+): Promise<string> {
+  const tx = TransactionBuilder.fromXDR(unsignedXdr, networkPassphrase);
+  if (!(tx instanceof Transaction)) {
+    throw new Error("expected a plain transaction");
+  }
+  if (server.prepareTransaction) {
+    const prepared = await server.prepareTransaction(tx);
+    return prepared.toXDR();
+  }
+  const sim = await server.simulateTransaction(tx);
+  if (rpc.Api.isSimulationError(sim)) {
+    throw new Error(`Transaction simulation failed: ${sim.error}`);
+  }
+  const assembled = rpc.assembleTransaction(tx, sim).build();
+  return assembled.toXDR();
+}
+
+export interface ClientExecutionStepResult {
+  step: "simulate" | "assemble" | "sign" | "submit";
+  status: "success" | "failure";
+  detail?: unknown;
+}
+
+export interface ClientExecutionResult {
+  simulated: boolean;
+  prepared_xdr: string;
+  signed_xdr: string;
+  submission_tx_hash: string;
+  steps: ClientExecutionStepResult[];
+}
+
+/**
+ * Client execution pipeline helper taking an unsigned onboarding transaction through
+ * preparation (simulation and resource assembly), signing, and submission (#1005).
+ */
+export async function executeClientOnboardingTransaction(params: {
+  unsignedXdr: string;
+  signerKeypair: Keypair;
+  rpcServer: {
+    simulateTransaction: (tx: Transaction) => Promise<rpc.Api.SimulateTransactionResponse>;
+    prepareTransaction?: (tx: Transaction) => Promise<Transaction>;
+    sendTransaction: (tx: Transaction) => Promise<{ status: string; hash: string }>;
+  };
+}): Promise<ClientExecutionResult> {
+  const steps: ClientExecutionStepResult[] = [];
+  const parsed = TransactionBuilder.fromXDR(params.unsignedXdr, networkPassphrase);
+  if (!(parsed instanceof Transaction)) {
+    throw new Error("expected a plain transaction");
+  }
+
+  // 1. Simulate & Assemble
+  let assembledTx: Transaction;
+  if (params.rpcServer.prepareTransaction) {
+    assembledTx = await params.rpcServer.prepareTransaction(parsed);
+    steps.push({ step: "simulate", status: "success" });
+    steps.push({ step: "assemble", status: "success" });
+  } else {
+    const sim = await params.rpcServer.simulateTransaction(parsed);
+    if (rpc.Api.isSimulationError(sim)) {
+      steps.push({ step: "simulate", status: "failure", detail: sim.error });
+      throw new Error(`Transaction simulation failed: ${sim.error}`);
+    }
+    steps.push({ step: "simulate", status: "success" });
+
+    assembledTx = rpc.assembleTransaction(parsed, sim).build();
+    steps.push({ step: "assemble", status: "success" });
+  }
+
+  const preparedXdr = assembledTx.toXDR();
+
+  // 2. Sign
+  assembledTx.sign(params.signerKeypair as any);
+  const signedXdr = assembledTx.toXDR();
+  steps.push({ step: "sign", status: "success" });
+
+  // 3. Submit
+  const sendRes = await params.rpcServer.sendTransaction(assembledTx);
+  steps.push({ step: "submit", status: "success", detail: sendRes });
+
+  return {
+    simulated: true,
+    prepared_xdr: preparedXdr,
+    signed_xdr: signedXdr,
+    submission_tx_hash: sendRes.hash,
+    steps,
+  };
 }
