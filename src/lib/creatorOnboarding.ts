@@ -344,7 +344,7 @@ function validateSupportedUri(uri: string, label: string): string {
   }
   const match = SCHEME_RE.exec(uri);
   if (!match) {
-    throw new CreatorValidationError(`${label} "${uri}" must include a scheme`);
+    throw new CreatorValidationError(`${label} must include a scheme`);
   }
   const scheme = match[1].toLowerCase();
   if (!ALLOWED_URI_SCHEMES.includes(scheme)) {
@@ -357,10 +357,10 @@ function validateSupportedUri(uri: string, label: string): string {
     try {
       parsed = new URL(uri);
     } catch {
-      throw new CreatorValidationError(`${label} "${uri}" is not a valid https URL`);
+      throw new CreatorValidationError(`${label} is not a valid https URL`);
     }
     if (parsed.protocol !== "https:" || !parsed.hostname || parsed.username || parsed.password) {
-      throw new CreatorValidationError(`${label} "${uri}" is not a valid https URL`);
+      throw new CreatorValidationError(`${label} is not a valid https URL`);
     }
   } else {
     const body = uri.slice(match[0].length).replace(/^\/\//, "");
