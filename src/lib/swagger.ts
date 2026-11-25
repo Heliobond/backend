@@ -823,6 +823,10 @@ export const openApiSpec = {
             description:
               "Another review changed the application while this one was in progress; nothing was applied",
           },
+          503: {
+            description: "Metadata pinning was unavailable or cancelled; the review can be retried",
+          },
+          504: { description: "Metadata pinning timed out; the review can be retried" },
         },
       },
     },

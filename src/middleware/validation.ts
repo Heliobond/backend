@@ -25,7 +25,7 @@ function validateSchema(
 
   if (schema.required) {
     for (const field of schema.required) {
-      if (!(field in obj)) {
+      if (!Object.prototype.hasOwnProperty.call(obj, field)) {
         return { valid: false, error: `Missing required field: ${field}` };
       }
       if (obj[field] === null || obj[field] === undefined) {
@@ -36,7 +36,7 @@ function validateSchema(
 
   if (schema.properties) {
     for (const [key, propSchema] of Object.entries(schema.properties)) {
-      if (!(key in obj)) continue;
+      if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
 
       const value = obj[key];
 

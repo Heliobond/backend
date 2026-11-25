@@ -5,12 +5,14 @@ const MAX_STRING_LENGTH = 10_000;
 const MAX_ARRAY_LENGTH = 100;
 const MAX_OBJECT_DEPTH = 5;
 
-// Detects classic SQL injection sequences: comment markers, UNION SELECT, tautologies, DDL chains
+// Detects classic SQL injection sequences: UNION SELECT, tautologies, DDL chains.
+// Comment markers on their own (--, /*) are ordinary prose and are not rejected.
 const SQL_INJECTION_RE =
-  /('[\s]*(\bor\b|\band\b)[\s]*('|\d))|(;\s*\b(drop|delete|truncate|alter|exec)\b)|(\bunion\b[\s]+\bselect\b)|(--\s)|(\/\*)/i;
+  /('[\s]*(\bor\b|\band\b)[\s]+\d)|('[\s]*(\bor\b|\band\b)[\s]*'[^']*'[\s]*=)|(;\s*\b(drop|delete|truncate|alter|exec)\b)|(\bunion\b[\s]+\bselect\b)/i;
 
-// Detects shell execution sequences: backtick execution, $(...), ${...}
-const COMMAND_INJECTION_RE = /`[^`]*`|\$\([^)]+\)|\$\{[^}]+\}/;
+// Detects shell execution sequences: backtick execution, $(...).
+// ${...} is left alone: it is a common template placeholder in stored text.
+const COMMAND_INJECTION_RE = /`[^`]*`|\$\([^)]+\)/;
 
 // Detects ../  ..\  and URL-encoded variants (%2e%2e)
 const PATH_TRAVERSAL_RE = /\.\.[/\\]|[/\\]\.\.|%2e%2e/i;
@@ -37,15 +39,12 @@ function sanitizeString(key: string, value: string): string {
   }
 
   if (PATH_TRAVERSAL_RE.test(value)) {
-    throw new ApiError(
-      400,
-      "invalid_input",
-      `Field "${key}" contains a path traversal sequence`,
-    );
+    throw new ApiError(400, "invalid_input", `Field "${key}" contains a path traversal sequence`);
   }
 
-  // Strip HTML/script tags for XSS prevention
-  return value.replace(/<[^>]*>/g, "");
+  // Values pass through unchanged. The sanitizer validates and rejects, it
+  // never rewrites input, so stored text is never silently corrupted.
+  return value;
 }
 
 function sanitizeValue(key: string, value: unknown, depth = 0): unknown {
@@ -69,11 +68,11 @@ function sanitizeValue(key: string, value: unknown, depth = 0): unknown {
   }
 
   if (value !== null && typeof value === "object") {
-    const result: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      result[k] = sanitizeValue(k, v, depth + 1);
-    }
-    return result;
+    // fromEntries creates own data properties without invoking inherited setters.
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([name]) => name !== "__proto__" && name !== "constructor" && name !== "prototype")
+      .map(([name, entry]) => [name, sanitizeValue(name, entry, depth + 1)] as const);
+    return Object.fromEntries(entries);
   }
 
   return value;
@@ -85,17 +84,8 @@ export function sanitizeInputs(req: Request, _res: Response, next: NextFunction)
       req.body = sanitizeValue("body", req.body);
     }
 
-    for (const [key, value] of Object.entries(req.query)) {
-      if (typeof value === "string") {
-        sanitizeString(key, value);
-      }
-    }
-
-    for (const [key, value] of Object.entries(req.params)) {
-      if (typeof value === "string") {
-        sanitizeString(key, value);
-      }
-    }
+    sanitizeValue("query", req.query);
+    sanitizeValue("params", req.params);
 
     next();
   } catch (err) {

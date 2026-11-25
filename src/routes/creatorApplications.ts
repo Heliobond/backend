@@ -16,6 +16,7 @@ import {
   CreatorApplication,
   CreatorApplicationNotFoundError,
   CreatorConflictError,
+  CreatorProviderError,
   CreatorValidationError,
   PERMANENT_WHITELIST_VALID_UNTIL,
   parseU64,
@@ -53,6 +54,11 @@ function fail(next: NextFunction, err: unknown): void {
   }
   if (err instanceof CreatorConflictError) {
     next(new ApiError(409, "conflict", err.message));
+    return;
+  }
+  if (err instanceof CreatorProviderError) {
+    const status = err.code === "metadata_pinning_timeout" ? 504 : 503;
+    next(new ApiError(status, err.code, err.message));
     return;
   }
   if (err instanceof CreatorApplicationNotFoundError) {
@@ -342,7 +348,9 @@ creatorAdminRouter.patch(
         });
       }
 
-      const application = await reviewApplication(id, body.status, actor, note);
+      const application = await reviewApplication(id, body.status, actor, note, {
+        signal: res.locals.abortSignal as AbortSignal | undefined,
+      });
 
       auditApplication(req, "creator.application.reviewed", application, true, {
         transition: body.status,
