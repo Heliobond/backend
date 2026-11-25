@@ -45,7 +45,7 @@ export function cleanupStaleWebhooks(): void {
     if ((webhook.consecutive_failures ?? 0) >= WEBHOOK_MAX_CONSECUTIVE_FAILURES) {
       webhooks.delete(id);
       logger.warn(
-        `[webhooks] removed webhook ${id} after ${webhook.consecutive_failures} consecutive failed deliveries`,
+        `[webhooks] removed webhook ${id} after ${webhook.consecutive_failures} consecutive failed deliveries${webhook.owner ? ` (owner: ${webhook.owner})` : ""}`,
       );
       continue;
     }
@@ -104,8 +104,11 @@ export function registerWebhook(
   if (webhooks.size >= WEBHOOK_MAX_STORE_SIZE) {
     const oldest = webhooks.keys().next().value;
     if (oldest) {
+      const owner = webhooks.get(oldest)?.owner;
       webhooks.delete(oldest);
-      logger.warn(`[webhooks] store at capacity, evicted oldest webhook ${oldest}`);
+      logger.warn(
+        `[webhooks] store at capacity, evicted oldest webhook ${oldest}${owner ? ` (owner: ${owner})` : ""}`,
+      );
     }
   }
   webhooks.set(wh.id, wh);

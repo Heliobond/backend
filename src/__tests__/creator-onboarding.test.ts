@@ -2,7 +2,7 @@ import request from "supertest";
 import express, { Express } from "express";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { Keypair, Transaction, TransactionBuilder } from "@stellar/stellar-sdk";
+import { Keypair, Transaction, TransactionBuilder, scValToNative } from "@stellar/stellar-sdk";
 import { creatorApplicationsRouter, creatorAdminRouter } from "../routes/creatorApplications";
 import { errorHandler } from "../middleware/errors";
 import { walletChallenge } from "../middleware/walletAuth";
@@ -51,8 +51,12 @@ const validMetadata: CreatorProjectMetadata = {
   documents: ["ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"],
 };
 
-function buildApp(): Express {
+function buildApp(signal?: AbortSignal): Express {
   const app = express();
+  app.use((_req, res, next) => {
+    res.locals.abortSignal = signal;
+    next();
+  });
   app.use(express.json());
   app.use("/creators", creatorApplicationsRouter);
   app.use("/admin/creators", creatorAdminRouter);
@@ -64,12 +68,16 @@ function submit(app: Express, metadata: object = validMetadata) {
   return request(app).post("/creators/applications").set("x-wallet-address", WALLET).send(metadata);
 }
 
-async function approve(app: Express, id: string, extra: Record<string, unknown> = {}) {
+async function moveToReview(app: Express, id: string) {
   await request(app)
     .patch(`/admin/creators/applications/${id}`)
     .set("Authorization", `Bearer ${ADMIN_KEY}`)
     .send({ status: "in_review" })
     .expect(200);
+}
+
+async function approve(app: Express, id: string, extra: Record<string, unknown> = {}) {
+  await moveToReview(app, id);
   return request(app)
     .patch(`/admin/creators/applications/${id}`)
     .set("Authorization", `Bearer ${ADMIN_KEY}`)
@@ -302,20 +310,16 @@ describe("creator onboarding pipeline (#771)", () => {
   });
 
   describe("provider metadata URI validation (#1000)", () => {
-    async function moveToReview(app: Express, id: string) {
-      await request(app)
-        .patch(`/admin/creators/applications/${id}`)
-        .set("Authorization", `Bearer ${ADMIN_KEY}`)
-        .send({ status: "in_review" })
-        .expect(200);
-    }
-
     it.each([
       ["malformed (no scheme)", "not-a-uri"],
       ["unsupported scheme", "ftp://example.com/metadata.json"],
       ["oversized", `ipfs://${"a".repeat(2048)}`],
       ["https with credentials", "https://user:pass@example.com/metadata.json"],
       ["empty ipfs id", "ipfs://"],
+      ["whitespace-padded", " ipfs://metadata"],
+      ["unsupported registry prefix", "IPFS://metadata"],
+      ["oversized UTF-8", `ipfs://${"é".repeat(253)}`],
+      ["empty authority", "ipfs:///metadata"],
     ])(
       "leaves the application in_review when the provider returns a %s URI",
       async (_label, uri) => {
@@ -355,15 +359,37 @@ describe("creator onboarding pipeline (#771)", () => {
       expect(res.body.metadata_uri).toBe(uri);
       const tx = TransactionBuilder.fromXDR(res.body.unsigned_xdr, networkPassphrase);
       expect(tx.signatures).toHaveLength(0);
+      if (!(tx instanceof Transaction)) throw new Error("Expected a transaction");
+      const operation = tx.operations[0];
+      if (
+        operation.type !== "invokeHostFunction" ||
+        operation.func.type !== "hostFunctionTypeInvokeContract"
+      )
+        throw new Error("Expected a contract invocation");
+      expect(scValToNative(operation.func.invokeContract.args[1])).toBe(uri);
     });
   });
 
   describe("metadata pinning deadline and cancellation (#1001)", () => {
-    it("HttpMetadataPinner times out a stalled transport with a retryable error", async () => {
-      const pinner = new HttpMetadataPinner("https://pin.example.com", hangingTransport(), 50);
+    it("times out even if the transport ignores its abort signal", async () => {
+      const transport = jest
+        .fn<ReturnType<typeof fetch>, Parameters<typeof fetch>>()
+        .mockImplementation(() => new Promise(() => {}));
+      const pinner = new HttpMetadataPinner("https://pin.example.com", transport, 20);
       await expect(pinner.pin(Buffer.from("hello"))).rejects.toMatchObject({
         code: "metadata_pinning_timeout",
       });
+      expect(transport.mock.calls[0][1]?.signal?.aborted).toBe(true);
+    });
+
+    it("includes response-body consumption in the deadline", async () => {
+      const response = new Response();
+      jest.spyOn(response, "json").mockImplementation(() => new Promise(() => {}));
+      const pinner = new HttpMetadataPinner("https://pin.example.com", async () => response, 20);
+      await expect(pinner.pin(Buffer.from("hello"))).rejects.toMatchObject({
+        code: "metadata_pinning_timeout",
+      });
+      expect(response.json).toHaveBeenCalled();
     });
 
     it("HttpMetadataPinner rejects an already-aborted request", async () => {
@@ -383,9 +409,12 @@ describe("creator onboarding pipeline (#771)", () => {
         .set("Authorization", `Bearer ${ADMIN_KEY}`)
         .send({ status: "in_review" })
         .expect(200);
-      await expect(reviewApplication(created.id, "approved", "admin")).rejects.toMatchObject({
-        code: "metadata_pinning_timeout",
-      });
+      const res = await request(app)
+        .patch(`/admin/creators/applications/${created.id}`)
+        .set("Authorization", `Bearer ${ADMIN_KEY}`)
+        .send({ status: "approved" })
+        .expect(504);
+      expect(res.body.error.code).toBe("metadata_pinning_timeout");
       const stored = getApplication(created.id);
       expect(stored?.status).toBe("in_review");
       expect(stored?.metadata_hash).toBeNull();
@@ -412,6 +441,35 @@ describe("creator onboarding pipeline (#771)", () => {
       expect(stored?.metadata_hash).toBeNull();
       expect(stored?.metadata_uri).toBeNull();
       expect(stored?.audit).toHaveLength(2);
+    });
+
+    it("cancels an HTTP review even when a custom pinner completes late", async () => {
+      const controller = new AbortController();
+      const appWithSignal = buildApp(controller.signal);
+      const created = (await submit(appWithSignal).expect(201)).body;
+      await moveToReview(appWithSignal, created.id);
+      const before = structuredClone(getApplication(created.id));
+      const auditBefore = [...auditLines];
+      let finishPin!: (value: { uri: string }) => void;
+      const latePin = new Promise<{ uri: string }>((resolve) => {
+        finishPin = resolve;
+      });
+      setMetadataPinner({
+        pin: (_bytes, options) => {
+          expect(options?.signal).toBe(controller.signal);
+          controller.abort();
+          return latePin;
+        },
+      });
+      const res = await request(appWithSignal)
+        .patch(`/admin/creators/applications/${created.id}`)
+        .set("Authorization", `Bearer ${ADMIN_KEY}`)
+        .send({ status: "approved" })
+        .expect(503);
+      expect(res.body.error.code).toBe("metadata_pinning_aborted");
+      finishPin({ uri: "ipfs://metadata" });
+      expect(getApplication(created.id)).toEqual(before);
+      expect(auditLines).toEqual(auditBefore);
     });
   });
 

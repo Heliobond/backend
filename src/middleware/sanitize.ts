@@ -68,23 +68,11 @@ function sanitizeValue(key: string, value: unknown, depth = 0): unknown {
   }
 
   if (value !== null && typeof value === "object") {
-    const result: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      // Drop prototype-polluting keys outright: "__proto__", "constructor"
-      // and "prototype" never reach defineProperty, so a user-controlled key
-      // can never write to them.
-      if (k === "__proto__" || k === "constructor" || k === "prototype") continue;
-      // defineProperty, not assignment: assigning "__proto__" would invoke
-      // the prototype setter and replace result's prototype. As an own data
-      // property it stays inert and cannot affect downstream validation.
-      Object.defineProperty(result, k, {
-        value: sanitizeValue(k, v, depth + 1),
-        enumerable: true,
-        writable: true,
-        configurable: true,
-      });
-    }
-    return result;
+    // fromEntries creates own data properties without invoking inherited setters.
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([name]) => name !== "__proto__" && name !== "constructor" && name !== "prototype")
+      .map(([name, entry]) => [name, sanitizeValue(name, entry, depth + 1)] as const);
+    return Object.fromEntries(entries);
   }
 
   return value;
@@ -96,17 +84,8 @@ export function sanitizeInputs(req: Request, _res: Response, next: NextFunction)
       req.body = sanitizeValue("body", req.body);
     }
 
-    for (const [key, value] of Object.entries(req.query)) {
-      if (typeof value === "string") {
-        sanitizeString(key, value);
-      }
-    }
-
-    for (const [key, value] of Object.entries(req.params)) {
-      if (typeof value === "string") {
-        sanitizeString(key, value);
-      }
-    }
+    sanitizeValue("query", req.query);
+    sanitizeValue("params", req.params);
 
     next();
   } catch (err) {

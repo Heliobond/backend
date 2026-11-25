@@ -80,6 +80,34 @@ export class CreatorProviderError extends Error {
   }
 }
 
+function pinCancelled(): CreatorProviderError {
+  return new CreatorProviderError("metadata_pinning_aborted", "metadata pinning was cancelled");
+}
+
+/** Stop waiting even if a pluggable provider ignores its signal. */
+async function waitForPin<T>(
+  work: () => Promise<T>,
+  signal?: AbortSignal,
+  abortError: () => CreatorProviderError = pinCancelled,
+): Promise<T> {
+  if (!signal) return work();
+  if (signal.aborted) throw abortError();
+  let onAbort: () => void = () => {};
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(abortError());
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    const pending = Promise.resolve().then(() => {
+      if (signal.aborted) throw abortError();
+      return work();
+    });
+    return await Promise.race([pending, aborted]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
+
 /** Default overall deadline for a metadata pinning request (#1001). */
 export const DEFAULT_METADATA_PIN_TIMEOUT_MS = 30_000;
 
@@ -206,7 +234,7 @@ class DeterministicMetadataPinner implements MetadataPinner {
     // #1001: cancellation still propagates even though this pinner never
     // touches the network, so a cancelled review never commits.
     if (options?.signal?.aborted) {
-      throw new CreatorProviderError("metadata_pinning_aborted", "metadata pinning was cancelled");
+      throw pinCancelled();
     }
     return { uri: `ipfs://${sha256Hex(bytes)}` };
   }
@@ -228,66 +256,63 @@ export class HttpMetadataPinner implements MetadataPinner {
     private readonly endpoint: string,
     private readonly transport: typeof fetch = fetch,
     private readonly timeoutMs: number = DEFAULT_METADATA_PIN_TIMEOUT_MS,
-  ) {}
+  ) {
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647) {
+      throw new RangeError("metadata pinning timeout must be a positive timer duration");
+    }
+  }
 
   async pin(bytes: Buffer, options?: { signal?: AbortSignal }): Promise<{ uri: string }> {
-    if (options?.signal?.aborted) {
-      throw new CreatorProviderError("metadata_pinning_aborted", "metadata pinning was cancelled");
-    }
+    const signal = options?.signal;
+    if (signal?.aborted) throw pinCancelled();
     const controller = new AbortController();
-    const onCallerAbort = () => controller.abort();
-    if (options?.signal) {
-      options.signal.addEventListener("abort", onCallerAbort, { once: true });
-    }
-    const timer =
-      this.timeoutMs > 0 ? setTimeout(() => controller.abort(), this.timeoutMs) : undefined;
+    const onCallerAbort = () => controller.abort(pinCancelled());
+    signal?.addEventListener("abort", onCallerAbort, { once: true });
+    const timer = setTimeout(() => {
+      controller.abort(
+        new CreatorProviderError(
+          "metadata_pinning_timeout",
+          `metadata pinning timed out after ${this.timeoutMs}ms`,
+        ),
+      );
+    }, this.timeoutMs);
     try {
-      const res = await this.transport(this.endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/octet-stream" },
-        body: bytes,
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        throw new CreatorProviderError(
-          "metadata_pinning_failed",
-          `metadata pinning failed: HTTP ${res.status}`,
-        );
-      }
-      const body: unknown = await res.json();
-      if (!isPlainRecord(body) || typeof body.uri !== "string" || !body.uri) {
-        throw new CreatorProviderError(
-          "metadata_pinning_failed",
-          "metadata pinning response did not include a uri",
-        );
-      }
-      // #1000: a provider URI is held to the same constraints as a document
-      // URI before it is handed back, so a bad one never reaches approval.
-      return { uri: validateMetadataUri(body.uri) };
+      return await waitForPin(
+        async () => {
+          const res = await this.transport(this.endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/octet-stream" },
+            body: bytes,
+            signal: controller.signal,
+          });
+          if (!res.ok) {
+            throw new CreatorProviderError(
+              "metadata_pinning_failed",
+              `metadata pinning failed: HTTP ${res.status}`,
+            );
+          }
+          const body: unknown = await res.json();
+          if (!isPlainRecord(body) || typeof body.uri !== "string" || !body.uri) {
+            throw new CreatorProviderError(
+              "metadata_pinning_failed",
+              "metadata pinning response did not include a uri",
+            );
+          }
+          return { uri: validateMetadataUri(body.uri) };
+        },
+        controller.signal,
+        () => controller.signal.reason as CreatorProviderError,
+      );
     } catch (err) {
       if (err instanceof CreatorProviderError) throw err;
       if (err instanceof CreatorValidationError) throw err;
-      if (controller.signal.aborted) {
-        if (options?.signal?.aborted) {
-          throw new CreatorProviderError(
-            "metadata_pinning_aborted",
-            "metadata pinning was cancelled",
-          );
-        }
-        throw new CreatorProviderError(
-          "metadata_pinning_timeout",
-          `metadata pinning timed out after ${this.timeoutMs}ms`,
-        );
-      }
       throw new CreatorProviderError(
         "metadata_pinning_failed",
-        `metadata pinning failed: ${err instanceof Error ? err.message : String(err)}`,
+        "metadata pinning transport failed",
       );
     } finally {
-      if (timer !== undefined) clearTimeout(timer);
-      if (options?.signal) {
-        options.signal.removeEventListener("abort", onCallerAbort);
-      }
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onCallerAbort);
     }
   }
 }
@@ -360,10 +385,18 @@ function validateDocumentUri(raw: unknown): string {
  * state changes.
  */
 export function validateMetadataUri(raw: unknown): string {
-  if (typeof raw !== "string" || raw.trim().length === 0) {
-    throw new CreatorValidationError("metadata URI must be a non-empty string");
+  if (typeof raw !== "string" || /[\s\p{Cc}\\]/u.test(raw)) {
+    throw new CreatorValidationError("metadata URI contains invalid characters");
   }
-  return validateSupportedUri(raw.trim(), "metadata URI");
+  validateSupportedUri(raw, "metadata URI");
+  // ProjectRegistry's create_project validates the prefix and UTF-8 byte length.
+  const length = Buffer.byteLength(raw);
+  if (length < 8 || length > 512 || !/^(ipfs|https|ar):\/\/[^/?#]/.test(raw)) {
+    throw new CreatorValidationError(
+      "metadata URI must use a registry-supported prefix and 8–512 bytes",
+    );
+  }
+  return raw;
 }
 
 /** Validate and normalise an untrusted application metadata payload. */
@@ -560,7 +593,11 @@ export async function reviewApplication(
   let pinned: { hash: string; uri: string } | null = null;
   if (next === "approved") {
     const { bytes, hash } = computeMetadataHash(application.metadata);
-    const { uri } = await activePinner.pin(bytes, { signal: options?.signal });
+    const { uri } = await waitForPin(
+      () => activePinner.pin(bytes, { signal: options?.signal }),
+      options?.signal,
+    );
+    if (options?.signal?.aborted) throw pinCancelled();
     // #1000: validate the provider URI before anything is committed, so a
     // pluggable pinner returning a malformed, unsupported or oversized URI
     // leaves the application in_review instead of storing it as approved.

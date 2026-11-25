@@ -100,6 +100,15 @@ describe("sanitizeInputs", () => {
     delete req.query;
     delete req.params;
     expect(() => sanitizeInputs(req, res, next)).not.toThrow();
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledWith();
+  });
+
+  it("applies the same string limits to repeated query values and body arrays", () => {
+    const values = ["ordinary prose", "a".repeat(10_001)];
+    for (const field of ["body", "query"]) {
+      next.mockClear();
+      sanitizeInputs({ query: {}, params: {}, [field]: { values } } as typeof req, res, next);
+      expect(next).toHaveBeenCalledWith(expect.objectContaining({ code: "input_too_long" }));
+    }
   });
 });
