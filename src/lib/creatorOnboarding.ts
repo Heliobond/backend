@@ -208,7 +208,9 @@ export class HttpMetadataPinner implements MetadataPinner {
     if (!isPlainRecord(body) || typeof body.uri !== "string" || !body.uri) {
       throw new Error("metadata pinning response did not include a uri");
     }
-    return { uri: body.uri };
+    // #1000: a provider URI is held to the same constraints as a document
+    // URI before it is handed back, so a bad one never reaches approval.
+    return { uri: validateMetadataUri(body.uri) };
   }
 }
 
@@ -225,24 +227,26 @@ export function getMetadataPinner(): MetadataPinner {
 
 // ── Validation ───────────────────────────────────────────────────────────────
 
-function validateDocumentUri(raw: unknown): string {
-  if (typeof raw !== "string" || raw.trim().length === 0) {
-    throw new CreatorValidationError("documents entries must be non-empty strings");
-  }
-  const uri = raw.trim();
+/**
+ * The supported URI and length constraints shared by application document
+ * URIs and provider-returned metadata URIs (#1000): a scheme from
+ * ALLOWED_URI_SCHEMES, no longer than MAX_DOCUMENT_URI_LENGTH, and for
+ * https a valid URL with a hostname and no embedded credentials.
+ */
+function validateSupportedUri(uri: string, label: string): string {
   if (uri.length > MAX_DOCUMENT_URI_LENGTH) {
     throw new CreatorValidationError(
-      `document URIs must be no longer than ${MAX_DOCUMENT_URI_LENGTH} characters`,
+      `${label}s must be no longer than ${MAX_DOCUMENT_URI_LENGTH} characters`,
     );
   }
   const match = SCHEME_RE.exec(uri);
   if (!match) {
-    throw new CreatorValidationError(`document URI "${uri}" must include a scheme`);
+    throw new CreatorValidationError(`${label} "${uri}" must include a scheme`);
   }
   const scheme = match[1].toLowerCase();
   if (!ALLOWED_URI_SCHEMES.includes(scheme)) {
     throw new CreatorValidationError(
-      `document URI scheme "${scheme}" is not allowed (use ${ALLOWED_URI_SCHEMES.join(", ")})`,
+      `${label} scheme "${scheme}" is not allowed (use ${ALLOWED_URI_SCHEMES.join(", ")})`,
     );
   }
   if (scheme === "https") {
@@ -250,10 +254,10 @@ function validateDocumentUri(raw: unknown): string {
     try {
       parsed = new URL(uri);
     } catch {
-      throw new CreatorValidationError(`document URI "${uri}" is not a valid https URL`);
+      throw new CreatorValidationError(`${label} "${uri}" is not a valid https URL`);
     }
     if (parsed.protocol !== "https:" || !parsed.hostname || parsed.username || parsed.password) {
-      throw new CreatorValidationError(`document URI "${uri}" is not a valid https URL`);
+      throw new CreatorValidationError(`${label} "${uri}" is not a valid https URL`);
     }
   } else {
     const body = uri.slice(match[0].length).replace(/^\/\//, "");
@@ -262,6 +266,26 @@ function validateDocumentUri(raw: unknown): string {
     }
   }
   return uri;
+}
+
+function validateDocumentUri(raw: unknown): string {
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    throw new CreatorValidationError("documents entries must be non-empty strings");
+  }
+  return validateSupportedUri(raw.trim(), "document URI");
+}
+
+/**
+ * Validate a URI returned by a metadata pinning provider (#1000). Applies the
+ * same supported URI and length constraints as document URIs, so a malformed,
+ * unsupported or oversized provider URI is rejected before any application
+ * state changes.
+ */
+export function validateMetadataUri(raw: unknown): string {
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    throw new CreatorValidationError("metadata URI must be a non-empty string");
+  }
+  return validateSupportedUri(raw.trim(), "metadata URI");
 }
 
 /** Validate and normalise an untrusted application metadata payload. */
@@ -454,9 +478,13 @@ export async function reviewApplication(
   if (next === "approved") {
     const { bytes, hash } = computeMetadataHash(application.metadata);
     const { uri } = await activePinner.pin(bytes);
+    // #1000: validate the provider URI before anything is committed, so a
+    // pluggable pinner returning a malformed, unsupported or oversized URI
+    // leaves the application in_review instead of storing it as approved.
+    const validatedUri = validateMetadataUri(uri);
     // The hash is always recomputed from the bytes we hand to the pinner, so
     // `verify_metadata_hash(bytes, hash)` holds for the exact pinned payload.
-    pinned = { hash, uri };
+    pinned = { hash, uri: validatedUri };
   }
 
   // #997: another review may have committed while we awaited the pinner.

@@ -280,6 +280,63 @@ describe("creator onboarding pipeline (#771)", () => {
     });
   });
 
+  describe("provider metadata URI validation (#1000)", () => {
+    async function moveToReview(app: Express, id: string) {
+      await request(app)
+        .patch(`/admin/creators/applications/${id}`)
+        .set("Authorization", `Bearer ${ADMIN_KEY}`)
+        .send({ status: "in_review" })
+        .expect(200);
+    }
+
+    it.each([
+      ["malformed (no scheme)", "not-a-uri"],
+      ["unsupported scheme", "ftp://example.com/metadata.json"],
+      ["oversized", `ipfs://${"a".repeat(2048)}`],
+      ["https with credentials", "https://user:pass@example.com/metadata.json"],
+      ["empty ipfs id", "ipfs://"],
+    ])(
+      "leaves the application in_review when the provider returns a %s URI",
+      async (_label, uri) => {
+        setMetadataPinner({ pin: async () => ({ uri }) });
+        const created = (await submit(app).expect(201)).body;
+        await moveToReview(app, created.id);
+
+        const res = await request(app)
+          .patch(`/admin/creators/applications/${created.id}`)
+          .set("Authorization", `Bearer ${ADMIN_KEY}`)
+          .send({ status: "approved" })
+          .expect(400);
+        expect(res.body.error.code).toBe("bad_request");
+
+        const stored = getApplication(created.id);
+        expect(stored?.status).toBe("in_review");
+        expect(stored?.metadata_hash).toBeNull();
+        expect(stored?.metadata_uri).toBeNull();
+        expect(stored?.audit).toHaveLength(2);
+      },
+    );
+
+    it("stores a valid provider URI unchanged and builds a compatible create_project tx", async () => {
+      const uri = "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
+      setMetadataPinner({ pin: async () => ({ uri }) });
+      const created = (await submit(app).expect(201)).body;
+      const approved = await approve(app, created.id);
+      expect(approved.body.metadata_uri).toBe(uri);
+
+      confirmWhitelistForApplication(created.id, { txHash: "tx-mock-whitelist" });
+      const res = await request(app)
+        .get(
+          `/creators/applications/${created.id}/create-project-tx?sequence=7&maturity_date=2000000000`,
+        )
+        .set("x-wallet-address", WALLET)
+        .expect(200);
+      expect(res.body.metadata_uri).toBe(uri);
+      const tx = TransactionBuilder.fromXDR(res.body.unsigned_xdr, networkPassphrase);
+      expect(tx.signatures).toHaveLength(0);
+    });
+  });
+
   describe("GET /creators/applications/:id/create-project-tx", () => {
     it("is only available for an approved application", async () => {
       const created = (await submit(app).expect(201)).body;
