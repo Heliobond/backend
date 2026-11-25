@@ -10,6 +10,7 @@ import * as scoring from "../lib/scoring";
 import { clearApiKeys, generateApiKey } from "../lib/apiKeys";
 import { scoreEvents, SCORE_UPDATE_EVENT } from "../lib/events";
 import { apiKeyAuth } from "../middleware/apiKeyAuth";
+import { publicLimiter } from "../middleware/rateLimit";
 
 jest.mock("../lib/registry", () => ({
   getTotalProjects: jest.fn(),
@@ -136,7 +137,7 @@ describe("gRPC Service Integration", () => {
     });
 
     const restApp = express();
-    restApp.get("/test", apiKeyAuth, (_req, res) => res.sendStatus(204));
+    restApp.get("/test", publicLimiter, apiKeyAuth, (_req, res) => res.sendStatus(204));
     await request(restApp).get("/test").set("X-API-Key", limitedKey.key).expect(204);
 
     const err = await new Promise<grpc.ServiceError>((resolve) => {

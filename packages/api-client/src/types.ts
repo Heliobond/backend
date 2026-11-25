@@ -1496,7 +1496,8 @@ export interface paths {
       parameters: {
         query?: {
           sequence?: string;
-          maturity_date?: number;
+          /** @description Unix seconds as a decimal u64 (0..18446744073709551615). Values are carried exactly; out-of-range or non-integer values return 400. */
+          maturity_date?: string;
         };
         header?: never;
         path: {
@@ -1517,7 +1518,8 @@ export interface paths {
               project_id?: number | null;
               metadata_hash?: string;
               metadata_uri?: string;
-              maturity_date?: number;
+              /** @description Exact decimal u64 echo of the encoded maturity_date */
+              maturity_date?: string;
               unsigned_xdr?: string;
               signed?: boolean;
               prepared?: boolean;
@@ -1611,11 +1613,13 @@ export interface paths {
             /** @description Whitelister G... address; when set the response includes the unsigned set_whitelist XDR. */
             whitelister?: string;
             whitelister_sequence?: string;
+            /** @description set_whitelist valid_until (unix seconds, u64). Omitted or 0 = permanent whitelist. */
+            whitelist_valid_until?: string;
           };
         };
       };
       responses: {
-        /** @description Updated application; includes set_whitelist_tx on approval when a whitelister is supplied */
+        /** @description Updated application; includes set_whitelist_tx and set_whitelist_valid_until on approval when a whitelister is supplied */
         200: {
           headers: {
             [name: string]: unknown;
@@ -1631,6 +1635,13 @@ export interface paths {
         };
         /** @description Not found */
         404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Another review changed the application while this one was in progress; nothing was applied */
+        409: {
           headers: {
             [name: string]: unknown;
           };
