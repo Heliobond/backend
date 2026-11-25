@@ -2,6 +2,16 @@ import request from "supertest";
 import express, { Express } from "express";
 import webhooksRouter from "../routes/webhooks";
 import { errorHandler } from "../middleware/errors";
+import {
+  registerWebhook,
+  getWebhook,
+  removeWebhook,
+  listWebhooks,
+  cleanupStaleWebhooks,
+  WEBHOOK_MAX_CONSECUTIVE_FAILURES,
+  WEBHOOK_MAX_STORE_SIZE,
+} from "../lib/webhooks";
+import { config } from "../config";
 
 function buildApp(): Express {
   const app = express();
@@ -126,5 +136,93 @@ describe("webhooks routes", () => {
     const res = await request(app).get(`/api/webhooks/${create.body.id}`).expect(200);
     expect(res.body.url).toBe("https://example.com/single");
     expect(res.body).not.toHaveProperty("secret");
+  });
+});
+
+describe("cleanupStaleWebhooks", () => {
+  const createdIds: string[] = [];
+
+  afterEach(() => {
+    for (const id of createdIds.splice(0)) {
+      removeWebhook(id);
+    }
+  });
+
+  function registerOld(): string {
+    const wh = registerWebhook("https://example.com/stale", "my-super-secret-key");
+    createdIds.push(wh.id);
+    return wh.id;
+  }
+
+  function staleDate(): string {
+    return new Date(Date.now() - config.WEBHOOK_STALE_THRESHOLD_MS - 1000).toISOString();
+  }
+
+  it("removes a webhook that never delivered once it passes the threshold", () => {
+    const id = registerOld();
+    const stored = getWebhook(id);
+    if (!stored) throw new Error("webhook was not registered");
+    stored.created_at = staleDate();
+
+    cleanupStaleWebhooks();
+
+    expect(getWebhook(id)).toBeUndefined();
+  });
+
+  it("keeps a recently created webhook that never delivered", () => {
+    const id = registerOld();
+
+    cleanupStaleWebhooks();
+
+    expect(getWebhook(id)).toBeDefined();
+  });
+
+  it("removes a once-working webhook that went quiet past the threshold", () => {
+    const id = registerOld();
+    const stored = getWebhook(id);
+    if (!stored) throw new Error("webhook was not registered");
+    stored.last_triggered_at = staleDate();
+
+    cleanupStaleWebhooks();
+
+    expect(getWebhook(id)).toBeUndefined();
+  });
+
+  it("keeps a webhook that delivered recently", () => {
+    const id = registerOld();
+    const stored = getWebhook(id);
+    if (!stored) throw new Error("webhook was not registered");
+    stored.last_triggered_at = new Date().toISOString();
+
+    cleanupStaleWebhooks();
+
+    expect(getWebhook(id)).toBeDefined();
+  });
+
+  it("drops a webhook after the consecutive failure cap", () => {
+    const id = registerOld();
+    const stored = getWebhook(id);
+    if (!stored) throw new Error("webhook was not registered");
+    stored.consecutive_failures = WEBHOOK_MAX_CONSECUTIVE_FAILURES;
+
+    cleanupStaleWebhooks();
+
+    expect(getWebhook(id)).toBeUndefined();
+  });
+
+  it("evicts the oldest webhook when the store is at capacity", () => {
+    const oldestBefore = listWebhooks()[0]?.id;
+    const before = listWebhooks().length;
+    const first = registerOld();
+    for (let i = 0; i < WEBHOOK_MAX_STORE_SIZE - before; i++) {
+      createdIds.push(registerWebhook("https://example.com/fill", "my-super-secret-key").id);
+    }
+
+    expect(listWebhooks().length).toBe(WEBHOOK_MAX_STORE_SIZE);
+    if (oldestBefore) {
+      expect(getWebhook(oldestBefore)).toBeUndefined();
+    } else {
+      expect(getWebhook(first)).toBeUndefined();
+    }
   });
 });
