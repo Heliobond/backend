@@ -19,25 +19,49 @@ export interface WebhookConfig {
   created_at: string;
   owner?: string;
   last_triggered_at?: string;
+  consecutive_failures?: number;
 }
 
 const webhooks = new Map<string, WebhookConfig>();
 const WEBHOOK_CLEANUP_INTERVAL_MS = config.WEBHOOK_CLEANUP_INTERVAL_MS;
 const WEBHOOK_STALE_THRESHOLD_MS = config.WEBHOOK_STALE_THRESHOLD_MS;
 
+/** Drop a webhook after this many consecutive failed delivery attempts. */
+export const WEBHOOK_MAX_CONSECUTIVE_FAILURES = 10;
+
+/** Hard cap on registered webhooks. The oldest registration is evicted first. */
+export const WEBHOOK_MAX_STORE_SIZE = 1000;
+
 /**
- * Remove stale webhooks that haven't been triggered in a long time.
- * This prevents indefinite memory growth from abandoned webhook registrations.
+ * Remove stale webhooks. Age is measured from the last successful delivery,
+ * falling back to the registration time for webhooks that never delivered,
+ * so a dead endpoint cannot hold a slot forever. A webhook that delivered
+ * before and then went quiet is only removed with a warning that names its
+ * owner, so the deletion leaves a trace.
  */
-function cleanupStaleWebhooks(): void {
+export function cleanupStaleWebhooks(): void {
   const now = Date.now();
   for (const [id, webhook] of webhooks.entries()) {
-    if (webhook.last_triggered_at) {
-      const lastTriggered = new Date(webhook.last_triggered_at).getTime();
-      if (now - lastTriggered > WEBHOOK_STALE_THRESHOLD_MS) {
-        webhooks.delete(id);
+    if ((webhook.consecutive_failures ?? 0) >= WEBHOOK_MAX_CONSECUTIVE_FAILURES) {
+      webhooks.delete(id);
+      logger.warn(
+        `[webhooks] removed webhook ${id} after ${webhook.consecutive_failures} consecutive failed deliveries${webhook.owner ? ` (owner: ${webhook.owner})` : ""}`,
+      );
+      continue;
+    }
+    const lastActivity = webhook.last_triggered_at ?? webhook.created_at;
+    const lastActivityMs = new Date(lastActivity).getTime();
+    if (now - lastActivityMs > WEBHOOK_STALE_THRESHOLD_MS) {
+      webhooks.delete(id);
+      if (webhook.last_triggered_at) {
+        logger.warn(
+          `[webhooks] removed stale webhook ${id} (last triggered: ${webhook.last_triggered_at}${
+            webhook.owner ? `, owner: ${webhook.owner}` : ""
+          })`,
+        );
+      } else {
         logger.info(
-          `[webhooks] removed stale webhook ${id} (last triggered: ${webhook.last_triggered_at})`,
+          `[webhooks] removed webhook ${id} that never delivered (created: ${webhook.created_at})`,
         );
       }
     }
@@ -75,7 +99,18 @@ export function registerWebhook(
     retry_delay_ms: retryDelayMs,
     created_at: new Date().toISOString(),
     owner,
+    consecutive_failures: 0,
   };
+  if (webhooks.size >= WEBHOOK_MAX_STORE_SIZE) {
+    const oldest = webhooks.keys().next().value;
+    if (oldest) {
+      const owner = webhooks.get(oldest)?.owner;
+      webhooks.delete(oldest);
+      logger.warn(
+        `[webhooks] store at capacity, evicted oldest webhook ${oldest}${owner ? ` (owner: ${owner})` : ""}`,
+      );
+    }
+  }
   webhooks.set(wh.id, wh);
   return wh;
 }
@@ -139,7 +174,9 @@ async function deliverConfig(wh: WebhookConfig, payload: unknown): Promise<void>
 
     // Update last triggered timestamp on successful delivery
     wh.last_triggered_at = new Date().toISOString();
+    wh.consecutive_failures = 0;
   } catch (err) {
+    wh.consecutive_failures = (wh.consecutive_failures ?? 0) + 1;
     logger.error(
       `[webhook] ${wh.id} failed after ${wh.max_retries + 1} attempt(s)`,
       logger.formatError(err),

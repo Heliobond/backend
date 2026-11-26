@@ -1647,6 +1647,20 @@ export interface paths {
           };
           content?: never;
         };
+        /** @description Metadata pinning was unavailable or cancelled; the review can be retried */
+        503: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Metadata pinning timed out; the review can be retried */
+        504: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
       };
     };
     trace?: never;
