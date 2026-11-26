@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { logger } from "../lib/logger";
+import { frontendTelemetryRejectionsTotal } from "../lib/prometheus";
 
 /**
  * Standard error response shape returned by `errorHandler` and any route that
@@ -121,11 +122,15 @@ export function notFoundHandler(req: Request, res: Response): void {
  */
 export function errorHandler(
   err: unknown,
-  _req: Request,
+  req: Request,
   res: Response,
   _next: NextFunction,
 ): void {
   if (res.headersSent) return;
+
+  const telemetryPath = req.path.replace(/\/+$/, "") || "/";
+  const isTelemetryRequest =
+    telemetryPath === "/v1/telemetry" || telemetryPath === "/api/telemetry";
 
   if (err instanceof ApiError) {
     res.status(err.status).json(errorBody(err.code, err.message));
@@ -139,12 +144,18 @@ export function errorHandler(
 
   // Body parser raises a SyntaxError (with a `body` field) on malformed JSON.
   if (err instanceof SyntaxError && "body" in err) {
+    if (isTelemetryRequest) {
+      frontendTelemetryRejectionsTotal.inc({ reason: "malformed_json" });
+    }
     res.status(400).json(errorBody("bad_request", "Request body is not valid JSON"));
     return;
   }
 
   // Body parser raises PayloadTooLargeError when the request body exceeds the configured limit.
   if (err instanceof Error && "statusCode" in err && err.statusCode === 413) {
+    if (isTelemetryRequest) {
+      frontendTelemetryRejectionsTotal.inc({ reason: "size" });
+    }
     res.status(413).json(errorBody("payload_too_large", "Request body is too large"));
     return;
   }

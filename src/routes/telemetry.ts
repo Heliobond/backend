@@ -2,7 +2,11 @@ import express, { Request, Response, NextFunction, Router, RequestHandler } from
 import { config } from "../config";
 import { errorBody } from "../middleware/errors";
 import { telemetryLimiter } from "../middleware/rateLimit";
-import { frontendErrorsTotal, frontendWebVital } from "../lib/prometheus";
+import {
+  frontendErrorsTotal,
+  frontendTelemetryRejectionsTotal,
+  frontendWebVital,
+} from "../lib/prometheus";
 import {
   classifyTelemetryReport,
   forwardTelemetryToOtlp,
@@ -19,7 +23,8 @@ import {
  *  - `application/json` — parsed by the global `express.json()` middleware.
  *
  * Responds `204 No Content` on success, `400` for schema failures or malformed
- * JSON, and `413` when the body exceeds `TELEMETRY_BODY_SIZE_LIMIT`.
+ * JSON, `413` when the body exceeds `TELEMETRY_BODY_SIZE_LIMIT`, and `415` for
+ * unsupported content types.
  */
 const MAX_TELEMETRY_BODY_BYTES = parseByteSize(config.TELEMETRY_BODY_SIZE_LIMIT);
 
@@ -28,6 +33,7 @@ function telemetryBodyLimit(req: Request, res: Response, next: NextFunction): vo
   if (raw !== undefined) {
     const length = Number(raw);
     if (Number.isFinite(length) && length > MAX_TELEMETRY_BODY_BYTES) {
+      frontendTelemetryRejectionsTotal.inc({ reason: "size" });
       res.status(413).json(errorBody("payload_too_large", "Request body is too large"));
       return;
     }
@@ -57,8 +63,19 @@ export function createTelemetryRouter(limiter: RequestHandler = telemetryLimiter
   });
 
   router.post("/", limiter, telemetryBodyLimit, textParser, (req: Request, res: Response) => {
+    if (!req.is("application/json") && !req.is("text/plain")) {
+      frontendTelemetryRejectionsTotal.inc({ reason: "unsupported_content" });
+      res
+        .status(415)
+        .json(errorBody("unsupported_media_type", "Telemetry content type is not supported"));
+      return;
+    }
+
     const parsed = parseTelemetryBody(req.body);
     if (parsed === undefined || parsed === null) {
+      frontendTelemetryRejectionsTotal.inc({
+        reason: parsed === null ? "schema" : "malformed_json",
+      });
       res
         .status(400)
         .json(errorBody("invalid_telemetry", "Request body is not valid telemetry JSON"));
@@ -69,6 +86,7 @@ export function createTelemetryRouter(limiter: RequestHandler = telemetryLimiter
     // validated into a metric label, exported, or (optionally) traced.
     const classified = classifyTelemetryReport(scrubPii(parsed));
     if (!classified) {
+      frontendTelemetryRejectionsTotal.inc({ reason: "schema" });
       res
         .status(400)
         .json(errorBody("invalid_telemetry", "Telemetry payload does not match a known schema"));

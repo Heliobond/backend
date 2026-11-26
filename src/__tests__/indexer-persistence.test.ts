@@ -146,13 +146,54 @@ describe("getActivity()", () => {
 });
 
 describe("getPendingWithdrawals()", () => {
-  it("maps rows to numbers and scopes the query to the address", async () => {
+  it("maps rows to numbers, scopes the query, and applies FIFO reconciliation before limiting", async () => {
     query.mockResolvedValueOnce({
-      rows: [{ ledger: "9", tx_hash: "q1", address: ADDRESS, usdc: "12.5", shares: "5", ts: "77" }],
+      rows: [
+        {
+          ledger: "9",
+          tx_hash: "q1",
+          address: ADDRESS,
+          usdc: "12.5",
+          shares: "5",
+          ts: "77",
+          event_index: 0,
+        },
+      ],
     });
-    expect(await indexer.getPendingWithdrawals(` ${ADDRESS} `)).toEqual([
-      { ledger: 9, tx_hash: "q1", address: ADDRESS, usdc: 12.5, shares: 5, ts: 77 },
-    ]);
-    expect(query.mock.calls[0][1]).toEqual([ADDRESS]);
+    expect(await indexer.getPendingWithdrawals(` ${ADDRESS} `, null, 10)).toEqual({
+      withdrawals: [{ ledger: 9, tx_hash: "q1", address: ADDRESS, usdc: 12.5, shares: 5, ts: 77 }],
+      next_cursor: null,
+    });
+    const [sql, params] = query.mock.calls[0];
+    expect(params).toEqual([ADDRESS, 11]);
+    expect(sql).toContain("ROW_NUMBER() OVER (PARTITION BY shares ORDER BY ts ASC, tx_hash ASC)");
+    expect(sql).toContain("WHERE q.rn > COALESCE(c.n, 0)");
+    expect(sql).toContain("FROM pending");
+    expect(sql).toMatch(/ORDER BY pending\.ts DESC, pending\.tx_hash DESC, pending\.event_index DESC\s+LIMIT \$2/);
+  });
+
+  it("continues after the last pending withdrawal cursor", async () => {
+    query.mockResolvedValueOnce({
+      rows: [
+        { ledger: "9", tx_hash: "q2", address: ADDRESS, usdc: "12", shares: "5", ts: "78", event_index: 0 },
+        { ledger: "8", tx_hash: "q1", address: ADDRESS, usdc: "10", shares: "5", ts: "77", event_index: 0 },
+      ],
+    });
+    const first = await indexer.getPendingWithdrawals(ADDRESS, null, 1);
+    expect(first.withdrawals.map((item) => item.tx_hash)).toEqual(["q2"]);
+    expect(first.next_cursor).not.toBeNull();
+
+    query.mockResolvedValueOnce({
+      rows: [
+        { ledger: "8", tx_hash: "q1", address: ADDRESS, usdc: "10", shares: "5", ts: "77", event_index: 0 },
+      ],
+    });
+    const second = await indexer.getPendingWithdrawals(ADDRESS, first.next_cursor, 1);
+    expect(second.withdrawals.map((item) => item.tx_hash)).toEqual(["q1"]);
+    expect(second.next_cursor).toBeNull();
+    expect(query.mock.calls[1][1]).toEqual([ADDRESS, 78, "q2", 0, 2]);
+    expect(query.mock.calls[1][0]).toContain(
+      "(pending.ts, pending.tx_hash, pending.event_index) < ($2, $3, $4)",
+    );
   });
 });

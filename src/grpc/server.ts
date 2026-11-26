@@ -21,9 +21,19 @@ const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
 });
 
 const heliobondProto = grpc.loadPackageDefinition(packageDefinition).heliobond as any;
+const MAX_INITIAL_SNAPSHOT_PROJECTS = 1000;
+const MAX_BUFFERED_SNAPSHOT_UPDATES = 1000;
 
-// Helper to authenticate metadata
-function authenticateGrpc(metadata: grpc.Metadata): { success: boolean; error?: string } {
+type GrpcAuthResult =
+  | { success: true }
+  | {
+      success: false;
+      reason: "missing" | "invalid" | "quota_exhausted";
+      error: string;
+      retryAfterSeconds?: number;
+    };
+
+function authenticateGrpc(metadata: grpc.Metadata): GrpcAuthResult {
   const authHeader = metadata.get("authorization")[0] as string | undefined;
   const apiKeyHeader = metadata.get("x-api-key")[0] as string | undefined;
   let providedKey = "";
@@ -40,20 +50,44 @@ function authenticateGrpc(metadata: grpc.Metadata): { success: boolean; error?: 
   }
 
   if (!providedKey) {
-    return { success: false, error: "Missing API key in metadata (authorization or x-api-key)" };
+    return {
+      success: false,
+      reason: "missing",
+      error: "Missing API key in metadata (authorization or x-api-key)",
+    };
   }
 
   const keyRecord = validateApiKey(providedKey);
   if (!keyRecord) {
-    return { success: false, error: "Invalid or revoked API key" };
+    return { success: false, reason: "invalid", error: "Invalid or revoked API key" };
   }
 
   if (isRateLimited(keyRecord.id, keyRecord.rate_limit)) {
-    return { success: false, error: "Rate limit exceeded" };
+    return {
+      success: false,
+      reason: "quota_exhausted",
+      error: "Rate limit exceeded for this API key. Please retry later.",
+      retryAfterSeconds: Math.max(1, Math.ceil((60000 - (Date.now() % 60000)) / 1000)),
+    };
   }
 
   incrementUsage(keyRecord.id);
   return { success: true };
+}
+
+function grpcAuthError(auth: Extract<GrpcAuthResult, { success: false }>): grpc.ServiceError {
+  const err = new Error(auth.error) as grpc.ServiceError;
+  err.code =
+    auth.reason === "quota_exhausted"
+      ? grpc.status.RESOURCE_EXHAUSTED
+      : grpc.status.UNAUTHENTICATED;
+  err.details = auth.error;
+  err.metadata = new grpc.Metadata();
+  if (auth.retryAfterSeconds !== undefined) {
+    err.metadata.add("retry-after", String(auth.retryAfterSeconds));
+    err.metadata.add("grpc-retry-pushback-ms", String(auth.retryAfterSeconds * 1000));
+  }
+  return err;
 }
 
 // Helper to get score details for a project
@@ -81,10 +115,7 @@ async function getProjectScore(
   try {
     const auth = authenticateGrpc(call.metadata);
     if (!auth.success) {
-      return callback({
-        code: grpc.status.UNAUTHENTICATED,
-        details: auth.error,
-      });
+      return callback(grpcAuthError(auth));
     }
 
     const { project_id } = call.request;
@@ -111,13 +142,41 @@ async function getProjectScore(
 function streamProjectScores(call: grpc.ServerWritableStream<any, any>) {
   const auth = authenticateGrpc(call.metadata);
   if (!auth.success) {
-    const err = new Error(auth.error || "Authentication failed") as grpc.ServiceError;
-    err.code = grpc.status.UNAUTHENTICATED;
-    call.destroy(err);
+    call.destroy(grpcAuthError(auth));
     return;
   }
 
+  let snapshotting = call.request.include_initial_snapshot === true;
+  const bufferedUpdates = new Map<number, { project_id: number }>();
+  let closed = false;
+
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    scoreEvents.off(SCORE_UPDATE_EVENT, listener);
+    call.off("cancelled", cleanup);
+    call.off("close", cleanup);
+  };
+
   const listener = (update: { project_id: number }) => {
+    if (snapshotting) {
+      if (
+        !bufferedUpdates.has(update.project_id) &&
+        bufferedUpdates.size >= MAX_BUFFERED_SNAPSHOT_UPDATES
+      ) {
+        const err = new Error(
+          "Too many score updates during initial snapshot",
+        ) as grpc.ServiceError;
+        err.code = grpc.status.RESOURCE_EXHAUSTED;
+        err.details = "Initial snapshot could not keep up with live score updates";
+        cleanup();
+        call.destroy(err);
+        return;
+      }
+      bufferedUpdates.set(update.project_id, update);
+      return;
+    }
+
     try {
       const details = getProjectDetails(update.project_id);
       call.write(details);
@@ -132,29 +191,59 @@ function streamProjectScores(call: grpc.ServerWritableStream<any, any>) {
 
   scoreEvents.on(SCORE_UPDATE_EVENT, listener);
 
-  call.on("cancelled", () => {
-    scoreEvents.off(SCORE_UPDATE_EVENT, listener);
-  });
-  call.on("close", () => {
-    scoreEvents.off(SCORE_UPDATE_EVENT, listener);
-  });
+  call.on("cancelled", cleanup);
+  call.on("close", cleanup);
   call.on("error", (err) => {
     logger.error("[gRPC Stream] stream error", {
       stream_type: "streamProjectScores",
       error_code: (err as grpc.ServiceError).code,
       ...logger.formatError(err),
     });
-    scoreEvents.off(SCORE_UPDATE_EVENT, listener);
+    cleanup();
   });
+
+  if (snapshotting) {
+    void (async () => {
+      try {
+        const total = await getTotalProjects();
+        if (total > MAX_INITIAL_SNAPSHOT_PROJECTS) {
+          const err = new Error(
+            "Initial score snapshot exceeds the supported size",
+          ) as grpc.ServiceError;
+          err.code = grpc.status.RESOURCE_EXHAUSTED;
+          err.details = `Initial snapshot is limited to ${MAX_INITIAL_SNAPSHOT_PROJECTS} projects`;
+          cleanup();
+          call.destroy(err);
+          return;
+        }
+
+        for (let projectId = 1; projectId <= total && !closed; projectId++) {
+          call.write(getProjectDetails(projectId));
+        }
+
+        while (!closed && bufferedUpdates.size > 0) {
+          const update = bufferedUpdates.values().next().value as { project_id: number };
+          bufferedUpdates.delete(update.project_id);
+          call.write(getProjectDetails(update.project_id));
+        }
+        snapshotting = false;
+      } catch (error) {
+        logger.error("[gRPC Stream] initial snapshot failed", logger.formatError(error));
+        const err = new Error("Unable to load initial score snapshot") as grpc.ServiceError;
+        err.code = grpc.status.INTERNAL;
+        err.details = "Unable to load initial score snapshot";
+        cleanup();
+        call.destroy(err);
+      }
+    })();
+  }
 }
 
 // Bidirectional streaming handler
 function chatProjectScores(call: grpc.ServerDuplexStream<any, any>) {
   const auth = authenticateGrpc(call.metadata);
   if (!auth.success) {
-    const err = new Error(auth.error || "Authentication failed") as grpc.ServiceError;
-    err.code = grpc.status.UNAUTHENTICATED;
-    call.destroy(err);
+    call.destroy(grpcAuthError(auth));
     return;
   }
 

@@ -1,5 +1,7 @@
 import * as grpc from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
+import express from "express";
+import request from "supertest";
 import path from "path";
 import { startGrpcServer } from "../grpc/server";
 import * as registry from "../lib/registry";
@@ -7,6 +9,8 @@ import * as iot from "../routes/iot";
 import * as scoring from "../lib/scoring";
 import { clearApiKeys, generateApiKey } from "../lib/apiKeys";
 import { scoreEvents, SCORE_UPDATE_EVENT } from "../lib/events";
+import { apiKeyAuth } from "../middleware/apiKeyAuth";
+import { publicLimiter } from "../middleware/rateLimit";
 
 jest.mock("../lib/registry", () => ({
   getTotalProjects: jest.fn(),
@@ -107,6 +111,48 @@ describe("gRPC Service Integration", () => {
     });
   });
 
+  it("returns UNAUTHENTICATED for invalid credentials", (done) => {
+    const meta = new grpc.Metadata();
+    meta.add("x-api-key", "invalid-key");
+    client.GetProjectScore({ project_id: 1 }, meta, (err: grpc.ServiceError | null) => {
+      expect(err).toBeDefined();
+      expect(err?.code).toBe(grpc.status.UNAUTHENTICATED);
+      done();
+    });
+  });
+
+  it("returns quota exhaustion with retry guidance and shares quota with REST", async () => {
+    const limitedKey = generateApiKey("Shared quota consumer", 2);
+    const meta = new grpc.Metadata();
+    meta.add("x-api-key", limitedKey.key);
+
+    await new Promise<void>((resolve, reject) => {
+      client.GetProjectScore({ project_id: 1 }, meta, (err: grpc.ServiceError | null) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve();
+      });
+    });
+
+    const restApp = express();
+    restApp.get("/test", publicLimiter, apiKeyAuth, (_req, res) => res.sendStatus(204));
+    await request(restApp).get("/test").set("X-API-Key", limitedKey.key).expect(204);
+
+    const err = await new Promise<grpc.ServiceError>((resolve) => {
+      client.GetProjectScore(
+        { project_id: 1 },
+        meta,
+        (error: grpc.ServiceError | null) => resolve(error!),
+      );
+    });
+    expect(err.code).toBe(grpc.status.RESOURCE_EXHAUSTED);
+    expect(Number(err.metadata.get("retry-after")[0])).toBeGreaterThan(0);
+    expect(Number(err.metadata.get("grpc-retry-pushback-ms")[0])).toBeGreaterThan(0);
+    await request(restApp).get("/test").set("X-API-Key", limitedKey.key).expect(429);
+  });
+
   it("should allow unary calls with valid consumer key in metadata", (done) => {
     const meta = new grpc.Metadata();
     meta.add("x-api-key", consumerKey);
@@ -165,6 +211,39 @@ describe("gRPC Service Integration", () => {
 
     const payload = await firstData;
     expect(payload.project_id).toBe(2);
+    stream.cancel();
+  });
+
+  it("sends an opt-in initial snapshot before buffered live score updates", async () => {
+    const meta = new grpc.Metadata();
+    meta.add("authorization", "Bearer grpc-admin-key");
+
+    const stream = client.StreamProjectScores({ include_initial_snapshot: true }, meta);
+    const received: any[] = [];
+    const firstSnapshot = new Promise<void>((resolve, reject) => {
+      stream.on("error", (err: grpc.ServiceError) => reject(err));
+      stream.on("data", (data: any) => {
+        received.push(data);
+        if (received.length === 2) resolve();
+      });
+    });
+
+    await firstSnapshot;
+    expect(received.map((item) => item.project_id)).toEqual([1, 2]);
+
+    const liveUpdate = new Promise<void>((resolve, reject) => {
+      const onData = (data: any) => {
+        if (received.length === 3) {
+          stream.off("data", onData);
+          resolve();
+        }
+      };
+      stream.on("data", onData);
+      stream.on("error", reject);
+    });
+    scoreEvents.emit(SCORE_UPDATE_EVENT, { project_id: 2 });
+    await liveUpdate;
+    expect(received.map((item) => item.project_id)).toEqual([1, 2, 2]);
     stream.cancel();
   });
 

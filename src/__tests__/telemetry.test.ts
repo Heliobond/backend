@@ -2,6 +2,7 @@ import request from "supertest";
 import express, { Express } from "express";
 import { createTelemetryRouter } from "../routes/telemetry";
 import { createRateLimiter } from "../middleware/rateLimit";
+import { errorHandler } from "../middleware/errors";
 import { csrfProtection, resetCsrfStore } from "../middleware/csrf";
 import { register } from "../lib/prometheus";
 import { config } from "../config";
@@ -31,6 +32,7 @@ function buildApp(limiter?: Parameters<typeof createTelemetryRouter>[0]): Expres
     res.end(await register.metrics());
   });
   app.post("/v1/other", (_req, res) => res.json({ ok: true }));
+  app.use(errorHandler);
   return app;
 }
 
@@ -91,6 +93,38 @@ describe("POST /v1/telemetry (#770)", () => {
 
       expect(res.status).toBe(413);
       expect(res.body.error.code).toBe("payload_too_large");
+    });
+
+    it("counts telemetry rejections under fixed reasons", async () => {
+      await request(app).post("/v1/telemetry").send({ foo: "bar" }).expect(400);
+      await request(app)
+        .post("/v1/telemetry")
+        .set("Content-Type", "application/json")
+        .send("{not json")
+        .expect(400);
+      await request(app)
+        .post("/v1/telemetry")
+        .set("Content-Type", "text/plain")
+        .send("x".repeat(70 * 1024))
+        .expect(413);
+      await request(app)
+        .post("/v1/telemetry")
+        .set("Content-Type", "application/x-www-form-urlencoded")
+        .send("foo=bar")
+        .expect(415);
+
+      const text = await metricsText(app);
+      expect(text).toMatch(/frontend_telemetry_rejections_total\{[^}]*reason="schema"[^}]*\} 1/);
+      expect(text).toMatch(
+        /frontend_telemetry_rejections_total\{[^}]*reason="malformed_json"[^}]*\} 1/,
+      );
+      expect(text).toMatch(/frontend_telemetry_rejections_total\{[^}]*reason="size"[^}]*\} 1/);
+      expect(text).toMatch(
+        /frontend_telemetry_rejections_total\{[^}]*reason="unsupported_content"[^}]*\} 1/,
+      );
+      expect(text.match(/frontend_telemetry_rejections_total\{/g) ?? []).toHaveLength(4);
+      expect(text).not.toContain("foo=bar");
+      expect(text).not.toContain("not json");
     });
 
     it("is exempt from CSRF while other POSTs still require a token", async () => {
